@@ -1,0 +1,742 @@
+MinGent
+=======
+An AI agent for Windows that works with models on your own PC. Tell it what
+you want done and it reads and changes your files, runs commands, searches
+the web and uses its own built-in browser, showing every step as it works.
+It has its own notepad for your notes and for the files it works on.
+
+It runs models on your PC with its built-in engine, or Claude, Gemini or
+OpenAI models with your own API key. It doesn't control your other programs,
+only the ones it starts itself. While it tests one of those, it moves your
+mouse pointer and types into that window, so leave the mouse alone until it
+is done.
+
+No dependency tree: no installer, no packages, no plugins and no updater.
+MinGent itself has no third-party code. You compile it yourself from the
+source in the "src" folder with the C# compiler that is part of Windows, so
+the program you run is the code you can read. The optional built-in engine
+is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
+downloaded when you set it up, and the built-in browser is Microsoft Edge
+WebView2.
+
+This is version 1.0 beta: it works, and it still has rough edges. Report
+problems at https://github.com/zenpositive/MinGent/issues.
+
+MinGent is free software under the MIT license and comes with no warranty.
+Read USE AT YOUR OWN RISK at the end of this file before you let it work on
+anything you care about.
+
+
+BUILD IT (one time, takes a few seconds)
+----------------------------------------
+1. Extract the whole MinGent folder somewhere you like, e.g. C:\Tools\MinGent
+2. Double-click  Build-MinGent.bat
+3. MinGent.exe appears next to the .bat file. That one file is the whole app.
+
+The exe is compiled on your own PC from the readable source code in the "src"
+folder, using the C# compiler that is already part of Windows 10/11
+(.NET Framework 4.8). Nothing is downloaded or installed.
+
+If Windows says "Windows protected your PC" when you start the .bat (it does
+that for files that came from the internet): click "More info" > "Run anyway",
+or right-click the .bat > Properties > tick "Unblock" > OK.
+
+Smart App Control (Windows 11) or a company's application control policy can
+block new, unsigned programs - a freshly built MinGent.exe or the built-in
+engine (llama-server.exe). Windows then says the app was blocked (sometimes as
+"your organization's Device Guard policy"). There is no exception for single
+programs, and MinGent does not try to get around it. If only the engine is
+blocked, cloud models still work.
+
+To rebuild after changing the code, close MinGent and run the .bat again.
+"Build-MinGent.bat /quiet" builds without any questions (for scripts).
+
+
+SUPPLY CHAIN
+------------
+Most AI tools pull in hundreds of packages from npm or PyPI and update
+themselves. Each of those is a way in: a hijacked maintainer account or a
+look-alike package runs its code on your PC, next to your files, keys and
+sign-ins. MinGent has none of that.
+- No packages. It uses only the .NET Framework that comes with Windows. All
+  of it is in "src": about 60,000 lines of C# you can read.
+- No prebuilt programs. A release is the source code and Build-MinGent.bat,
+  which compiles it with csc.exe from Windows itself.
+- No updater, plugins, extensions or telemetry. A new version arrives only
+  when you download it and build it.
+- The one program MinGent downloads, the built-in engine (llama.cpp's
+  server), is pinned to one release and checked against SHA-256 checksums
+  written in the source before it is unpacked. Models are checked against the
+  SHA-256 checksum Hugging Face lists for each file, when it lists one.
+- Newer llama.cpp releases are only offered if you switch that on (Settings >
+  Models). They are checked against the checksums GitHub lists for them,
+  which protects the download but can't vouch for the release itself.
+- The agent asks before it installs software (pip, npm, winget and the
+  rest), also in Auto mode, unless you switch that off in Settings > Safety.
+  Full auto asks nothing. The check reads the command; it can't see what a
+  script does once it runs.
+To check a download, compare its SHA-256 with the one on the release page.
+In PowerShell: Get-FileHash .\MinGent-1.0-beta.zip
+
+
+YOUR OWN ICON
+-------------
+MinGent comes with its own icon (src\MinGent.ico, the little robot face). To
+use a different one, put a picture next to Build-MinGent.bat, name it
+icon.png  and build again. It is converted into every size Windows uses
+(16 to 256 px).
+
+- Best: a square PNG, 256 x 256 px or bigger, with a transparent background.
+- If Explorer or a pinned taskbar button still shows the old icon after a
+  rebuild, that's the Windows icon cache. Unpin and pin again, or sign out and
+  back in.
+
+The converter (src\tools\MakeIcon.cs) is compiled into a temporary
+"build-temp" folder only when icon.png exists, and deleted afterwards. It is not
+part of MinGent.exe.
+
+
+THE WINDOW
+----------
+- Left: your chats, grouped by Today, Yesterday, Previous 7 days and so on,
+  with a search box, New chat, Models (the model library) and Settings. The
+  button at the top folds the list into a narrow rail; it does that by itself
+  when the window gets too narrow.
+- Middle: the chat and the message box.
+- Right, when you or the agent need them: Notes (a full text editor with tabs;
+  each chat keeps its own) and the browser. The two buttons at the top right
+  of the chat show or hide them; drag the gaps between the panes to resize
+  them.
+- The x at the top right of the chat closes the agent and its chat list, so
+  MinGent works as a plain notepad. The face button above Notes, or
+  Ctrl+Shift+A, brings it back; it also comes back by itself when it needs
+  your OK. MinGent remembers which way you left it.
+
+
+CHATS
+-----
+- Type what you want and press Enter - a question, "fix the crash when the
+  input is empty", "make a small website in a folder called site on my Desktop
+  and show it in the browser", "find the newest version of X and update
+  package.json". Shift+Enter starts a new line.
+- While it works, one line under your message shows its face and what it is
+  doing right now ("Reading parser.py", "Waiting for your OK"). Click the line
+  to open every step: the files it read, the exact lines it changed, the
+  commands it ran and their output. When it is done the line sums it up
+  ("Read 2 files, edited parser.py, ran 1 command - 1m 14s").
+- You can keep typing while it works. Messages you send then are queued and
+  the agent reads them at its next step, so you can add details or change
+  direction without stopping it. Until it reads one, a queued message has a
+  pencil to edit it and a bin to remove it (Up in the empty message box edits
+  the last one). While you edit, the agent keeps working but doesn't read that
+  message, or the ones after it, until you save. If it finishes in the
+  meantime, the message goes out when you save. Stop puts queued messages back
+  in the message box.
+- Select any text in the chat with the mouse and copy it (Ctrl+C), or use the
+  Copy button under an answer or a code block. Right-click for "Copy the whole
+  conversation".
+- Bigger jobs get a plan, shown as a checklist above the message box. While
+  the agent works, the step it is on shows next to its status; click the
+  checklist to fold it away or open it again.
+- Plan first: turn on the Plan chip under the message box (or press
+  Shift+Tab) and the agent only reads and researches, then shows you its plan
+  as a card. "Start" goes ahead, "Start in Auto" goes ahead without asking
+  about ordinary steps, and "Keep planning" lets you change the plan. Nothing
+  is changed before you approve it.
+- Documents: attach a PDF, Word, Excel, PowerPoint, OpenDocument, RTF or EPUB
+  file with + (or name it in your message) and the agent reads its text -
+  PDFs page by page, spreadsheets as tables, slides with their speaker notes.
+  Scanned PDFs that are only pictures can't be read.
+- It also makes Word, Excel, PowerPoint and PDF files: ask for "a Word report",
+  "slides about ..." or "a spreadsheet of ..." and it writes the file, with
+  headings, tables, pictures, formulas and links. Slides split at --- lines or
+  headings, and what doesn't fit continues on the next slide. Excel files get
+  real numbers and dates; formulas that could reach the internet or other
+  files stay plain text. An existing document is never changed in place - the
+  agent writes a complete new version. Open the result with the Open link in
+  the chat.
+- Math: formulas the model writes in LaTeX are typeset - $...$ or \(...\)
+  inside a sentence, $$...$$ or \[...\] on their own lines. Selecting a formula
+  copies it as plain text with real symbols; "Copy" under the answer copies
+  the LaTeX.
+- If a reply stops because of an error, "Continue" picks up where it stopped.
+- Right-click a chat in the list to rename or delete it (F2 and Delete work
+  too). Deleting really deletes: the chat file is overwritten before it is
+  removed, and what the agent remembered in that chat is forgotten too. It
+  can't be undone, so MinGent asks first. Older saves of a chat are
+  overwritten as well each time it is saved.
+- The ring under the message box shows how full the model's context window is
+  (amber at 70%, red at 90%). Long chats are summarized automatically when
+  they get close to the limit; click the ring and "Compact now", or type
+  /compact, to do it sooner. Your latest exchange is always kept as it is.
+  The 200 most recent chats are kept.
+- Commands: type / in the message box and a list of them pops up - /compact,
+  /new (or /clear) for a new chat, /temp for a temporary chat, /plan to switch
+  plan first on or off. Pick one with the arrow keys and Enter or Tab, or
+  click it. Settings > General lists them too.
+- Temporary chat: the dashed bubble at the top right of a new chat. It is not
+  saved to your chats and memory stays off. It's gone as soon as you leave it
+  (a new chat, another chat from the list, or closing MinGent), and the
+  built-in browser's history is cleared then; sign-ins stay. Click the bubble
+  and "Keep this chat" to save it after all.
+
+
+KEYBOARD
+--------
+  Ctrl+Shift+N         new chat
+  Ctrl+Shift+A         jump to the message box (opens the agent if closed)
+  Enter / Shift+Enter  send / new line
+  Shift+Tab            plan first on / off (in the message box)
+  Esc                  stop the agent (in the chat or the message box)
+  /                    in the message box: list the commands
+  Ctrl+Shift+E         show / hide Notes
+  Ctrl+Shift+B         show / hide the browser
+  Ctrl+,               settings
+  Ctrl +  -  0         zoom the chat or Notes in / out / back (whichever has
+                       the keyboard focus; Ctrl + mouse wheel works too)
+  Ctrl+C / Ctrl+A      in the chat: copy the selection / select everything
+
+  Notes:
+  Ctrl+N or Ctrl+T     new tab              Ctrl+F           find
+  Ctrl+O               open                 Ctrl+H           replace
+  Ctrl+S               save                 F3 / Shift+F3    next / previous match
+  Ctrl+Shift+S         save as              Ctrl+G           go to line
+  Ctrl+W or Ctrl+F4    close tab            Alt+Z            word wrap on/off
+  Ctrl+Tab             next tab             Ctrl+Z / Ctrl+Y  undo / redo
+  Ctrl+Shift+Tab       previous tab         Alt+Left/Right   back / forward
+
+  Browser:  Ctrl+L, F6 or Alt+D go to the address bar.
+  Models:   Up / Down choose, Enter opens, uses or downloads the selected
+            model; the menu key or Shift+F10 lists all you can do with it.
+
+  While a web page in the browser has the keyboard focus, Ctrl+Shift+N, A, E
+  and B, Ctrl+, and Ctrl+N, T, O, S, Shift+S and Ctrl+Tab still work; other
+  keys go to the page. In Notes, Ctrl+C / Ctrl+X with nothing selected copies
+  / cuts the whole line, and double-click selects a word, triple-click a line.
+
+
+MODELS
+------
+The model menu is at the bottom right of the message box. If you have not
+picked one, MinGent uses the first that works: a model in the built-in engine,
+then LM Studio, then Claude, then OpenAI, then Gemini. When a provider has
+more models than fit on the screen, the menu shows the first few (and the one
+you use) plus "All N models..." for the full list.
+
+- Built-in engine: runs GGUF models on this PC with llama.cpp 0.7.0. Open
+  Models in the sidebar and click "Set up the engine" once - MinGent picks the
+  right build for your graphics card (NVIDIA CUDA, Vulkan or CPU; the CPU
+  build for NVIDIA cards with less than about 3.5 GB of memory, where the
+  processor is faster). It also finds GGUF models LM Studio already
+  downloaded, so you do not need two copies. The "Engine" button at the top of
+  the model library switches to another build or removes the engine.
+- Newer llama.cpp releases: off by default. With Settings > Models > "Offer
+  newer llama.cpp releases" on, MinGent asks GitHub for llama.cpp's latest
+  stable release when it starts and when you open Models, and offers it there
+  (with the CUDA runtime that comes with it). Nothing is installed until you
+  click Update, and the Engine button goes back to the tested release.
+- Downloading models: Models > Download first suggests models that are popular
+  right now and sized for this PC (for a 32 GB graphics card, roughly 13B to
+  38B parameters), one copy of each from a trusted publisher. Type in the
+  search box to search Hugging Face as you type; models that suit this PC come
+  first and say "Suits this PC". Pick one and MinGent shows a single Download
+  button for the size that fits best: it reads the start of the model file to
+  work out how much memory a long chat needs, picks the highest quality that
+  still leaves room for one, and says how many tokens of chat fit. "Other
+  sizes" lists the rest, each marked "Fits your GPU", "Partly in RAM, slower"
+  or "Too big for this PC" ("Fits in memory" or "Tight on memory" on a PC
+  that runs models from RAM). Results carry a badge: "Official" (a well-known
+  model maker publishing its own model), "Trusted publisher" (well-known
+  publishers and quantizers such as lmstudio-community, unsloth, bartowski),
+  or "Few downloads". A name like "Qwen3.8-4B-..." from an unknown publisher
+  is not from Qwen - check the publisher before the name. Each model shows
+  when it was published and last updated, a short description from its model
+  card, its longest context, its license, and for every size how much memory
+  it needs. Several models can download at once, and downloads keep going
+  when you close the library; they show at the top of "On this PC". They
+  resume if interrupted and are checked against the SHA-256 checksum Hugging
+  Face lists for the file, when it lists one; a file that does not match is
+  deleted. Settings > Models >
+  Model folder picks where new models are saved.
+- Context length: "Auto" (the default) measures the free graphics memory when
+  the model loads and picks the longest context that fits, up to the most the
+  model supports. Hover the ring under the message box to see how much of it a
+  chat uses. Settings > Models also has fixed sizes, and "Compact" context
+  memory (the default) fits about twice as much as full precision.
+- Claude, OpenAI or Gemini: add your API key in Settings > Models and the
+  models appear in the menu (Gemini keys come from aistudio.google.com; free
+  keys work, with daily limits).
+- Other model servers: if you already run one, Settings > Models > Other
+  model servers takes any OpenAI-compatible address (Ollama, vLLM, another
+  llama.cpp...). LM Studio is found by itself once its server runs (Developer
+  tab), and then shows up in the model menu: MinGent asks LM Studio to load
+  the model you pick, and "Use the model loaded in LM Studio" follows whatever
+  you load there.
+- Thinking: models that can think show a "Thinking" chip under the message box
+  to pick how much (off is fastest). The model's thinking can be shown in the
+  chat.
+
+Tips for local models
+- Load models with a context of at least 32K tokens (64K-128K is better for
+  bigger jobs). A 4K context is too small for agent work. The built-in engine's
+  "Auto" context picks the longest that fits, but can go as low as 16K on a
+  small graphics card.
+- Models trained for tool use work best (Qwen 3, Gemma 3, Llama 3.x, Mistral,
+  GLM...). The model menu marks models LM Studio says are not trained for tools.
+- If a thinking model keeps running out of room before it answers, pick a
+  lower level on the Thinking chip, or load the model with a bigger context
+  (the room for its answer grows with the context).
+
+
+HOW IT WORKS
+------------
+It works like a coding agent: it looks at your files, makes a plan for bigger
+jobs, edits, runs tests or builds, checks the result the way a person would
+(runs the script, opens the page, clicks through the program it built) and
+fixes what went wrong.
+
+Made for local models
+- MinGent does a lot of the work around the model, so smaller models get much
+  further: it understands tool calls written in other agents' styles and
+  repairs broken or misnamed arguments, gives the model precise hints when
+  something fails (the closest matching lines when an edit misses, "did you
+  mean" for wrong paths, the PowerShell version of a bash command), refuses
+  placeholder code such as "// ... rest unchanged", checks JSON / XML / bracket
+  balance after every write, and nudges the model when it stops early, forgets
+  its checklist, or says "done" without having tested anything.
+- When a step keeps failing the same way, MinGent tells the model what is going
+  on and what else it can try (another route, or asking you), instead of
+  letting it repeat itself. A repeated step is only stopped when it keeps
+  giving the same result: another screenshot of a page that changed, or
+  another key press, always goes through. Runs that only update the
+  checklist or repeat an approved plan, and research in plan mode that never
+  ends, are stopped after a few rounds, and the agent says where it is.
+- Its memory of the conversation is kept in the shape the model's cache
+  expects, so long sessions don't reprocess the whole chat at every step.
+- It recovers from the ways local servers fail: a reply that runs out of room
+  while still thinking is asked again with more room or told to think more
+  briefly, a reply the server could not parse is retried, a tool call cut off
+  by the output limit does not break the chat, models whose templates need
+  strict user / assistant turns (Mistral Small 3.2, Ministral 3) work after
+  tool results, and tool output too dense for the context is cut to fit using
+  the server's own token count.
+
+Helpers
+- For bigger jobs the agent can hand a focused task to a helper: an "explorer"
+  that researches code or the web, a "reviewer" that checks finished work and
+  runs it, or a general helper. Each helper starts with a fresh, empty context
+  and only its short report comes back, so the agent's own context stays small
+  - which matters a lot for local models.
+- After the agent changes a lot of code, a reviewer checks the work before the
+  answer reaches you (Settings > Agent > Tools to switch this off).
+- With a local model, helpers run one after another on the same loaded model,
+  so they need no extra graphics memory, only time. With Claude, OpenAI or
+  Gemini they can run at the same time.
+
+Tools
+- Every tool the agent has is part of MinGent's own C# code: there are no
+  plugins, no MCP servers and nothing that is downloaded while it runs.
+- Each tool's description takes room in the model's context, which matters
+  with a small local model. Settings > Agent > Tools switches whole groups on
+  or off and shows what each one costs: web search (about 150 tokens), the
+  browser (about 1,550), desktop programs (about 1,650) and helpers (about
+  250). Files, commands and planning are always on (about 2,750). The browser
+  and desktop-program tools also switch off by themselves when the model's
+  context is under 16K and 24K tokens.
+- With web search and pages off, the agent still opens addresses on this PC
+  and your local network, such as a development server.
+
+Memory
+- The agent remembers lasting facts about you and this PC between chats (your
+  hardware, installed tools, where projects live, how you like things done).
+  Settings > Memory shows everything it saved; edit or delete any line, or
+  switch memory off. It refuses to save facts that look like passwords or
+  keys. Temporary chats don't use memory at all.
+
+Testing programs it builds
+- It can start a desktop program it wrote, read its window (buttons, fields,
+  menus), click and type in it like a person, and take screenshots (with models
+  that can see images). It presses any key or shortcut (matched to your keyboard
+  layout), right-, middle-, double- and triple-clicks, clicks with Ctrl or
+  Shift held, presses and holds, scrolls, hovers and drags. This moves your
+  real mouse pointer and sends real key presses to that window. It is told
+  never to fake input with PowerShell SendKeys and the like, which would go to
+  whatever window has focus. Keys that act on Windows itself (the Windows key,
+  Alt+Tab, Ctrl+Esc, Ctrl+Shift+Esc, PrintScreen) are refused, and pasting
+  your clipboard into a program asks first, unless the clipboard still holds
+  what the agent itself just copied.
+- It only ever controls programs started by its own commands while MinGent
+  runs, also in an earlier chat - never browsers, mail, chat, password
+  managers, remote-access tools or system tools - and it asks before using a
+  program that is not part of the project in the workspace. Programs that
+  Windows opens for one of its commands (Store apps such as Calculator, or a
+  program opened through a file type) count as its own when they start while
+  that command runs; because such a program can't be fully told apart from
+  one you opened at the same moment, MinGent asks before the agent looks at
+  it, also in Auto mode, unless you switched off "Starting and using other
+  programs" in Settings > Safety. Programs that were already open stay off
+  limits.
+- When the agent starts working in a program window that covers MinGent,
+  MinGent takes one half of the screen and the program the other, and gets its
+  old size back when the program closes (unless you moved it meanwhile).
+  Settings > Agent > "Put MinGent and the program side by side" turns this
+  off.
+- While it uses a program, that window has an outline in your accent color
+  and a small "MinGent" tag. Clicks go straight through the outline, it
+  never shows up in the agent's screenshots, and it fades when the agent is
+  done. When the program opens a Save or Open dialog, the agent works in the
+  dialog, and it asks you before typing in it (the same Settings > Safety
+  row decides this in Auto mode).
+
+
+ASK, AUTO OR FULL AUTO
+----------------------
+- The "Auto" switch under the message box decides how much it asks; the
+  arrow next to it has all three levels.
+  Ask (switch off): it asks before running a command, before using the
+  internet, and before changing files outside the workspace. Each request is
+  a card in the chat with Allow / Allow for this chat / Deny.
+  Auto (switch on): it works on its own and asks only before risky things
+  (see below).
+  Full auto (red): it asks nothing at all. It warns you the first time and
+  goes back to Auto when you close MinGent.
+- What Auto still asks about is listed in Settings > Safety, one switch per
+  kind, all on until you switch one off:
+    Installing software and packages
+    Starting and using other programs
+    Deleting widely or outside the work folder
+    System changes, admin rights and hidden code
+    Passwords, keys, the clipboard and MinGent's own data
+    Uploading, publishing and rewriting git history
+    Payments, passwords and account actions
+    Downloading programs and archives in the browser
+- These rows also cover commands that hide what they do or reach outside the
+  work folder: deletes of files picked by another command, a loop or a script
+  outside the work folder, wildcard deletes outside it, emptying the whole
+  work folder, links or junctions to other folders, robocopy /MIR, emptying
+  the Recycle Bin, generated or encoded code, and anything that touches
+  MinGent's own settings, chats or browser data. Switching a row off stops
+  those questions too.
+- Sending one of your saved API keys to a website or over the internet asks
+  first in Ask and Auto, and is refused in Full auto. The check looks for the
+  key as written, so a command or script can get past it.
+- These checks read the command; they catch common mistakes and tricks, but
+  they cannot see every possible command or what a script does once it runs.
+  Auto is for work you trust and Full auto for work you can afford to lose;
+  use Ask when in doubt.
+- Prompt-injection guard (on by default): web pages can contain text written to
+  trick an AI. Once the agent has read web content in a chat, Auto mode asks
+  again before commands, before writes outside the workspace, before
+  everything in the list above (also rows you switched off), and before
+  opening addresses or searches that carry a lot of data, something that
+  looks like a password or key, or data hidden in a long site name. Page
+  text is passed to the model marked as untrusted data, with a note not to
+  follow it, and that includes page text that shows up in error messages. A
+  model can still be fooled.
+- In every mode, also Full auto, the agent's own file tools never write into
+  Windows, Program Files, the Startup folder, shell profiles or MinGent's own
+  data folder, also not through a link or junction that points there.
+  Commands are checked by the rows above instead: in Full auto they run
+  without asking, and only Windows' own permissions protect Windows and
+  Program Files. So don't start MinGent as administrator.
+
+Undo
+- After each reply that changed files with the agent's file tools, "N files
+  changed - Undo" takes back what those tools did: restores the old file
+  contents, brings back the files and folders it deleted, and moves files it
+  created to the Recycle Bin. Changes made by commands it ran (a build, a
+  script, Remove-Item) cannot be undone. Edits to open Notes tabs are also
+  normal undo steps (Ctrl+Z).
+- The agent is told to delete with its own delete tool, which moves files to
+  the Recycle Bin. Undo brings them back too, except files over 32 MB and
+  folders over 2,000 files or 64 MB, which come back from the Recycle Bin.
+  Files deleted by a command (Remove-Item, del, a script) are gone for good.
+  The delete tool never deletes a whole drive, your Windows folders or the
+  workspace itself, and outside the workspace it asks first, also in Auto
+  mode, unless you switch off "Deleting widely or outside the work folder".
+  In Auto, a command that deletes inside the workspace, or a single file
+  elsewhere, does not ask.
+- By default files are saved after the agent edits them, so tests and builds
+  see the new code (Settings > Agent to switch this off).
+
+Workspace
+- When the open Notes tab is a saved file, the agent works in that file's
+  folder. Otherwise new files go to Documents\MinGent Files (changeable in
+  Settings > Agent). You never have to create a folder first.
+- Unsaved Notes tabs can be read and edited too: it refers to them by their
+  tab name.
+- Project notes: ask it to "remember" something about a project and it writes
+  it to MINGENT.md in the project folder; it reads that file at the start of
+  every request.
+- Selected text in Notes is sent with your message (the chip above the message
+  box shows what; click its x to leave it out).
+
+
+THE BROWSER
+-----------
+- A real Chromium-based browser (Microsoft Edge WebView2, part of Windows 11 and
+  current Windows 10) in a pane next to the chat. The agent can open pages, read
+  them, click, type, scroll and take screenshots (with models that can see
+  images); you watch it happen and can take over any time.
+- To websites it looks like ordinary Microsoft Edge: MinGent adds nothing to
+  the pages and sets no automation flags. The agent reads and clicks from a
+  separate, private script context that pages cannot see or tamper with.
+- It has its own profile, separate from your normal browsers: sign in there to
+  the sites you want the agent to use, and the sign-ins stay. Every chat
+  starts on a fresh page, so a new chat never carries on in the last chat's
+  tab or its back / forward history. The agent closes the pane when it no
+  longer needs it, or when you ask it to (the same goes for the notes pane);
+  a pane you are using stays open unless you ask. Settings > Privacy >
+  "Wipe browser data" signs you out of every site and erases the profile's
+  history, cache and site data.
+- When a site answers with a bot check or blocks automated access, the agent
+  is told what happened and what else it can try, and "verify you are human"
+  checks get a few seconds to finish by themselves. CAPTCHAs are left to you:
+  the agent stops and asks you to complete them. (Settings > Agent has an
+  experimental switch that lets the agent try them itself; after three failed
+  tries it hands the CAPTCHA to you.)
+- Give the agent a YouTube link and it reads the video's title, channel,
+  date, description and transcript. Long pages and transcripts come in parts.
+- "Sign in with..." and payment pop-ups open in their own small window with the
+  address shown at the top. Links that open a new tab open in the same pane,
+  the same way as a normal click. Messages, confirmations and "leave this page?"
+  questions from pages appear as MinGent dialogs.
+- A local .html preview can only load files from its own folder.
+- When the agent clicks by position in a screenshot, a click on a payment,
+  account or verification button (also inside payment and CAPTCHA boxes from
+  other sites) asks you first.
+- Camera, microphone, location and notification requests: you get the normal
+  Edge prompt when you are browsing; while the agent is in control they are
+  refused automatically, just for that moment - the site can still ask you
+  later. Downloads you start go to your Downloads folder as usual; downloads the
+  agent starts (also ones that begin a moment after its click) go to the
+  workspace's downloads folder. Ask mode asks before every download; Auto asks
+  before programs, scripts and archives unless you switch off "Downloading
+  programs and archives in the browser"; Full auto doesn't ask.
+- Google does not allow signing in to Google accounts from apps' built-in
+  browsers (this applies to every app, not only MinGent). When a page sends
+  you there, MinGent shows "Open in your browser" to continue in your normal
+  browser.
+
+
+NOTES
+-----
+Notes is a complete text editor - handy for pasting answers from other AI
+chats, or for looking at the files the agent works on.
+
+- Tabs: open as many files as you like. Drag tabs to reorder them, middle-click
+  to close, double-click the empty tab bar for a new tab.
+- Each chat has its own notes: the tabs you open or the agent creates in a chat
+  only show in that chat, and only that chat's agent can see them. Switching
+  chats switches the tabs; a new chat starts with an empty note. A file open in
+  two chats is the same tab in both, so changes never split. A temporary
+  chat's notes close when you leave it (MinGent asks first if one has unsaved
+  changes), and deleting a chat closes its notes.
+- Settings > Agent > "Show the files the agent writes" opens the files the
+  agent creates or edits in tabs. Turn it off when you only watch the result,
+  like a website in the browser.
+- It remembers everything when you close it, like Windows 11 Notepad: all tabs,
+  unsaved changes and untitled notes are back the next time you start it. Open
+  tabs are also backed up every few seconds and written straight to the disk,
+  so even a crash or power cut does not lose your text. If the list of open
+  tabs is ever damaged, the backed-up text comes back as "Recovered" tabs.
+- When a file changes on disk while you have unsaved edits, MinGent asks before
+  reloading (Cancel is the default), and Ctrl+Z after a reload brings your
+  edits back.
+- Syntax highlighting for about 45 languages, chosen by file extension. Click
+  the language name in the status bar to change it.
+- Highlights the current line, matching brackets, every occurrence of the
+  selected word, all search matches, and edited lines (orange bar = unsaved,
+  green bar = saved).
+- Find / replace (match case, whole word, "3 of 17" counter), go to line, word
+  wrap, zoom, font choice - all in the "..." menu above the tabs.
+- Keeps each file's encoding (UTF-8, UTF-8 with BOM, UTF-16, ANSI) and line
+  endings (CRLF / LF), shown in the status bar and changeable with a click.
+- Notices when another program changes an open file and reloads it (it asks
+  first if you have unsaved changes in that tab).
+- Files can open straight into Notes from Explorer: see OPEN FILES WITH
+  MINGENT below.
+- "Preview in the browser" (in the "..." menu) shows the HTML file you are
+  editing.
+
+
+LOOKS
+-----
+Dark with a green accent, and on Windows 11 a title bar and rounded menus that
+match. Settings > General > Appearance switches to Light, or to System to
+follow Windows; Accent color > Windows uses the accent color you picked in
+Windows. Windows high-contrast mode always takes over while it is on, and
+"Animation effects" off in Windows turns off MinGent's small animations.
+
+Settings > General > Reset puts every setting back to how MinGent comes. Your
+chats, memory, API keys, instructions, models and offline mode stay.
+
+
+OPEN FILES WITH MINGENT (optional)
+----------------------------------
+Settings > General > Files > "Show MinGent in Open with" > Add puts MinGent in
+Explorer's "Open with" menu for text and code files (.txt, .md, .json, .log,
+.py, .js, .html, .ps1 and more). Files you open that way appear in Notes, also
+when MinGent is already running.
+
+To open them with a double-click, press "Open Windows Settings" next to it and
+pick MinGent for the file types you want: Windows lets only you, not apps,
+change default apps. (Without Add you can still do it by hand: right-click a
+file > Open with > Choose another app > More apps > "Look for another app on
+this PC" > MinGent.exe > Always.)
+
+Add writes a few per-user entries under HKEY_CURRENT_USER (Software\Classes,
+Software\RegisteredApplications and Software\MinGent); Remove takes them out
+again. If you move MinGent.exe, the entries follow it the next time it starts.
+
+
+WHERE YOUR DATA IS
+------------------
+  %LOCALAPPDATA%\MinGent\settings.ini   settings; API keys encrypted with Windows
+                                        DPAPI: other Windows accounts and copies
+                                        of the file on other PCs can't read
+                                        them, programs you run can
+  %LOCALAPPDATA%\MinGent\session.txt    the list of open Notes tabs
+  %LOCALAPPDATA%\MinGent\backup\        text of tabs with unsaved changes
+  %LOCALAPPDATA%\MinGent\chats\         your chats (the 200 most recent;
+                                        temporary chats are never written)
+  %LOCALAPPDATA%\MinGent\memory.md      what the agent remembers about you
+                                        (also shown in Settings > Memory)
+  %LOCALAPPDATA%\MinGent\Browser\       the built-in browser's profile
+  %LOCALAPPDATA%\MinGent\engine\        the built-in engine, if you set it up
+  %LOCALAPPDATA%\MinGent\models\        models downloaded in the model library
+                                        (or the folder you picked in
+                                        Settings > Models > Model folder)
+  %LOCALAPPDATA%\MinGent\connections.log only with "Keep a connection log file"
+  %LOCALAPPDATA%\MinGent\error.log       only with "Keep an error log"
+  %TEMP%\MinGent\                        the agent's PowerShell commands while
+                                        they run; erased when each one ends
+  Documents\MinGent Files\               what the agent saves when no other
+                                        folder is chosen (your files)
+Nothing goes into the registry, except the Open with entries if you add them.
+
+Uninstall: Settings > Privacy > "Erase everything" removes all of the above
+and the Open with entries; you choose whether the engine, the models and
+Documents\MinGent Files go too. Then delete the folder with Build-MinGent.bat
+and MinGent.exe.
+
+
+PRIVACY
+-------
+- MinGent sends nothing about you anywhere: no account, no telemetry, no
+  crash reports, and no update checks unless you switch on newer llama.cpp
+  releases. With a local model your chats stay on your PC; only the web
+  searches and pages the agent uses go out.
+- Settings > Privacy > Offline mode: MinGent makes no internet connections -
+  no cloud models, web search, web pages, update checks or downloads. Local
+  models and pages on this PC or your local network keep working. The
+  built-in browser restarts when you switch it, and while offline it only
+  reaches this PC and your local network. The agent may not run commands
+  that need the internet (downloads, package installs, git clone, fetch, pull
+  and push, internet addresses, file shares outside your network). These
+  checks read the command, and offline mode is not a firewall: a program or
+  script that goes online by itself still can.
+- Settings > Privacy > Connections lists every internet address MinGent
+  connected to since it started, and why, including where a download or page
+  was redirected. For the built-in browser these are the pages it opened, not
+  every file a page loads from other sites, and commands the agent runs make
+  their own connections. The list is kept in memory; "Keep a connection log
+  file" also writes it to connections.log.
+- No log files by default. "Keep an error log" writes error details to
+  error.log, for a bug report.
+- Settings > Privacy > "Erase everything" overwrites MinGent's chats, memory,
+  API keys, browser data, logs, notes backups, settings and temporary files
+  with random data, deletes them, removes its Open with entries and closes
+  MinGent, which starts like new the next time. Files still in use are
+  overwritten and deleted right after MinGent closes, and links to other
+  folders are removed without following them. It asks about two more things:
+  what the agent saved in Documents\MinGent Files (erased unless you switch it
+  off) and the engine and models (kept unless you switch them on; they are
+  downloads, not your data). Files in your other folders stay.
+- A chat that used Claude, OpenAI or Gemini was also sent to that provider,
+  which keeps its own copy under its own rules; deleting the chat here can't
+  reach that. The same goes for a temporary chat.
+- The built-in browser keeps its own history and sign-ins like any browser;
+  deleting a chat does not sign you out of sites ("Wipe browser data" does).
+- Like Edge, the built-in browser checks sites and downloads with Microsoft
+  Defender SmartScreen, which can send the addresses it checks to Microsoft.
+  "SmartScreen for Microsoft Edge" in Windows Security turns that off.
+- SSDs move data around internally, so no program can promise a drive never
+  kept an older copy of a file. Windows device encryption (BitLocker) protects
+  that too.
+- Windows itself keeps a few traces of any program you run, such as recent
+  files in its Open and Save dialogs.
+
+
+SECURITY / ATTACK SURFACE
+-------------------------
+- Uses only the .NET Framework that is part of Windows. MinGent itself has no
+  third-party code: every line is in the "src" folder for you to read. No
+  auto-update, telemetry, plugins, macros or scripting engine, and it never
+  needs administrator rights. The optional engine is llama.cpp's own build
+  and the browser is Microsoft's WebView2.
+- MinGent itself connects only to: the model you chose (the built-in engine
+  or LM Studio on 127.0.0.1, or api.anthropic.com / api.openai.com /
+  generativelanguage.googleapis.com / your custom server), the providers you
+  saved an API key for (to list their models), DuckDuckGo or Bing when the
+  agent searches, the pages and YouTube videos it reads, the sites you or it
+  open in the browser, huggingface.co and its download servers when you
+  search or download models, github.com and its download server when you set
+  up, switch or update the engine, and api.github.com only with "Offer newer
+  llama.cpp releases" on. Notes itself makes no network connections.
+  Settings > Privacy > Connections shows each one.
+- The built-in engine is llama.cpp's server, pinned to one release and checked
+  against SHA-256 checksums built into MinGent before it is unpacked (with
+  protection against malicious archive paths). A newer release you choose to
+  install is checked against the checksums GitHub lists for it. It listens
+  only on 127.0.0.1, on a port it picks itself (MinGent connects only after
+  the engine reports it), with a random key that changes every start, runs
+  without its web UI, with network downloads disabled, and is stopped when
+  MinGent closes.
+- Commands the agent runs get no keyboard input and have MinGent's own rights,
+  so start MinGent normally, not as administrator (it warns you if you do).
+  Stop ends the command that is running. Commands started in the background,
+  such as a local web server, keep running until the agent stops them or you
+  close MinGent, which ends them and everything they started.
+- The browser pane runs in its own profile. It cannot open local files, except
+  an HTML page being previewed and the files in that page's folder. MinGent
+  injects no scripts into web pages; the agent's page reading runs in an
+  isolated script context through the browser's own debugging interface, which
+  is not exposed on any network port.
+- Desktop program control is limited to processes the agent started inside its
+  own job objects, plus programs Windows started for one of its program-opening
+  commands while that command ran (it asks before using those, also in Auto
+  mode), and is refused outright for browsers, mail and chat apps,
+  password managers, remote-access tools, consoles and system tools.
+- Other direct Windows API calls: title bar colors, rounded menu
+  corners, the "Animation effects" setting, checking which characters a font
+  has (so math symbols never show up as boxes), telling Explorer that file types
+  changed (only after you press Add or Remove), the IME window position,
+  placeholder text, flashing the taskbar button when the agent needs you,
+  sending deleted files to the Recycle Bin, and handing file names to an
+  already open MinGent window (a local window message between programs of the
+  same user).
+
+
+REQUIREMENTS
+------------
+Windows 10 or Windows 11 (they include .NET Framework 4.8).
+For the browser: Microsoft Edge WebView2 Runtime (included in Windows 11 and
+current Windows 10; free download from Microsoft otherwise).
+For the agent: the built-in engine (a graphics card with enough memory for the
+model helps a lot), an Anthropic / OpenAI / Gemini API key, or a model server
+you already run, such as LM Studio or Ollama.
+
+
+USE AT YOUR OWN RISK
+--------------------
+MinGent is free software under the MIT license (see LICENSE). It is provided
+"as is", without warranty of any kind, and the authors are not liable for any
+damage or loss that comes from using it.
+
+An AI agent makes mistakes. It can delete or change the wrong files, run
+commands that do harm, send things to websites and act on sites where you are
+signed in, and a web page can try to trick it. You decide what it may do, and
+you are responsible for what it does on your PC and your accounts. Keep
+backups, use Ask mode for anything you can't undo, check its work, and follow
+the terms of the model providers and websites you use with it.

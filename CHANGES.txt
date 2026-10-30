@@ -1,0 +1,51 @@
+MinGent - what changed
+======================
+
+Version 1.0 beta - first public release
+- An AI agent for Windows that works in your files, runs commands, searches
+  the web, uses its own built-in browser and tests the desktop programs it
+  builds, showing every step. It has its own notepad (Notes) for your notes
+  and for the files it works on.
+- Runs models on your own PC with the built-in llama.cpp engine, pinned to
+  llama.cpp 0.7.0 and checked against SHA-256 checksums built into MinGent.
+  Newer llama.cpp releases are offered only if you switch that on. Claude,
+  OpenAI and Gemini work with your own API key, and LM Studio, Ollama and
+  other OpenAI-compatible servers work too.
+- No dependency tree: one folder of C# that Build-MinGent.bat compiles with
+  the C# compiler that is part of Windows. No packages, plugins, MCP servers,
+  installer, updater or telemetry.
+- Ask, Auto and Full auto. Auto still asks before installing software,
+  starting other programs, deleting widely, system changes, touching
+  credentials, publishing, payments or account actions, and downloading
+  programs in the browser; Settings > Safety sets which. In every mode its
+  file tools never write into Windows, Program Files or its own data, and
+  sending your saved API keys to a website asks first (Full auto refuses).
+- Undo for every reply that changed files with the agent's file tools. Files
+  it deletes with its delete tool go to the Recycle Bin, and Undo brings them
+  back. Changes made by commands can't be undone.
+- Runs that go in circles (the same failing call, plan research that never
+  ends, checklist updates without work) are stopped after a few steps and the
+  agent says where it got stuck.
+- Model library: search Hugging Face, see which size fits your graphics card
+  and how much memory a long chat needs, download several models at once
+  (checked against Hugging Face's SHA-256), and pick the folder they go to.
+- Settings > Agent > Tools: switch tool groups on or off and see how much of
+  the model's context each one takes.
+- Settings > Privacy: offline mode, a list of every internet address MinGent
+  connected to, optional connection and error logs (off by default), and
+  "Erase everything", which overwrites what MinGent stored with random data
+  before deleting it and keeps the engine and models unless you choose.
+- Dark with a green accent. Settings > General switches the theme and accent
+  color, and Reset puts every setting back to how MinGent comes.
+- Reads and writes Word, Excel, PowerPoint and PDF files, reads YouTube
+  transcripts, typesets math, and keeps your Notes tabs safe across restarts.
+
+Known limits in this beta
+- Offline mode stops MinGent's own connections; it is not a firewall, so a
+  program that goes online by itself still can.
+- YouTube transcripts come from YouTube's own pages and can stop working
+  when YouTube changes them.
+- Letting the agent try CAPTCHAs (Settings > Agent) is an experiment and is
+  off by default.
+- The agent controls only programs it started itself (and ones Windows opens
+  for its commands); everything else on your PC stays off limits.
