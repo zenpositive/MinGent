@@ -105,6 +105,7 @@ namespace MinGent
         public bool Hidden;
         public bool Snapshot;
         public bool NoThinking;
+        public bool PlanApproved;
         public int Turn;
         public long Id;
         static long nextId;

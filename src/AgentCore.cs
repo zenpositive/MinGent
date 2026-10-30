@@ -1042,7 +1042,6 @@ namespace MinGent
 
         public bool PlanningSeen;
         public volatile bool PlanApproved;
-        public volatile bool PlanPreApproved;
 
         void NoteMode(bool planning)
         {
@@ -1060,8 +1059,7 @@ namespace MinGent
         public void Run(Msg userMsg, AgentConfig cfg, List<AgentTool> tools, IAgentUi ui, IEditorBridge ed, IBrowserBridge br, CancelToken ct, RunChangeLog changes, string systemPrompt)
         {
             if (!IsHelper) lock (Perms.AskLock) Perms.DeniedKeys.Clear();
-            if (!IsHelper && !FinalTurn) { PlanApproved = PlanPreApproved; CaptchaTries = 0; CaptchaActed = false; }
-            PlanPreApproved = false;
+            if (!IsHelper && !FinalTurn) { PlanApproved = userMsg.PlanApproved; CaptchaTries = 0; CaptchaActed = false; }
             History.Add(userMsg);
             Dictionary<string, AgentTool> byName = new Dictionary<string, AgentTool>();
             List<ToolSpec> fullSpecs = new List<ToolSpec>(), planSpecs = new List<ToolSpec>();
@@ -1074,6 +1072,7 @@ namespace MinGent
                 if (PlanMode.Visible(t.Name)) { planSpecs.Add(spec); planVisible.Add(t.Name); }
             }
             int planCalls = 0, planRefusals = 0, idleSteps = 0;
+            HashSet<string> shown = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             bool planWrap = false;
             string emptyFinal = null;
             bool canPlan = !IsHelper && byName.ContainsKey(PlanMode.Tool);
@@ -1201,11 +1200,14 @@ namespace MinGent
                         fm = new Msg("assistant", r.Text);
                         fm.Reasoning = r.Reasoning.Length > 0 ? r.Reasoning : null;
                         fm.NoThinking = true;
-                        if ((fm.Text ?? "").Trim().Length == 0 && canPlan && Perms.Planning)
+                        if (canPlan && Perms.Planning)
                             foreach (ToolCall c in r.ToolCalls)
                             {
-                                string pt = c.Name == PlanMode.Tool && c.ArgsValid ? (Json.Str(c.Args, "plan") ?? "").Trim() : "";
-                                if (pt.Length > 0) { fm.Text = pt; break; }
+                                string pt = c.Name == PlanMode.Tool && c.ArgsValid ? (Json.Str(c.Args, "plan") ?? Json.Str(c.Args, "content") ?? Json.Str(c.Args, "text") ?? "").Trim() : "";
+                                if (pt.Length == 0) continue;
+                                string said = (fm.Text ?? "").Trim();
+                                fm.Text = said.Length > 0 ? said + "\n\n" + pt : pt;
+                                break;
                             }
                     }
                     else fm = r.ToMessage();
@@ -1384,7 +1386,7 @@ namespace MinGent
                         }
                     }
                     coach.AfterTool(call.Name, call.Args, outcome);
-                    if (!Bookkeeping(call.Name, outcome)) busy = true;
+                    if (!Bookkeeping(call, outcome, shown)) busy = true;
                     if (ran && sig != null) outcome.AddNote(guard.After(sig, call.Name, call.Args, outcome, worldBefore));
                     if (ran && canPlan && Perms.Planning && call.Name != PlanMode.Tool && call.Name != "ask_user" && call.Name != "todo_write")
                     {
@@ -1441,9 +1443,15 @@ namespace MinGent
             ui.Notice(IsHelper ? "Stopped after " + StepLimit + " steps." : "Stopped after " + StepLimit + " steps. Send \"continue\" to let it keep going.", 0);
         }
 
-        static bool Bookkeeping(string name, ToolOutcome o)
+        static bool Bookkeeping(ToolCall call, ToolOutcome o, HashSet<string> shown)
         {
-            if (name == "todo_write" || name == "close_pane" || name == "open_in_editor") return true;
+            string name = call.Name;
+            if (name == "todo_write" || name == "close_pane") return true;
+            if (name == "open_in_editor")
+            {
+                string path = call.ArgsValid ? (Json.Str(call.Args, "path") ?? "").Trim() : "";
+                return path.Length == 0 || (o != null && !o.Error && !shown.Add(path));
+            }
             return name == PlanMode.Tool && o != null && o.Summary == PresentPlanTool.AlreadyApproved;
         }
 

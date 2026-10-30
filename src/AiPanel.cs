@@ -1232,6 +1232,8 @@ namespace MinGent
             Msg msg = new Msg("user", sb.ToString());
             msg.Compact = text;
             msg.Turn = curTurn;
+            msg.PlanApproved = approveNext;
+            approveNext = false;
             if (images.Count > 0) msg.Images = images;
             Begin(msg);
             SaveChat();
@@ -1890,7 +1892,7 @@ namespace MinGent
             chat.Changed(it);
         }
 
-        bool planAsked;
+        bool planAsked, approveNext;
 
         ChatItem AddQuestion(UserQuestion q, Action<UserAnswer> answered)
         {
@@ -1933,7 +1935,7 @@ namespace MinGent
             {
                 SetPlan(false);
                 if (c == PresentPlanTool.StartAuto && level == "ask") SetLevel("auto");
-                if (!running) session.PlanPreApproved = true;
+                if (!running) approveNext = true;
             }
             else if (c == PresentPlanTool.Keep)
             {
@@ -2071,6 +2073,7 @@ namespace MinGent
             afterStop = null;
             curActivity = null;
             session = new AgentSession();
+            approveNext = false;
             session.Perms.Mode = level;
             session.Perms.WebGuard = settings.AiWebGuard;
             session.Perms.SetAutoAllows(settings.AutoAllowList);
@@ -3756,7 +3759,7 @@ namespace MinGent
             tip.SetToolTip(plan, "Plan first: the agent only reads and researches, then shows you a plan.\nNothing changes until you approve it. Shift+Tab turns it on or off.");
             tip.SetToolTip(Model, "Choose the model");
             auto.Changed += delegate { if (AutoChanged != null) AutoChanged(auto.On); };
-            plan.Changed += delegate { UpdateCue(); if (PlanChanged != null) PlanChanged(plan.On); };
+            plan.Changed += delegate { UpdateCue(); PerformLayout(); if (PlanChanged != null) PlanChanged(plan.On); };
             Model.Click += delegate { if (ModelClicked != null) ModelClicked(this, EventArgs.Empty); };
             Box.KeyDown += OnBoxKey;
             Box.CanPasteOther = delegate { return images.Count < MaxImages && SafeContainsImage(); };
@@ -3816,7 +3819,7 @@ namespace MinGent
         public bool Plan
         {
             get { return plan.On; }
-            set { plan.On = value; UpdateCue(); }
+            set { plan.On = value; UpdateCue(); PerformLayout(); }
         }
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
