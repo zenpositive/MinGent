@@ -19,7 +19,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.0 beta: it works, and it still has rough edges. Report
+This is version 1.0.1 beta: it works, and it still has rough edges. Report
 problems at https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -76,7 +76,7 @@ sign-ins. MinGent has none of that.
   Full auto asks nothing. The check reads the command; it can't see what a
   script does once it runs.
 To check a download, compare its SHA-256 with the one on the release page.
-In PowerShell: Get-FileHash .\MinGent-1.0-beta.zip
+In PowerShell: Get-FileHash .\MinGent-1.0.1-beta.zip
 
 
 YOUR OWN ICON
@@ -311,6 +311,10 @@ Made for local models
   another key press, always goes through. Runs that only update the
   checklist or repeat an approved plan, and research in plan mode that never
   ends, are stopped after a few rounds, and the agent says where it is.
+- Web search asks DuckDuckGo, then DuckDuckGo Lite, then Bing, and leaves out
+  results that have nothing to do with the query (search engines sometimes
+  answer automated searches with unrelated pages). When none of them gives
+  related results, the agent is told so and searches in the built-in browser.
 - Its memory of the conversation is kept in the shape the model's cache
   expects, so long sessions don't reprocess the whole chat at every step.
 - It recovers from the ways local servers fail: a reply that runs out of room
@@ -327,11 +331,19 @@ Helpers
   runs it, or a general helper. Each helper starts with a fresh, empty context
   and only its short report comes back, so the agent's own context stays small
   - which matters a lot for local models.
+- Reviewers and general helpers check web pages in the built-in browser. A
+  reviewer only opens pages on this PC or the local network there, so it
+  can't change anything on websites you are signed in to. A helper can't see
+  other programs' windows, so MinGent doesn't let it open Chrome, Edge, File
+  Explorer or other programs' windows, and dev servers it starts don't open a
+  browser either. When a helper has used the browser, the agent reads the page
+  again before it clicks or types there.
 - After the agent changes a lot of code, a reviewer checks the work before the
   answer reaches you (Settings > Agent > Tools to switch this off).
 - With a local model, helpers run one after another on the same loaded model,
   so they need no extra graphics memory, only time. With Claude, OpenAI or
-  Gemini they can run at the same time.
+  Gemini, explorers can run at the same time; reviewers and general helpers
+  run one at a time, since they share the browser and the work folder.
 
 Tools
 - Every tool the agent has is part of MinGent's own C# code: there are no
@@ -378,7 +390,11 @@ Testing programs it builds
   limits.
 - When the agent starts working in a program window that covers MinGent,
   MinGent takes one half of the screen and the program the other, and gets its
-  old size back when the program closes (unless you moved it meanwhile).
+  old size back when the program closes (unless you moved it meanwhile). For a
+  program the agent started itself, this happens before MinGent asks you
+  anything about it, so the question isn't hidden behind the program. For a
+  program Windows opened for one of its commands, MinGent asks first, comes to
+  the front to do so, and moves the windows after you allow it.
   Settings > Agent > "Put MinGent and the program side by side" turns this
   off.
 - While it uses a program, that window has an outline in your accent color

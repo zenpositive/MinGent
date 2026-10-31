@@ -1948,7 +1948,7 @@ namespace MinGent
                 }
             }
             if (name == "web_search" && trails.TryGetValue("search", out t) && t.Engines >= 3)
-                return "Not run: the search engines answered the last " + t.Engines + " searches with a bot check or an error instead of results. Next: " + SearchRoutes() + ".";
+                return "Not run: the search engines answered the last " + t.Engines + " searches with a bot check, an error or unrelated pages instead of results. Next: " + SearchRoutes() + ".";
             return null;
         }
 
@@ -2043,7 +2043,7 @@ namespace MinGent
                 o.AddNote("That's " + t.Fails + " requests to " + host + " in a row that got " + Reason(block, o.Status) + ". Next: " + Routes(host) + ".");
             else if (key == "search")
                 o.AddNote(block == "engines"
-                    ? "That's " + t.Fails + " searches in a row that the search engines refused. Next: " + SearchRoutes() + "."
+                    ? "That's " + t.Fails + " searches in a row that the search engines refused or answered with unrelated pages. Next: " + SearchRoutes() + "."
                     : "That's " + t.Fails + " similar searches in a row with no results. Next: a different approach, such as " + (Helper ? "other sources you know of, or say what you could not find." : SearchRoutes() + "."));
             else if (key.StartsWith("browser:", StringComparison.Ordinal))
                 o.AddNote(first ?? "That's " + t.Fails + " browser calls on " + (host ?? "this site") + " in a row that failed. Next: read the error, then try a different element or page, or tell the user.");
@@ -2079,7 +2079,7 @@ namespace MinGent
                 case "notfound":
                     return "That address does not exist (HTTP " + (status > 0 ? status : 404) + "). Next: " + (Tools.Contains("web_search") ? "find the right address with web_search instead of guessing." : "check the address.");
                 case "engines":
-                    return "The search engines answered with a bot check or an error instead of results, so rewording the query will not change the answer. Next: " + SearchRoutes() + ".";
+                    return "The search engines answered with a bot check, an error or pages unrelated to the query instead of results, so rewording the query will not change the answer. Next: " + SearchRoutes() + ".";
                 case "empty":
                     return "No results. Next: try once with fewer or broader words; if that finds nothing too, use another approach.";
                 case "offline":

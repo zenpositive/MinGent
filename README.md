@@ -7,10 +7,11 @@ An AI agent for Windows that works with models on your own PC. It has no depende
 - Supply chain resistant: no packages, no installer, no updater, no plugins, no telemetry.
 - Asks before it installs software, also in Auto mode, unless you switch that off.
 - Offline mode, a list of the internet addresses it connects to, and one button that erases what it stored.
+- Easy to change: it's plain C#, so you can ask any AI to add what you need and build again. `AGENTS.md` tells it the rules.
 
 ## Get it
 
-1. Download `MinGent-1.0-beta.zip` from [Releases](https://github.com/zenpositive/MinGent/releases/latest) and compare its SHA-256 with the one listed there.
+1. Download the zip from the [latest release](https://github.com/zenpositive/MinGent/releases/latest) and compare its SHA-256 with the one listed there.
 2. Extract it and double-click `Build-MinGent.bat`.
 3. Start `MinGent.exe`.
 

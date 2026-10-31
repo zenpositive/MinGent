@@ -1410,6 +1410,7 @@ namespace MinGent
 
     class RunCommandTool : AgentTool
     {
+        static readonly Dictionary<string, string> HelperEnv = new Dictionary<string, string> { { "BROWSER", "none" } };
         public override string Name { get { return "run_command"; } }
         public override string Description { get { return "Run a command on the user's Windows PC and return its output and exit code. Uses PowerShell syntax by default; set shell to \"cmd\" for cmd.exe. Runs in the workspace unless cwd is set. Commands cannot read keyboard input. For servers or anything long-running set background=true and check it with command_status."; } }
         public override Dictionary<string, object> Schema
@@ -1460,6 +1461,15 @@ namespace MinGent
             }
             string category;
             string danger = CommandSafety.Danger(cmd, ctx.Workspace, cwd, out category);
+            string window = ctx.Session.IsHelper ? CommandSafety.WindowReason(cmd, ctx.Workspace, cwd) : null;
+            if (window != null)
+            {
+                bool browser = ctx.Cfg.BrowserAllowed && ctx.Browser != null;
+                ToolOutcome w = ToolOutcome.Fail("Not run: this command " + window + ". A helper can't see or use other programs' windows, so MinGent doesn't open them for helpers. " +
+                    (browser ? "Open web pages and local .html files with browser_navigate instead." : "Judge web pages by reading their code, or start a server with background=true and check it with web_fetch."));
+                w.Summary = "Not run: helpers don't open other programs";
+                return w;
+            }
             PermissionState ps = ctx.Session.Perms;
             PermissionAsk ask = null;
             if (danger != null)
@@ -1499,7 +1509,7 @@ namespace MinGent
             }
             bool launch = danger != null && category == PermissionCategory.Launch;
             DateTime launchAt = DateTime.UtcNow;
-            ShellJob j = Shell.Start(cmd, shell, cwd, bg, out err);
+            ShellJob j = Shell.Start(cmd, shell, cwd, bg, ctx.Session.IsHelper ? HelperEnv : null, out err);
             if (j == null) return ToolOutcome.Fail(err);
             if (launch && bg) AppControl.LaunchWindow(launchAt, launchAt.AddSeconds(30));
             bool network = CommandSafety.LooksNetwork(cmd);
@@ -1796,11 +1806,11 @@ namespace MinGent
             string recent = (S(a, "recent") ?? "").Trim().ToLowerInvariant();
             if (recent.Length > 0 && recent != "day" && recent != "week" && recent != "month" && recent != "year") return ToolOutcome.Fail("recent must be day, week, month or year");
             string res = Web.Search(q, recent, ctx.Ct, out n, out state);
-            string summary = n > 0 ? n + " results" : state == "refused" ? "Search engines refused" : state == "offline" ? "Search engines unreachable" : "No results";
+            string summary = n > 0 ? n + " results" : state == "refused" ? "Search engines refused" : state == "unrelated" ? "Only unrelated results, left out" : state == "offline" ? "Search engines unreachable" : "No results";
             ToolOutcome o = ToolOutcome.Ok(res, summary);
             o.Untrusted = true;
             o.Error = n == 0;
-            if (n == 0) o.Block = state == "refused" ? "engines" : state;
+            if (n == 0) o.Block = state == "refused" || state == "unrelated" ? "engines" : state;
             return o;
         }
     }
@@ -1918,7 +1928,7 @@ namespace MinGent
             }
             else if (v != null && problem == null) problem = "This video has no subtitles or transcript on YouTube.";
             bool tried = false;
-            if (transcript == null && problem == null && ctx.Cfg.BrowserAllowed && ctx.Browser != null && ctx.Browser.Available)
+            if (transcript == null && problem == null && ctx.Cfg.BrowserAllowed && ctx.Browser != null && ctx.Browser.Available && BrowserTool.LocalOnly(ctx, url) == null)
             {
                 string gate = BrowserTool.SiteGate(ctx, url);
                 if (gate == null)
@@ -1937,7 +1947,7 @@ namespace MinGent
             if (v == null && transcript == null)
             {
                 ToolOutcome f = ToolOutcome.Fail("Could not read the YouTube video: " + (err ?? "no answer") + "." + (problem != null ? " " + problem : "") +
-                                                 (ctx.Cfg.BrowserAllowed && !tried ? " Open it with browser_navigate instead." : ""));
+                                                 (ctx.Cfg.BrowserAllowed && !tried && BrowserTool.LocalOnly(ctx, url) == null ? " Open it with browser_navigate instead." : ""));
                 f.Untrusted = true;
                 return f;
             }
@@ -1945,7 +1955,7 @@ namespace MinGent
             if (transcript == null)
             {
                 string text = head + "\nTranscript: not available. " + (problem ?? "YouTube did not hand out the subtitles to a plain download.") +
-                              (tried || !ctx.Cfg.BrowserAllowed ? "" : " Open the video with browser_navigate, open \"...more\" under it and click \"Show transcript\", then read the panel with browser_read.") + "\n";
+                              (tried || !ctx.Cfg.BrowserAllowed || BrowserTool.LocalOnly(ctx, url) != null ? "" : " Open the video with browser_navigate, open \"...more\" under it and click \"Show transcript\", then read the panel with browser_read.") + "\n";
                 ToolOutcome o = ToolOutcome.Ok(text, "Read the YouTube video (no transcript)");
                 o.Untrusted = true;
                 return o;
@@ -2122,6 +2132,7 @@ namespace MinGent
         const int MaxBytes = 4 * 1024 * 1024;
         public static string DuckBase = "https://html.duckduckgo.com/html/?q=";
         public static string BingBase = "https://www.bing.com/search?q=";
+        public static string LiteBase = "https://lite.duckduckgo.com/lite/?q=";
         static readonly Regex DuckRefusal = new Regex(@"anomaly-modal|anomaly\.js|bots use DuckDuckGo too|id=""challenge-form""|class=""anomaly", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         static readonly Regex BingRefusal = new Regex(@"id=""b_captcha""|/challenge/verify|captcha\.(js|aspx)|verify you are (a )?human|unusual traffic|solve the challenge", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
@@ -2143,14 +2154,16 @@ namespace MinGent
             string df = recent == "day" ? "d" : recent == "week" ? "w" : recent == "month" ? "m" : recent == "year" ? "y" : null;
             WebResult d = Get(DuckBase + Uri.EscapeDataString(query) + "&kl=wt-wt" + (df != null ? "&df=" + df : ""), 15000, ct);
             List<Hit> hits = new List<Hit>();
-            bool refused = false, normal = false, offline = false;
+            bool refused = false, normal = false, offline = false, unrelated = false;
             string err = null;
             if (d.Body != null && d.Error == null)
             {
-                hits = ParseDuck(d.Body);
+                bool off;
+                hits = Related(query, ParseDuck(d.Body), out off);
                 if (hits.Count == 0)
                 {
-                    if (d.Block == "bot" || d.Status == 202 || DuckRefusal.IsMatch(d.Body)) refused = true;
+                    if (off) unrelated = true;
+                    else if (d.Block == "bot" || d.Status == 202 || DuckRefusal.IsMatch(d.Body)) refused = true;
                     else normal = true;
                 }
             }
@@ -2162,11 +2175,32 @@ namespace MinGent
             }
             if (hits.Count == 0)
             {
-                bool bRefused, bNormal, bOffline;
-                hits = Bing(query, recent, ct, out bRefused, out bNormal, out bOffline);
+                WebResult l = Get(LiteBase + Uri.EscapeDataString(query) + "&kl=wt-wt" + (df != null ? "&df=" + df : ""), 15000, ct);
+                if (l.Body != null && l.Error == null)
+                {
+                    bool off;
+                    hits = Related(query, ParseLite(l.Body), out off);
+                    if (hits.Count == 0)
+                    {
+                        if (off) unrelated = true;
+                        else if (l.Block == "bot" || l.Status == 202 || DuckRefusal.IsMatch(l.Body)) refused = true;
+                        else normal = true;
+                    }
+                }
+                else
+                {
+                    if (err == null) err = l.Error;
+                    if (l.Status >= 400 || l.Block != null) refused = true;
+                }
+            }
+            if (hits.Count == 0)
+            {
+                bool bRefused, bNormal, bOffline, bUnrelated;
+                hits = Bing(query, recent, ct, out bRefused, out bNormal, out bOffline, out bUnrelated);
                 refused |= bRefused;
                 normal |= bNormal;
                 offline = offline && bOffline;
+                unrelated |= bUnrelated;
             }
             count = hits.Count;
             string when = recent == null || recent.Length == 0 ? "" : " (from the past " + recent + ")";
@@ -2175,6 +2209,11 @@ namespace MinGent
             {
                 state = "empty";
                 return "No results for \"" + query + "\"" + when + "." + (when.Length > 0 ? " Try without recent, or with a longer period." : "");
+            }
+            if (unrelated)
+            {
+                state = "unrelated";
+                return "No results for \"" + query + "\": the search engines answered with pages that have nothing to do with it, which they do when they take a search for a bot, so those were left out. Rewording it won't help.";
             }
             if (refused)
             {
@@ -2240,9 +2279,41 @@ namespace MinGent
             return hits;
         }
 
-        static List<Hit> Bing(string query, string recent, CancelToken ct, out bool refused, out bool normal, out bool offline)
+        static readonly Regex LiteLink = new Regex("<a\\b([^>]*\\bclass=[\"'][^\"']*\\bresult-link\\b[^\"']*[\"'][^>]*)>(.*?)</a>", RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex LiteSnippet = new Regex("<td[^>]*\\bclass=[\"'][^\"']*\\bresult-snippet\\b[^\"']*[\"'][^>]*>(.*?)</td>", RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex AnyHref = new Regex("\\bhref=[\"']([^\"']+)[\"']", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        public static List<Hit> ParseLite(string html)
         {
-            refused = normal = offline = false;
+            List<Hit> hits = new List<Hit>();
+            HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string page = html ?? "";
+            MatchCollection links = LiteLink.Matches(page);
+            for (int i = 0; i < links.Count && hits.Count < MaxHits; i++)
+            {
+                Match a = links[i];
+                int rowAt = page.LastIndexOf("<tr", a.Index, StringComparison.OrdinalIgnoreCase);
+                if (rowAt >= 0 && page.Substring(rowAt, a.Index - rowAt).IndexOf("sponsored", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                Match href = AnyHref.Match(a.Groups[1].Value);
+                if (!href.Success) continue;
+                string raw = WebUtility.HtmlDecode(href.Groups[1].Value);
+                if (raw.IndexOf("duckduckgo.com/y.js", StringComparison.OrdinalIgnoreCase) >= 0 || raw.IndexOf("ad_provider=", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                string url = RealUrl(raw);
+                if (url == null || !seen.Add(url.TrimEnd('/'))) continue;
+                int from = a.Index + a.Length, to = i + 1 < links.Count ? links[i + 1].Index : Math.Min(page.Length, from + 20000);
+                Hit h = new Hit();
+                h.Url = url;
+                h.Title = Clean(a.Groups[2].Value);
+                Match sn = LiteSnippet.Match(page.Substring(from, to - from));
+                if (sn.Success) h.Snippet = Clean(sn.Groups[1].Value);
+                hits.Add(h);
+            }
+            return hits;
+        }
+
+        static List<Hit> Bing(string query, string recent, CancelToken ct, out bool refused, out bool normal, out bool offline, out bool unrelated)
+        {
+            refused = normal = offline = unrelated = false;
             string filter = "";
             if (recent == "day") filter = "&filters=" + Uri.EscapeDataString("ex1:\"ez1\"");
             else if (recent == "week") filter = "&filters=" + Uri.EscapeDataString("ex1:\"ez2\"");
@@ -2259,13 +2330,160 @@ namespace MinGent
                 else offline = b.Offline;
                 return new List<Hit>();
             }
-            List<Hit> hits = ParseBing(b.Body);
-            if (hits.Count == 0)
+            List<Hit> hits = Related(query, ParseBing(b.Body), out unrelated);
+            if (hits.Count == 0 && !unrelated)
             {
                 if (b.Block == "bot" || BingRefusal.IsMatch(b.Body)) refused = true;
                 else normal = true;
             }
             return hits;
+        }
+
+        class Term
+        {
+            public string[] Forms;
+            public bool Weak;
+        }
+
+        static readonly HashSet<string> Common = new HashSet<string>(StringComparer.Ordinal) {
+            "the", "and", "for", "with", "from", "that", "this", "these", "those", "what", "which", "who", "whom", "whose", "when", "where", "why", "how",
+            "are", "was", "were", "been", "being", "can", "could", "should", "would", "will", "shall", "may", "might", "must", "does", "did", "has", "have", "had",
+            "not", "you", "your", "yours", "our", "ours", "their", "theirs", "its", "his", "her", "hers", "they", "them", "she", "him", "about", "into", "onto",
+            "than", "then", "there", "here", "also", "just", "very", "much", "many", "some", "any", "all", "each", "every", "other", "such", "only", "own", "same",
+            "too", "out", "off", "over", "under", "again", "once", "more", "most", "less", "least", "via", "per", "versus", "between", "after", "before", "during",
+            "site", "www", "com", "org", "net", "http", "https", "html", "htm", "php",
+            "der", "die", "das", "und", "oder", "mit", "von", "fur", "ist", "ein", "eine", "het", "een", "van", "voor", "met", "les", "des", "une", "pour", "avec",
+            "dans", "sur", "los", "las", "del", "por", "para", "con", "una", "och", "att", "det", "som", "med", "tai", "kuin", "seka", "etta" };
+        static readonly Regex SearchOperator = new Regex(@"\b(?:site|filetype|intitle|inurl|intext|ext|inanchor|lang):", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex Word = new Regex(@"[\p{L}\p{N}]+", RegexOptions.CultureInvariant);
+
+        static string Normal(string s, NormalizationForm form)
+        {
+            try { return s.Normalize(form); }
+            catch (ArgumentException)
+            {
+                StringBuilder sb = new StringBuilder(s.Length);
+                for (int i = 0; i < s.Length; i++)
+                {
+                    char c = s[i];
+                    if (char.IsHighSurrogate(c) && i + 1 < s.Length && char.IsLowSurrogate(s[i + 1])) { sb.Append(c).Append(s[i + 1]); i++; }
+                    else if (!char.IsSurrogate(c)) sb.Append(c);
+                }
+                try { return sb.ToString().Normalize(form); }
+                catch (ArgumentException) { return sb.ToString(); }
+            }
+        }
+
+        static string Fold(string s)
+        {
+            string d = Normal((s ?? "").ToLowerInvariant(), NormalizationForm.FormKD);
+            StringBuilder sb = new StringBuilder(d.Length);
+            foreach (char c in d) if (CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark) sb.Append(c);
+            return Normal(sb.ToString(), NormalizationForm.FormKC).ToLowerInvariant();
+        }
+
+        static bool Dense(string w)
+        {
+            foreach (char c in w)
+                if ((c >= '\u3040' && c <= '\u30FF') || (c >= '\u3400' && c <= '\u9FFF') || (c >= '\uAC00' && c <= '\uD7AF') || (c >= '\u0E00' && c <= '\u0EFF') ||
+                    (c >= '\u1000' && c <= '\u109F') || (c >= '\u1780' && c <= '\u17FF') || (c >= '\uF900' && c <= '\uFAFF')) return true;
+            return false;
+        }
+
+        static List<Term> Terms(string query)
+        {
+            List<Term> terms = new List<Term>();
+            HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (Match m in Word.Matches(Fold(SearchOperator.Replace(query ?? "", " "))))
+            {
+                string w = m.Value;
+                if (!seen.Add(w)) continue;
+                Term t = new Term();
+                if (Dense(w))
+                {
+                    List<string> grams = new List<string>();
+                    if (w.Length == 1) grams.Add(w);
+                    for (int i = 0; i + 1 < w.Length; i++) grams.Add(w.Substring(i, 2));
+                    t.Forms = grams.ToArray();
+                    terms.Add(t);
+                    continue;
+                }
+                bool digit = false, letter = false;
+                foreach (char c in w) { if (char.IsNumber(c)) digit = true; else letter = true; }
+                if (w.Length < (digit ? 2 : 3) || Common.Contains(w)) continue;
+                t.Forms = new string[] { w };
+                t.Weak = !letter;
+                terms.Add(t);
+            }
+            return terms;
+        }
+
+        static int Distance(string a, string b, int max)
+        {
+            if (Math.Abs(a.Length - b.Length) > max) return max + 1;
+            int[,] d = new int[a.Length + 1, b.Length + 1];
+            for (int i = 0; i <= a.Length; i++) d[i, 0] = i;
+            for (int j = 0; j <= b.Length; j++) d[0, j] = j;
+            for (int i = 1; i <= a.Length; i++)
+            {
+                int best = int.MaxValue;
+                for (int j = 1; j <= b.Length; j++)
+                {
+                    int cost = a[i - 1] == b[j - 1] ? 0 : 1;
+                    int v = Math.Min(Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1), d[i - 1, j - 1] + cost);
+                    if (i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1]) v = Math.Min(v, d[i - 2, j - 2] + 1);
+                    d[i, j] = v;
+                    if (v < best) best = v;
+                }
+                if (best > max) return max + 1;
+            }
+            return d[a.Length, b.Length];
+        }
+
+        static int Matched(Hit h, List<Term> terms, bool strongOnly)
+        {
+            string url = h.Url ?? "";
+            try { url = Uri.UnescapeDataString(url); } catch { }
+            string text = Fold(h.Title + " " + h.Snippet + " " + url);
+            StringBuilder flat = new StringBuilder(text.Length);
+            foreach (char c in text) if (char.IsLetter(c) || char.IsNumber(c)) flat.Append(c);
+            string all = flat.ToString();
+            List<string> words = null;
+            int n = 0;
+            foreach (Term t in terms)
+            {
+                if (t.Weak && strongOnly) continue;
+                bool found = false;
+                foreach (string f in t.Forms) if (all.IndexOf(f, StringComparison.Ordinal) >= 0) { found = true; break; }
+                string w = t.Forms[0];
+                if (!found && t.Forms.Length == 1 && w.Length >= 5 && !t.Weak)
+                {
+                    if (words == null) { words = new List<string>(); foreach (Match m in Word.Matches(text)) words.Add(m.Value); }
+                    int max = w.Length >= 8 ? 2 : 1;
+                    foreach (string x in words) if (Distance(w, x, max) <= max) { found = true; break; }
+                }
+                if (found) n++;
+            }
+            return n;
+        }
+
+        public static List<Hit> Related(string query, List<Hit> hits, out bool unrelated)
+        {
+            unrelated = false;
+            List<Term> terms = Terms(query);
+            if (terms.Count == 0 || hits == null || hits.Count == 0) return hits ?? new List<Hit>();
+            int strong = 0;
+            foreach (Term t in terms) if (!t.Weak) strong++;
+            bool strongOnly = strong > 0;
+            int[] score = new int[hits.Count];
+            int some = 0;
+            for (int i = 0; i < hits.Count; i++) { score[i] = Matched(hits[i], terms, strongOnly); if (score[i] > 0) some++; }
+            if (some * 2 >= hits.Count) return hits;
+            int need = Math.Min(3, Math.Max(1, ((strongOnly ? strong : terms.Count) + 1) / 2));
+            List<Hit> keep = new List<Hit>();
+            for (int i = 0; i < hits.Count; i++) if (score[i] >= need) keep.Add(hits[i]);
+            unrelated = keep.Count == 0;
+            return keep;
         }
 
         public static List<Hit> ParseBing(string html)
@@ -2508,6 +2726,29 @@ namespace MinGent
     {
         protected string Gate(ToolContext ctx, string targetUrl) { return SiteGate(ctx, targetUrl); }
 
+        public static string LocalOnly(ToolContext ctx, string url)
+        {
+            if (ctx.Session.HelperKind != "review" || string.IsNullOrEmpty(url) || Net.IsLocal(url)) return null;
+            return "A reviewer only opens pages on this PC or the local network in the built-in browser (local files and addresses like localhost). Read websites with web_fetch.";
+        }
+
+        protected static ToolOutcome Stale(ToolContext ctx)
+        {
+            string to = ctx.Session.BrowserMovedTo;
+            if (to == null) return null;
+            ToolOutcome o = ToolOutcome.Fail("Not done: a helper used the browser after you last looked at it, and it now shows " + (to.Length > 0 ? to : "another page") +
+                ". Your element refs and screenshot positions are out of date: call browser_read" + (ctx.Cfg.Vision ? " or browser_screenshot" : "") + " first.");
+            o.Summary = "Not done: read the page again first";
+            return o;
+        }
+
+        protected static ToolOutcome HelperCaptcha()
+        {
+            ToolOutcome o = ToolOutcome.Fail("Not done: helpers don't solve CAPTCHAs. If you need this page, say in your report that it needs the user.");
+            o.Summary = "Not done: helpers don't solve CAPTCHAs";
+            return o;
+        }
+
         public static string SiteGate(ToolContext ctx, string targetUrl)
         {
             if (!ctx.Cfg.BrowserAllowed) return "Browser use is switched off in the assistant settings.";
@@ -2515,6 +2756,8 @@ namespace MinGent
             bool remote = probe.Length > 0 && !Net.IsLocal(probe) && !probe.StartsWith("about:", StringComparison.OrdinalIgnoreCase) && !probe.StartsWith("data:", StringComparison.OrdinalIgnoreCase);
             if (remote && Net.Offline) return Net.OfflineMessage;
             if (remote && !ctx.Cfg.WebAllowed) return "Web access is switched off in the assistant settings, so the browser only opens addresses on this PC or the local network.";
+            string local = LocalOnly(ctx, probe);
+            if (local != null) return local;
             if (ctx.Browser == null || !ctx.Browser.Available) return "The built-in browser is not available on this PC (it needs the Microsoft Edge WebView2 Runtime). Use web_fetch instead.";
             string url = targetUrl ?? ctx.Browser.CurrentUrl ?? "";
             Uri u;
@@ -2617,6 +2860,12 @@ namespace MinGent
             if (o == null || o.Error || ctx.Browser == null) return o;
             string n = ctx.Browser.PageNote;
             if (string.IsNullOrEmpty(n)) return o;
+            if (ctx.Session.IsHelper && ctx.Browser.CaptchaOnPage)
+            {
+                o.AddNote("This page has a human-verification check (CAPTCHA). Helpers don't solve these: read what you can, and if you need to get past it, say in your report that the page needs the user.");
+                if (ctx.Browser.PageNeedsUser) { o.WaitsOnUser = true; o.Host = BlockCheck.HostOf(ctx.Browser.CurrentUrl); }
+                return o;
+            }
             if (ctx.Browser.PageNeedsUser && ctx.Browser.PageIsCheck && !ctx.Session.IsHelper && !ctx.Ct.IsCancelled)
             {
                 ToolOutcome w = WaitForCheck(ctx, o, n);
@@ -2763,7 +3012,7 @@ namespace MinGent
                     if (ctx.Browser == null || !ctx.Browser.Available) return ToolOutcome.Fail("The built-in browser is not available on this PC.");
                     ctx.Browser.AllowFolder(System.IO.Path.GetDirectoryName(full));
                     url = new Uri(full).AbsoluteUri + suffix;
-                    gateUrl = null;
+                    gateUrl = url;
                 }
                 else
                 {
@@ -2784,6 +3033,7 @@ namespace MinGent
             if (g != null) { ToolOutcome d = ToolOutcome.Fail(g); d.Denied = true; return d; }
             string summary;
             string err2 = ctx.Browser.Navigate(url, ctx.Ct, out summary);
+            if (err2 == null) ctx.Session.BrowserMovedTo = null;
             ToolOutcome o = Act(ctx, err2, FrameHint(ctx, summary), "Opened " + WebFetchTool.Host(ctx.Browser.CurrentUrl));
             o.Snapshot = !o.Error && summary != null && summary.IndexOf("\nURL: ", StringComparison.Ordinal) >= 0;
             return o;
@@ -2805,6 +3055,7 @@ namespace MinGent
             string text;
             string err = ctx.Browser.Read(ctx.Ct, out text);
             Looked(ctx);
+            if (err == null) ctx.Session.BrowserMovedTo = null;
             return PageNotes(ctx, Result(err, FrameHint(ctx, text), "Read the page", true));
         }
     }
@@ -2860,6 +3111,8 @@ namespace MinGent
             string merr;
             MouseSpec mouse = MouseSpec.From(S(a, "button"), B(a, "right", false), B(a, "double", false), I(a, "clicks", 1), S(a, "modifiers"), I(a, "hold_ms", 0), out merr);
             if (mouse == null) return ToolOutcome.Fail(merr);
+            ToolOutcome stale = Stale(ctx);
+            if (stale != null) return stale;
             string g = Gate(ctx, null);
             if (g != null) { ToolOutcome d = ToolOutcome.Fail(g); d.Denied = true; return d; }
             if (pos)
@@ -2870,6 +3123,7 @@ namespace MinGent
                 string pie = ctx.Browser.PointInfo(x, y, ctx.Ct, out pkind, out psens);
                 if (pie != null) return ToolOutcome.Fail(pie);
                 bool captcha = pkind.StartsWith("a CAPTCHA box", StringComparison.Ordinal);
+                if (captcha && ctx.Session.IsHelper) return HelperCaptcha();
                 if (captcha && ctx.Cfg.TryCaptchas)
                 {
                     string stop = CaptchaTurn(ctx);
@@ -2896,6 +3150,7 @@ namespace MinGent
             string ie = ctx.Browser.ElementInfo(r, ctx.Ct, out kind, out sensitive);
             if (ie != null) return ToolOutcome.Fail(ie);
             bool isCaptcha = kind.StartsWith("a CAPTCHA box", StringComparison.Ordinal);
+            if (isCaptcha && ctx.Session.IsHelper) return HelperCaptcha();
             if (isCaptcha && ctx.Cfg.TryCaptchas)
             {
                 string stop = CaptchaTurn(ctx);
@@ -2943,6 +3198,8 @@ namespace MinGent
             string r = (S(a, "ref") ?? "").Trim();
             bool pos = byPosition && r.Length == 0 && a != null && a.ContainsKey("x") && a.ContainsKey("y");
             if (r.Length == 0 && !pos) return ToolOutcome.Fail(byPosition ? "give ref (like e12), or x and y from the last browser_screenshot" : "ref is required");
+            ToolOutcome stale = Stale(ctx);
+            if (stale != null) return stale;
             string g = Gate(ctx, null);
             if (g != null) { ToolOutcome d = ToolOutcome.Fail(g); d.Denied = true; return d; }
             string summary;
@@ -2990,6 +3247,8 @@ namespace MinGent
             bool toPos = byPosition && t.Length == 0 && a != null && a.ContainsKey("to_x") && a.ContainsKey("to_y");
             if (r.Length == 0 && !fromPos) return ToolOutcome.Fail("give the start: ref" + (byPosition ? " or x and y" : ""));
             if (t.Length == 0 && !toPos) return ToolOutcome.Fail("give the end: to_ref" + (byPosition ? " or to_x and to_y" : ""));
+            ToolOutcome stale = Stale(ctx);
+            if (stale != null) return stale;
             string g = Gate(ctx, null);
             if (g != null) { ToolOutcome d = ToolOutcome.Fail(g); d.Denied = true; return d; }
             if (r.Length > 0)
@@ -2999,6 +3258,7 @@ namespace MinGent
                 string ie = ctx.Browser.ElementInfo(r, ctx.Ct, out kind, out sensitive);
                 if (ie != null) return ToolOutcome.Fail(ie);
                 bool dragCaptcha = kind.StartsWith("a CAPTCHA box", StringComparison.Ordinal);
+                if (dragCaptcha && ctx.Session.IsHelper) return HelperCaptcha();
                 if (dragCaptcha && ctx.Cfg.TryCaptchas)
                 {
                     string stop = CaptchaTurn(ctx);
@@ -3024,6 +3284,7 @@ namespace MinGent
                 string pie = ctx.Browser.PointInfo(D(a, "x", -1), D(a, "y", -1), ctx.Ct, out pkind, out psens);
                 if (pie != null) return ToolOutcome.Fail(pie);
                 bool posCaptcha = pkind.StartsWith("a CAPTCHA box", StringComparison.Ordinal);
+                if (posCaptcha && ctx.Session.IsHelper) return HelperCaptcha();
                 if (posCaptcha && ctx.Cfg.TryCaptchas)
                 {
                     string stop = CaptchaTurn(ctx);
@@ -3067,6 +3328,8 @@ namespace MinGent
         public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
         {
             string r = (S(a, "ref") ?? "").Trim(), text = S(a, "text") ?? "";
+            ToolOutcome stale = Stale(ctx);
+            if (stale != null) return stale;
             string g = Gate(ctx, null);
             if (g != null) { ToolOutcome d = ToolOutcome.Fail(g); d.Denied = true; return d; }
             string kind;
@@ -3115,6 +3378,8 @@ namespace MinGent
             string perr;
             List<KeyPress> keys = KeyCombo.Sequence(S(a, "key"), I(a, "repeat", 1), out perr);
             if (keys == null) return ToolOutcome.Fail(perr);
+            ToolOutcome stale = Stale(ctx);
+            if (stale != null) return stale;
             string g = Gate(ctx, null);
             if (g != null) { ToolOutcome d = ToolOutcome.Fail(g); d.Denied = true; return d; }
             bool copies = false;
@@ -3179,6 +3444,8 @@ namespace MinGent
 
         public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
         {
+            ToolOutcome stale = Stale(ctx);
+            if (stale != null) return stale;
             string g = Gate(ctx, null);
             if (g != null) { ToolOutcome d = ToolOutcome.Fail(g); d.Denied = true; return d; }
             string r = (S(a, "ref") ?? "").Trim();
@@ -3206,6 +3473,7 @@ namespace MinGent
             string err = ctx.Browser.Screenshot(ctx.Ct, out img, out w, out h);
             if (err != null) return ToolOutcome.Fail(err);
             Looked(ctx);
+            ctx.Session.BrowserMovedTo = null;
             ToolOutcome o = ToolOutcome.Ok("Screenshot of " + ctx.Browser.CurrentUrl + " (shown below, " + w + " x " + h + " pixels). To click something that browser_read does not list, call browser_click with x and y in these pixels.", "Screenshot");
             o.Images = new List<ImageData>(new ImageData[] { img });
             o.Untrusted = true;
@@ -3540,8 +3808,11 @@ namespace MinGent
     {
         public static List<AgentTool> ForHelper(string kind) { return ForHelper(kind, true); }
 
-        public static List<AgentTool> ForHelper(string kind, bool web)
+        public static List<AgentTool> ForHelper(string kind, bool web) { return ForHelper(kind, web, false, false); }
+
+        public static List<AgentTool> ForHelper(string kind, bool web, bool browser, bool vision)
         {
+            bool browserOn = browser && kind != "explore";
             List<AgentTool> l = new List<AgentTool>();
             l.Add(new ReadFileTool());
             if (kind == "general") { l.Add(new EditFileTool()); l.Add(new WriteFileTool()); l.Add(new DeleteFileTool()); }
@@ -3550,7 +3821,8 @@ namespace MinGent
             l.Add(new SearchTextTool());
             if (kind != "explore") { l.Add(new RunCommandTool()); l.Add(new CommandStatusTool()); }
             if (web && !Net.Offline) l.Add(new WebSearchTool());
-            l.Add(new WebFetchTool());
+            l.Add(new WebFetchTool(browserOn && web && kind != "review"));
+            if (browserOn) l.AddRange(BrowserTools(vision));
             l.Add(new SystemInfoTool());
             return l;
         }

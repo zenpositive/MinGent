@@ -905,10 +905,11 @@ namespace MinGent
                 if (!Engine.Instance.Installed) return "The built-in engine is not set up yet. Open the model library to install it (one small download).";
                 ModelEntry m = snap.Find(r);
                 if (m == null) { m = new ModelEntry(); m.Provider = "engine"; m.Id = path; m.Path = path; m.Display = lm.DisplayName; }
-                if (!Engine.Instance.Running || !string.Equals(Engine.Instance.ModelPath, path, StringComparison.OrdinalIgnoreCase))
+                int wantCtx = EngineContextFor(lm);
+                if (!Engine.Instance.Matches(path, wantCtx, settings.EngineKv))
                 {
-                    progress("Loading " + lm.DisplayName);
-                    string err = Engine.Instance.Start(lm, EngineContextFor(lm), settings.EngineKv, delegate (string p) { progress(p); }, ct);
+                    progress((Engine.Instance.Running && string.Equals(Engine.Instance.ModelPath, path, StringComparison.OrdinalIgnoreCase) ? "Reloading " : "Loading ") + lm.DisplayName);
+                    string err = Engine.Instance.Start(lm, wantCtx, settings.EngineKv, delegate (string p) { progress(p); }, ct);
                     if (err != null) return err;
                 }
                 m.Context = Engine.Instance.Context > 0 ? Engine.Instance.Context : EngineContextFor(lm);
@@ -1544,6 +1545,13 @@ namespace MinGent
             try { FlashWindow(f.Handle, true); } catch { }
         }
 
+        static void Attention(Form f)
+        {
+            if (f == null || Form.ActiveForm == f) return;
+            if (AppControl.AgentInFront()) AppHighlight.Raise(f);
+            FlashTaskbar(f);
+        }
+
         class Bridge : IAgentUi
         {
             readonly AiPanel p;
@@ -1922,8 +1930,7 @@ namespace MinGent
             composer.Prompt = q.Wait ? "Type a message for the agent, or press Done when you're through" : q.Options.Count > 0 ? "Type a different answer, or pick one above" : "Type your answer";
             if (curActivity != null) chat.InvalidateItem(curActivity);
             host.RevealAssistant();
-            Form f = FindForm();
-            if (f != null && Form.ActiveForm != f) FlashTaskbar(f);
+            Attention(FindForm());
             return it;
         }
 
@@ -2023,8 +2030,7 @@ namespace MinGent
             chat.ScrollToEnd();
             if (curActivity != null) chat.InvalidateItem(curActivity);
             host.RevealAssistant();
-            Form f = FindForm();
-            if (f != null && Form.ActiveForm != f) FlashTaskbar(f);
+            Attention(FindForm());
             return it;
         }
 

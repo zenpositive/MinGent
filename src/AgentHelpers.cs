@@ -149,7 +149,7 @@ namespace MinGent
         readonly object gate = new object();
         string current = "";
         DateTime lastPush = DateTime.MinValue;
-        public int Steps;
+        public int Steps, BrowserCalls;
         public bool SawUntrusted;
 
         public HelperUi(IAgentUi parent, ToolCall call) { this.parent = parent; this.call = call; }
@@ -184,7 +184,13 @@ namespace MinGent
         public void AssistantDone(Msg m) { }
         public void ToolStart(ToolCall c, string label)
         {
-            lock (gate) { Steps++; current = ""; log.Append(Short(label, 90)); }
+            lock (gate)
+            {
+                Steps++;
+                if (c != null && (c.Name ?? "").StartsWith("browser_", StringComparison.Ordinal)) BrowserCalls++;
+                current = "";
+                log.Append(Short(label, 90));
+            }
             Push(true);
         }
         public void ToolOutput(ToolCall c, string text) { }
@@ -193,7 +199,7 @@ namespace MinGent
             lock (gate)
             {
                 if (o != null && o.Untrusted) SawUntrusted = true;
-                string s = o == null ? "" : o.Denied ? "not allowed" : o.Error ? "failed: " + Short(o.Summary, 80) : Short(o.Summary, 80);
+                string s = o == null ? "" : o.Denied ? "not allowed" : o.Error && !(o.Summary ?? "").StartsWith("Not run", StringComparison.Ordinal) ? "failed: " + Short(o.Summary, 80) : Short(o.Summary, 80);
                 if (s.Length > 0) log.Append(" \u2014 ").Append(s);
                 log.Append('\n');
             }
@@ -229,7 +235,12 @@ namespace MinGent
             return cfg != null && cfg.Model != null && (cfg.Model.Provider == "anthropic" || cfg.Model.Provider == "openai" || cfg.Model.Provider == "gemini");
         }
 
-        static AgentConfig Copy(AgentConfig c)
+        public static bool BrowserFor(string kind, ToolContext ctx)
+        {
+            return kind != "explore" && ctx.Cfg.BrowserAllowed && ctx.Cfg.ContextTokens >= 16000 && ctx.Browser != null && ctx.Browser.Available;
+        }
+
+        static AgentConfig Copy(AgentConfig c, bool browser)
         {
             AgentConfig h = new AgentConfig();
             h.Backend = c.Backend;
@@ -244,7 +255,7 @@ namespace MinGent
             h.AutoSave = c.AutoSave;
             h.OpenFiles = c.OpenFiles;
             h.WebAllowed = c.WebAllowed;
-            h.BrowserAllowed = false;
+            h.BrowserAllowed = browser;
             h.CustomInstructions = "";
             h.RunId = c.RunId;
             return h;
@@ -278,18 +289,34 @@ namespace MinGent
         public static ToolOutcome Run(ToolContext ctx, ToolCall call, string kind, string task)
         {
             if (ctx.Session.IsHelper) return ToolOutcome.Fail("a helper can't start other helpers. Do this part yourself.");
-            AgentConfig hc = Copy(ctx.Cfg);
+            bool browser = BrowserFor(kind, ctx);
+            IBrowserBridge br = browser ? ctx.Browser : null;
+            string before = br != null ? br.CurrentUrl ?? "" : "";
+            HelperUi ui = new HelperUi(ctx.Ui, call);
+            ToolOutcome o = Work(ctx, kind, task, browser, br, ui);
+            if (br != null && (ui.BrowserCalls > 0 || !string.Equals(before, br.CurrentUrl ?? "", StringComparison.Ordinal)))
+            {
+                string now = br.CurrentUrl ?? "";
+                ctx.Session.BrowserMovedTo = now;
+                o.AddNote("The helper used the built-in browser, which now shows " + (now.Length > 0 ? now : "another page") + ". Element refs and screenshot positions from before are out of date: call browser_read before you click or type there.");
+            }
+            return o;
+        }
+
+        static ToolOutcome Work(ToolContext ctx, string kind, string task, bool browser, IBrowserBridge br, HelperUi ui)
+        {
+            AgentConfig hc = Copy(ctx.Cfg, browser);
             AgentSession hs = new AgentSession(ctx.Session.Perms);
             hs.IsHelper = true;
+            hs.HelperKind = kind;
             hs.StepLimit = kind == "general" ? 80 : 50;
             hs.CharsPerToken = ctx.Session.CharsPerToken;
-            List<AgentTool> tools = AgentToolbox.ForHelper(kind, hc.WebAllowed);
+            List<AgentTool> tools = AgentToolbox.ForHelper(kind, hc.WebAllowed, browser, hc.Vision);
             string system = HelperPrompt.Build(hc, ctx.Session.Perms, kind);
-            HelperUi ui = new HelperUi(ctx.Ui, call);
             Msg first = new Msg("user", "[" + DateTime.Now.ToString("dddd d MMMM yyyy, HH:mm", CultureInfo.InvariantCulture) + "]\n" + task.Trim());
             try
             {
-                hs.Run(first, hc, tools, ui, ctx.Editor, null, ctx.Ct, ctx.Changes, system);
+                hs.Run(first, hc, tools, ui, ctx.Editor, br, ctx.Ct, ctx.Changes, system);
                 if (ctx.Ct.IsCancelled) return ToolOutcome.Fail("stopped by the user");
                 string report = FinalAnswer(hs);
                 if (report == null)
@@ -298,7 +325,7 @@ namespace MinGent
                     Msg wrap = new Msg("user", "[MinGent] Please stop working now and write your report from what you found so far, including what you did not get to.");
                     wrap.Hidden = true;
                     hs.FinalTurn = true;
-                    hs.Run(wrap, hc, tools, ui, ctx.Editor, null, ctx.Ct, ctx.Changes, system);
+                    hs.Run(wrap, hc, tools, ui, ctx.Editor, br, ctx.Ct, ctx.Changes, system);
                     if (ctx.Ct.IsCancelled) return ToolOutcome.Fail("stopped by the user");
                     report = FinalAnswer(hs);
                 }
@@ -477,17 +504,17 @@ namespace MinGent
     {
         public static string Build(AgentConfig cfg, PermissionState perms, string kind)
         {
+            bool browser = cfg.BrowserAllowed && kind != "explore";
             StringBuilder sb = new StringBuilder();
             sb.Append("You are a helper agent inside MinGent, an AI agent app for Windows. Another assistant gave you one focused task. Work on it on your own with your tools: you can't ask anyone questions, and nobody reads your messages except your final report, which goes back to that assistant.\n\n");
             sb.Append("# Your job\n");
             if (kind == "review")
             {
-                sb.Append("You check work that someone else did, independently. Read the relevant files and the code they use, and run the program, its tests or its build when you can (with run_command). ");
+                sb.Append("You check work that someone else did, independently. Read the relevant files and the code they use, and try the work the way its user would: run the program, its tests or its build with run_command").Append(browser ? ", and open web pages in the built-in browser" : "").Append(". ");
                 sb.Append("Look for real problems: bugs, crashes, wrong results, missing parts of what was asked, broken edge cases, security issues. Confirm a problem by reading the code or running it before you report it. ");
                 sb.Append("Don't change any files. Don't report style preferences.\n");
                 sb.Append("- Keep it focused: about 25 tool calls is plenty. When everything you checked holds up, report \"Looks good\" and stop; an honest short report beats invented problems.\n");
-                sb.Append("- Don't install anything (installing always needs the user's OK). If a tool, package or test runner is missing, say so in your report and check what you can without it.\n");
-                sb.Append("- Don't start programs that open a window: you can't see them, and run_command waits until they close or time out. Judge those by reading the code, or run the parts that work without a window. Start servers with background=true, check them with web_fetch, then stop them with command_status (stop=true).\n\n");
+                sb.Append("- Don't install anything (installing always needs the user's OK). If a tool, package or test runner is missing, say so in your report and check what you can without it.\n\n");
             }
             else if (kind == "general")
                 sb.Append("Do the task completely, then test it the way a careful person would: run it, run its tests or build it, and fix what is wrong.\n\n");
@@ -505,6 +532,14 @@ namespace MinGent
             {
                 sb.Append("- run_command uses ").Append(Shell.PowerShellName).Append(Shell.PowerShellName == "PowerShell 7" ? "" : ", which has no && or ||: separate commands with \";\"").Append(". Commands can't read keyboard input, so use non-interactive flags. Start servers with background=true and use command_status.\n");
                 sb.Append("- Bash commands such as ls -la, rm -rf, grep, touch, export or cat <<EOF do not work: use PowerShell (Get-ChildItem, Select-String, New-Item, $env:NAME = \"value\") or set shell to \"cmd\".\n");
+                if (browser)
+                    sb.Append("- Web pages: open them with browser_navigate in MinGent's built-in browser (a local .html file opens directly, without a server) and check them with browser_read").Append(cfg.Vision ? " or browser_screenshot" : "")
+                      .Append(", clicking and typing like a user would. For a site that needs a server, open its address once the server runs, and stop the server with command_status (stop=true) when you are done.")
+                      .Append(kind == "review" ? " As a reviewer you can only open pages on this PC or the local network there; read websites with web_fetch.\n" : "\n");
+                else
+                    sb.Append("- Web pages: there is no browser here, so judge them by reading their code. For a site that needs a server, check its address with web_fetch, and stop the server with command_status (stop=true) when you are done.\n");
+                sb.Append("- Never start Chrome, Edge or any other program with a window from a command: you can't see or use its window, and MinGent won't open it for you. ").Append(browser ? "The built-in browser is the only browser you use. " : "")
+                  .Append("Judge a desktop program by reading its code, or run the parts that work without a window.\n");
             }
             sb.Append("- When something fails, find out why; don't repeat a call that failed the same way.\n");
             sb.Append("- If a site blocks automated access (HTTP 403 or 429, a \"Just a moment...\" page, a CAPTCHA), requests from curl or scripts usually get the same answer: use another source, or say in your report that it is blocked. If two tries fail the same way, change your approach.\n");
@@ -512,6 +547,7 @@ namespace MinGent
             sb.Append("# This PC\n");
             sb.Append("- ").Append(SystemPrompt.OsName()).Append(", user ").Append(Environment.UserName).Append(".\n");
             sb.Append("- Workspace: ").Append(cfg.Workspace).Append(". Relative paths resolve here.\n");
+            if (kind != "explore") sb.Append("- ").Append(SystemInfoTool.PathLine()).Append(" Don't search the PC for other runtimes, and check a version only when it matters.\n");
             sb.Append("- ").Append(perms.Auto ? "Most actions run without asking; risky ones ask the user." : "Some actions ask the user for permission first; if the user says no, work without it.").Append('\n');
             if (!cfg.Vision) sb.Append("- The current model cannot see images.\n");
             sb.Append('\n');
@@ -543,7 +579,7 @@ namespace MinGent
                 return "Give a focused task to a helper agent. It starts with a fresh, empty context, works on its own with its own tools, and returns a report. " +
                        "kind \"explore\": research code or the web and report findings (read-only). kind \"review\": check finished work independently - it reads the files and runs tests, and changes nothing. kind \"general\": do a self-contained piece of work. " +
                        "The helper can't see this conversation, so write a complete task: the goal, the files or addresses involved, and what to report back." +
-                       (parallel ? " Several explore or review helpers in one turn run at the same time." : " Helpers run one at a time.");
+                       (parallel ? " Several explore helpers in one turn run at the same time; review and general helpers run one at a time." : " Helpers run one at a time.");
             }
         }
         public override Dictionary<string, object> Schema

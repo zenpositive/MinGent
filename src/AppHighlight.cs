@@ -79,6 +79,18 @@ namespace MinGent
         static int misses;
         static System.Windows.Forms.Timer watch;
 
+        public static void Raise(Form f)
+        {
+            if (f == null || broken || Environment.OSVersion.Platform != PlatformID.Win32NT) return;
+            try
+            {
+                if (!f.IsHandleCreated || !f.Visible || f.WindowState == FormWindowState.Minimized) return;
+                SetWindowPos(f.Handle, new IntPtr(-1), 0, 0, 0, 0, 0x0013);
+                SetWindowPos(f.Handle, new IntPtr(-2), 0, 0, 0, 0, 0x0013);
+            }
+            catch (Exception) { }
+        }
+
         public static bool Arrange(IntPtr app)
         {
             if (app == IntPtr.Zero || broken || Environment.OSVersion.Platform != PlatformID.Win32NT) return false;

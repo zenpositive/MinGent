@@ -1760,6 +1760,15 @@ namespace MinGent
                     };
                     dlg.WipeBrowser = WipeBrowserData;
                     dlg.ResetAll = delegate { reset = true; };
+                    SettingsDialog shown = dlg;
+                    dlg.PreviewLook = delegate (string th, string ac)
+                    {
+                        if (th == settings.ThemeName && ac == settings.AccentName) return;
+                        settings.ThemeName = th;
+                        settings.AccentName = ac;
+                        ApplyTheme();
+                        shown.Retheme(theme);
+                    };
                     dlg.EraseAll = delegate (IWin32Window o)
                     {
                         bool dl, outp;
@@ -1777,6 +1786,12 @@ namespace MinGent
                     parked.Visible = true;
                     Native.BringToFront(parked);
                 }
+            }
+            if (!saved && (settings.ThemeName != oldTheme || settings.AccentName != oldAccent))
+            {
+                settings.ThemeName = oldTheme;
+                settings.AccentName = oldAccent;
+                ApplyTheme();
             }
             if (erase >= 0) { StartErase((erase & 1) != 0, (erase & 2) != 0); return; }
             if (reset) { ResetSettings(); return; }

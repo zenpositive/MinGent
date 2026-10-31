@@ -8,7 +8,7 @@ namespace MinGent
 {
     class ThemedForm : Form
     {
-        protected readonly Theme Th;
+        protected Theme Th;
         public const int WindowW = 900, WindowH = 640;
 
         public ThemedForm(Theme t, string title, int w, int h)
@@ -30,6 +30,44 @@ namespace MinGent
         {
             base.OnHandleCreated(e);
             Native.SetTitleBar(this, Th);
+        }
+
+        public void Retheme(Theme t)
+        {
+            if (t == null || t == Th) return;
+            Theme old = Th;
+            Th = t;
+            SuspendLayout();
+            BackColor = t.Chrome;
+            ForeColor = t.ChromeFore;
+            Recolor(this, old, t);
+            ResumeLayout();
+            if (IsHandleCreated) Native.SetTitleBar(this, t);
+            ThemeScrollbars(this);
+            Invalidate(true);
+        }
+
+        static void Recolor(Control root, Theme old, Theme t)
+        {
+            foreach (Control c in root.Controls)
+            {
+                IThemed themed = c as IThemed;
+                if (themed != null) themed.SetTheme(t);
+                else if (c is Label)
+                {
+                    int fc = c.ForeColor.ToArgb();
+                    if (fc == old.ChromeDim.ToArgb()) c.ForeColor = t.ChromeDim;
+                    else if (fc == old.Fore.ToArgb()) c.ForeColor = t.Fore;
+                    else if (fc == old.ChromeFore.ToArgb()) c.ForeColor = t.ChromeFore;
+                }
+                else if (!(c is TextBoxBase))
+                {
+                    int bc = c.BackColor.ToArgb();
+                    if (bc == old.Chrome.ToArgb()) c.BackColor = t.Chrome;
+                    else if (bc == old.Card.ToArgb()) c.BackColor = t.Card;
+                }
+                if (c.HasChildren) Recolor(c, old, t);
+            }
         }
 
         protected override void OnLoad(EventArgs e)
@@ -100,6 +138,10 @@ namespace MinGent
         public Func<IWin32Window, Action<bool>, bool> WipeBrowser;
         public Func<IWin32Window, bool> EraseAll;
         public Action ResetAll;
+        public Action<string, string> PreviewLook;
+
+        string ThemeChoice { get { return themeBox.SelectedIndex == 1 ? "light" : themeBox.SelectedIndex == 2 ? "dark" : "system"; } }
+        string AccentChoice { get { return accentBox.SelectedIndex == 1 ? "windows" : "green"; } }
 
         public const string ResetPrompt = "Reset every setting to its default?\n\nThe theme, tools, what Auto asks about, the agent's folder and everything else on these pages go back to how MinGent comes. Your chats, memory, API keys, instructions, models and offline mode stay.";
         SwitchRow offline, netLog, errorLog, lmUnload, engineUpdates, autoSave, openFiles, showThinking, sendContext, web, browserOn, guard, appsOn, sideBySide, memoryOn, helpersOn, autoReview, captcha;
@@ -282,6 +324,8 @@ namespace MinGent
             Row(c, "Theme", "System follows the light or dark setting in Windows.", themeBox, themeBox.PreferredWidth);
             accentBox = new Segmented(Th, new string[] { "MinGent green", "Windows" }, s.AccentName == "windows" ? 1 : 0);
             Row(c, "Accent color", "Windows uses the accent color you picked in Windows Settings.", accentBox, accentBox.PreferredWidth);
+            themeBox.SelectedIndexChanged += delegate { if (PreviewLook != null) PreviewLook(ThemeChoice, AccentChoice); };
+            accentBox.SelectedIndexChanged += delegate { if (PreviewLook != null) PreviewLook(ThemeChoice, AccentChoice); };
             Place(p, c);
 
             Section(p, "Files", null);
@@ -588,8 +632,18 @@ namespace MinGent
                     return false;
                 }
             }
-            s.ThemeName = themeBox.SelectedIndex == 1 ? "light" : themeBox.SelectedIndex == 2 ? "dark" : "system";
-            s.AccentName = accentBox.SelectedIndex == 1 ? "windows" : "green";
+            if (offline.Checked && !s.Offline)
+            {
+                int n = ModelDownloads.Active().Count;
+                if (n > 0 && !Alert.Confirm(this, Th, (n == 1 ? "A model is downloading. Offline mode stops it." : n + " models are downloading. Offline mode stops them.") +
+                        "\n\nA download that stops picks up where it left off when you start it again.", Text, "Turn on offline mode", false))
+                {
+                    Select(5);
+                    return false;
+                }
+            }
+            s.ThemeName = ThemeChoice;
+            s.AccentName = AccentChoice;
             s.KeyLmStudio = lmToken.Box.Text.Trim().Length > 0 ? Secret.Protect(lmToken.Box.Text.Trim()) : "";
             s.LmContext = CtxValues[Math.Max(0, lmCtx.SelectedIndex)];
             s.LmUnloadOthers = lmUnload.Checked;
@@ -625,16 +679,6 @@ namespace MinGent
             s.AiSideBySide = sideBySide.Checked;
             s.AiWebGuard = guard.Checked;
             s.AiCaptcha = captcha.Checked;
-            if (offline.Checked && !s.Offline)
-            {
-                int n = ModelDownloads.Active().Count;
-                if (n > 0 && !Alert.Confirm(this, Th, (n == 1 ? "A model is downloading. Offline mode stops it." : n + " models are downloading. Offline mode stops them.") +
-                        "\n\nA download that stops picks up where it left off when you start it again.", Text, "Turn on offline mode", false))
-                {
-                    Select(5);
-                    return false;
-                }
-            }
             s.Offline = offline.Checked;
             s.KeepNetLog = netLog.Checked;
             s.KeepErrorLog = errorLog.Checked;

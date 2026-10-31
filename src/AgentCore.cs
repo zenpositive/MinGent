@@ -812,6 +812,7 @@ namespace MinGent
         public List<TodoItem> Todos = new List<TodoItem>();
         public readonly PermissionState Perms;
         public bool IsHelper, AutoReview;
+        public string HelperKind = "", BrowserMovedTo;
         public int StepLimit = 200;
         public readonly SyncSet ReadFiles = new SyncSet();
         public string Summary;
@@ -1292,7 +1293,7 @@ namespace MinGent
                         History.Add(cn);
                         continue;
                     }
-                    if (AutoReview && !IsHelper && !reviewed && !coach.Reviewed && coach.FilesChanged && byName.ContainsKey("delegate") && !ct.IsCancelled && !RunCoach.IsQuestion(r.Text))
+                    if (AutoReview && !IsHelper && !Perms.Planning && !reviewed && !coach.Reviewed && coach.FilesChanged && byName.ContainsKey("delegate") && !ct.IsCancelled && !RunCoach.IsQuestion(r.Text))
                     {
                         reviewed = true;
                         string review = Helpers.AutoReview(this, tc, ui, r.Text);
@@ -1464,7 +1465,7 @@ namespace MinGent
             {
                 if (c.Name != "delegate" || !c.ArgsValid) continue;
                 if (ArgFixer.Fix(tool, c) != null) continue;
-                if (DelegateTool.KindArg(c.Args) == "general") continue;
+                if (DelegateTool.KindArg(c.Args) != "explore") continue;
                 if (Perms.Planning && !PlanMode.Allows(c.Name, c.Args)) continue;
                 if ((Json.Str(c.Args, "task") ?? "").Trim().Length < 25) continue;
                 group.Add(c);
@@ -2010,7 +2011,7 @@ namespace MinGent
                 sb.Append("  - kind \"review\" to have substantial finished work checked by someone who did not write it, before you tell the user it is done;\n");
                 sb.Append("  - kind \"general\" for a self-contained piece of work.\n");
                 sb.Append("- A helper can't see this conversation. Give it everything it needs: the goal, the files or addresses, constraints, and what to report back. Check what it reports before you rely on it.\n");
-                if (Helpers.Parallel(cfg)) sb.Append("- Several explore or review helpers called in one turn run at the same time.\n");
+                if (Helpers.Parallel(cfg)) sb.Append("- Several explore helpers called in one turn run at the same time.\n");
                 if (autoReview) sb.Append("- When you change a lot of code, MinGent has a reviewer check your work before your answer reaches the user, and shows you its report.\n");
                 sb.Append('\n');
             }

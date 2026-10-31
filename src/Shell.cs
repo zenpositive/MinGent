@@ -127,6 +127,11 @@ namespace MinGent
 
         public static ShellJob Start(string command, string shell, string cwd, bool background, out string error)
         {
+            return Start(command, shell, cwd, background, null, out error);
+        }
+
+        public static ShellJob Start(string command, string shell, string cwd, bool background, Dictionary<string, string> env, out string error)
+        {
             error = null;
             Sweep();
             ShellJob j = new ShellJob();
@@ -171,6 +176,7 @@ namespace MinGent
             psi.EnvironmentVariables["PIP_NO_INPUT"] = "1";
             foreach (string k in new string[] { "ANTHROPIC_API_KEY", "OPENAI_API_KEY" })
                 if (psi.EnvironmentVariables.ContainsKey(k)) psi.EnvironmentVariables.Remove(k);
+            if (env != null) foreach (KeyValuePair<string, string> kv in env) psi.EnvironmentVariables[kv.Key] = kv.Value;
             Process p = new Process();
             p.StartInfo = psi;
             try { p.Start(); }
@@ -404,6 +410,9 @@ namespace MinGent
         static Rule[] BuildRules()
         {
             string[,] r = {
+                { @"\[\s*(system\s*\.\s*)?diagnostics\s*\.\s*process\s*\]\s*::\s*start\s*\(", "opens a program, file or address with Process.Start (for web pages, use the built-in browser)", PermissionCategory.Launch },
+                { @"(^|\s)-m\s+webbrowser\b|\bwebbrowser\s*\.\s*(open|open_new|open_new_tab)\s*\(", "opens a web page in another browser (use the built-in browser)", PermissionCategory.Launch },
+                { @"\brundll32(\.exe)?\s+(url(\.dll)?\s*,\s*(fileprotocolhandler|openurl)|shell32(\.dll)?\s*,\s*shellexec_rundll)\b", "opens an address or file with another program (for web pages, use the built-in browser)", PermissionCategory.Launch },
                 { @"\bformat(\.com)?\s+[a-z]:(?!\w)|\b(format-volume|clear-disk|initialize-disk|remove-partition|diskpart|mountvol|bcdedit|bootrec|bcdboot)\b", "formats or repartitions disks / changes boot settings", PermissionCategory.System },
                 { @"\b(vssadmin|wbadmin|wmic\s+shadowcopy)\b|cipher(\.exe)?\s+/w|\bsdelete\b", "deletes backups or wipes free space", PermissionCategory.Delete },
                 { @"\b(shutdown(\.exe)?\s|restart-computer|stop-computer|logoff\b)", "shuts down or restarts the PC", PermissionCategory.System },
@@ -488,19 +497,67 @@ namespace MinGent
             category = "";
             string c = command ?? "";
             string flat = Flatten(c);
+            string opener = null;
             foreach (Rule rule in Rules)
-                if (rule.Re.IsMatch(c) || rule.Re.IsMatch(flat)) { category = rule.Category; return rule.Why; }
+                if (rule.Re.IsMatch(c) || rule.Re.IsMatch(flat))
+                {
+                    if (rule.Category == PermissionCategory.Launch) { if (opener == null) opener = rule.Why; continue; }
+                    category = rule.Category;
+                    return rule.Why;
+                }
             if (TouchesOwnData(flat)) { category = PermissionCategory.Credentials; return "reads or changes MinGent's own settings, chats or browser sign-ins"; }
             if (SecretWatch.Leaks(c) && LooksNetwork(c)) { category = PermissionCategory.Never; return "sends one of your API keys from MinGent's settings over the internet"; }
-            string install = InstallOrLaunch(flat, workspace, string.IsNullOrEmpty(cwd) ? workspace : cwd, out category);
-            if (install != null) return install;
-            category = "";
-            string del = DeleteDanger(flat, workspace, string.IsNullOrEmpty(cwd) ? workspace : cwd);
-            if (del != null) category = PermissionCategory.Delete;
-            return del;
+            string dir = string.IsNullOrEmpty(cwd) ? workspace : cwd;
+            string launchCat;
+            string install = InstallOrLaunch(flat, workspace, dir, out launchCat);
+            if (install != null && launchCat != PermissionCategory.Launch) { category = launchCat; return install; }
+            string del = DeleteDanger(flat, workspace, dir);
+            if (del != null) { category = PermissionCategory.Delete; return del; }
+            if (install != null) { category = PermissionCategory.Launch; return install; }
+            if (opener != null) { category = PermissionCategory.Launch; return opener; }
+            return null;
+        }
+
+        public static bool OpensWindow(string reason)
+        {
+            return reason != null && reason.StartsWith("opens ", StringComparison.Ordinal);
+        }
+
+        public static string WindowReason(string command, string workspace, string cwd)
+        {
+            string c = command ?? "";
+            string flat = Flatten(c);
+            foreach (Rule rule in Rules)
+                if (rule.Category == PermissionCategory.Launch && OpensWindow(rule.Why) && (rule.Re.IsMatch(c) || rule.Re.IsMatch(flat))) return rule.Why;
+            string dir = string.IsNullOrEmpty(cwd) ? workspace : cwd;
+            string[] parts = StatementKeep.Split(flat);
+            for (int i = 0; i < parts.Length; i += 2)
+            {
+                string cat;
+                string why = OneStatement(parts, i, workspace, dir, out cat);
+                if (why != null && cat == PermissionCategory.Launch && OpensWindow(why)) return why;
+            }
+            return null;
         }
 
         static readonly Regex Statement = new Regex(@"\r?\n|;|&&|\|\||\||&|\(|\)|\{|\}", RegexOptions.CultureInvariant);
+        static readonly Regex StatementKeep = new Regex(@"(\r?\n|;|&&|\|\||\||&|\(|\)|\{|\})", RegexOptions.CultureInvariant);
+        static readonly Regex Document = new Regex(
+            @"\.(html?|xhtml|mhtml?|svg|pdf|txt|md|markdown|rtf|log|csv|tsv|json|xml|ya?ml|ini|cfg|conf|docx?|xlsx?|pptx?|od[tsp]|png|jpe?g|gif|bmp|webp|ico|tiff?|mp[34]|m4a|wav|flac|ogg|avi|mkv|mov|webm|url|zip|7z|rar)$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex GuiExe = new Regex(@"([\w.+-]+)\.exe\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly HashSet<string> Browsers = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "chrome", "msedge", "brave", "vivaldi", "opera", "firefox" };
+        static readonly HashSet<string> EditorClis = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "code", "code-insiders", "cursor", "windsurf" };
+
+        static string Windowless(string name, string token, string args)
+        {
+            string r = " " + (args ?? "").ToLowerInvariant().Replace('\'', ' ').Replace('"', ' ').Replace(',', ' ') + " ";
+            if (EditorClis.Contains(name) && Regex.IsMatch(r, @"\s(--version|-v|--help|-h|--list-extensions|--show-versions)\s")) return "info";
+            if (name == "devenv" && (token ?? "").Trim('"', '\'').EndsWith(".com", StringComparison.OrdinalIgnoreCase) && Regex.IsMatch(r, @"\s[/-](build|rebuild|clean|deploy|upgrade)\s")) return "info";
+            if (Browsers.Contains(name) && Regex.IsMatch(r, @"\s--headless(=\S*)?\s")) return "headless";
+            if (name == "blender" && Regex.IsMatch(r, @"\s(-b|--background)\s")) return "headless";
+            return null;
+        }
         static readonly Regex RemoteSpec = new Regex(@"(^|\s)['""]?(https?://|npm:|jsr:)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         static readonly Regex ProgramDownload = new Regex(
             @"\.(exe|msi|msix|msixbundle|appx|appxbundle|zip|7z|rar|tar|tgz|gz|xz|bz2|zst|whl|nupkg|vsix|jar|ps1|psm1|bat|cmd|vbs|js|msu|cab|dmg|pkg|deb|rpm|appimage|iso|img|vhdx?)(['""?#\s]|$)",
@@ -709,68 +766,151 @@ namespace MinGent
 
         static string InstallOrLaunch(string c, string workspace, string cwd, out string category)
         {
-            category = PermissionCategory.Install;
-            foreach (string raw in Statement.Split(c))
+            string[] parts = StatementKeep.Split(c);
+            string launch = null;
+            for (int i = 0; i < parts.Length; i += 2)
             {
-                string s = raw.Trim().TrimStart('@').Trim();
-                for (int guard = 0; guard < 4; guard++)
-                {
-                    Match pre = Regex.Match(s, @"^(call|cmd(\.exe)?\s+/[ckr]|start-job\s+-scriptblock|invoke-command\s+-scriptblock)\s+", RegexOptions.IgnoreCase);
-                    if (!pre.Success) break;
-                    s = s.Substring(pre.Length).TrimStart().Trim('"').TrimStart();
-                }
-                if (s.Length == 0) continue;
-                string token, rest;
-                Head(s, out token, out rest);
-                string name = BaseName(token);
-                if (name.Length == 0) continue;
-                string pkg = PackageInstall(name, rest);
-                if (pkg != null)
-                {
-                    bool run = name == "npx" || name == "pnpx" || name == "bunx" || name == "uvx" || name == "dnx" || pkg.EndsWith(" x") || pkg.EndsWith(" dlx") || pkg.EndsWith(" exec") ||
-                               pkg.EndsWith(" create") || pkg.StartsWith("npm init") || pkg.IndexOf(" run", StringComparison.Ordinal) > 0 || pkg.IndexOf("from the internet", StringComparison.Ordinal) > 0 ||
-                               name == "docker" || name == "podman" || name == "docker-compose";
-                    return run ? "downloads and runs a package or program (" + pkg + ")"
-                               : "installs or updates software, a runtime or packages (" + pkg + ")";
-                }
-                if (name == "explorer") { category = PermissionCategory.Launch; return "opens a File Explorer window"; }
-                if (name == "start-process" || name == "saps" || name == "start" || name == "invoke-item" || name == "ii")
-                {
-                    if (name == "start" && Regex.IsMatch(rest, @"^-?(sleep|transcript|job|service|bitstransfer)\b", RegexOptions.IgnoreCase)) continue;
-                    string target = LaunchTarget(Words(rest));
-                    if (string.IsNullOrEmpty(target)) continue;
-                    string why = LaunchDanger(target, workspace, cwd, name == "invoke-item" || name == "ii");
-                    if (why != null) { category = why.StartsWith("runs an installer", StringComparison.Ordinal) ? PermissionCategory.Install : PermissionCategory.Launch; return why; }
-                    continue;
-                }
-                if (GuiApps.Contains(name)) { category = PermissionCategory.Launch; return "opens the desktop program " + name + ""; }
-                bool pathy = token.IndexOf('\\') >= 0 || token.IndexOf('/') >= 0 || token.StartsWith("$env:", StringComparison.OrdinalIgnoreCase) || token.StartsWith("%");
-                if (pathy && Regex.IsMatch(token.Trim('"', '\''), @"\.(exe|com|bat|cmd|ps1|vbs|msc|cpl|scr|lnk|msi|msix|appx)$", RegexOptions.IgnoreCase))
-                {
-                    if (InstallerName.IsMatch(token.Trim('"', '\''))) return "runs an installer";
-                    bool unknown;
-                    string full = Full(token, cwd, out unknown);
-                    category = PermissionCategory.Launch;
-                    if (unknown) return "starts a program whose location comes from a variable, so it cannot be checked";
-                    if (full != null && !Inside(full, workspace) && !DevTools.Contains(name))
-                    {
-                        string win = "";
-                        try { win = Environment.GetFolderPath(Environment.SpecialFolder.Windows); } catch { }
-                        if (win.Length == 0 || !AgentPaths.IsInside(full, win) || GuiApps.Contains(name))
-                            return "starts a program from outside the work folder (" + Path.GetFileName(full) + ")";
-                    }
-                    category = PermissionCategory.Install;
-                }
+                string cat;
+                string why = OneStatement(parts, i, workspace, cwd, out cat);
+                if (why == null) continue;
+                if (cat != PermissionCategory.Launch) { category = cat; return why; }
+                if (launch == null) launch = why;
             }
+            category = PermissionCategory.Install;
             Match mp = Regex.Match(c, @"\s-m\s+(pip\s+(\S+\s+)*?(install|download|wheel)|ensurepip)\b", RegexOptions.IgnoreCase);
             if (mp.Success) return "installs or updates software, a runtime or packages (" + Regex.Replace(mp.Value.Trim(), @"\s+", " ") + ")";
             if (LooksNetwork(c) && ProgramDownload.IsMatch(c)) return "downloads a program, installer, script or archive from the internet";
             if (Regex.IsMatch(c, @"\b(downloadfile|downloadfiletaskasync)\s*\(", RegexOptions.IgnoreCase) && ProgramDownload.IsMatch(c))
                 return "downloads a program, installer, script or archive from the internet";
+            if (launch != null) category = PermissionCategory.Launch;
+            return launch;
+        }
+
+        static readonly Regex RunsString = new Regex(@"(\bcmd(\.exe)?\s+/[ckr]|\s-(c|command)|\b(iex|invoke-expression))\s*$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        static bool InsideString(string before)
+        {
+            char open = '\0';
+            bool runs = false;
+            for (int k = 0; k < before.Length; k++)
+            {
+                char ch = before[k];
+                if (open == '\0')
+                {
+                    if (ch == '"' || ch == '\'') { open = ch; runs = RunsString.IsMatch(before.Substring(0, k)); }
+                }
+                else if (ch == open) { open = '\0'; runs = false; }
+            }
+            return open != '\0' && !runs;
+        }
+
+        static string OneStatement(string[] parts, int i, string workspace, string cwd, out string category)
+        {
+            string why = Examine(parts, i, workspace, cwd, out category);
+            if (why != null && category == PermissionCategory.Launch && i > 0 && parts[i - 1] != ")" && InsideString(string.Join("", parts, 0, i))) return null;
+            return why;
+        }
+
+        static string Examine(string[] parts, int i, string workspace, string cwd, out string category)
+        {
+            category = PermissionCategory.Install;
+            string prev = i > 0 ? parts[i - 1] : "", next = i + 1 < parts.Length ? parts[i + 1] : "";
+            string s = parts[i].Trim().TrimStart('@').Trim();
+            bool viaCmd = false, assigned = false;
+            for (int guard = 0; guard < 5; guard++)
+            {
+                Match pre = Regex.Match(s, @"^(?:(call|cmd(\.exe)?\s+/[ckr]|start-job\s+-scriptblock|invoke-command\s+-scriptblock)\s+|\$[\w:]+\s*=(?!=)\s*)", RegexOptions.IgnoreCase);
+                if (!pre.Success || pre.Length == 0) break;
+                string p = pre.Value.ToLowerInvariant();
+                assigned = p.StartsWith("$");
+                if (p.StartsWith("call") || p.StartsWith("cmd")) viaCmd = true;
+                s = s.Substring(pre.Length).TrimStart();
+                if (!assigned) s = s.Trim('"').TrimStart();
+            }
+            if (s.Length == 0) return null;
+            bool quoted = s[0] == '"' || s[0] == '\'';
+            if (assigned && quoted) return null;
+            string token, rest;
+            Head(s, out token, out rest);
+            string name = BaseName(token);
+            if (name.Length == 0) return null;
+            string pkg = PackageInstall(name, rest);
+            if (pkg != null)
+            {
+                bool run = name == "npx" || name == "pnpx" || name == "bunx" || name == "uvx" || name == "dnx" || pkg.EndsWith(" x") || pkg.EndsWith(" dlx") || pkg.EndsWith(" exec") ||
+                           pkg.EndsWith(" create") || pkg.StartsWith("npm init") || pkg.IndexOf(" run", StringComparison.Ordinal) > 0 || pkg.IndexOf("from the internet", StringComparison.Ordinal) > 0 ||
+                           name == "docker" || name == "podman" || name == "docker-compose";
+                return run ? "downloads and runs a package or program (" + pkg + ")"
+                           : "installs or updates software, a runtime or packages (" + pkg + ")";
+            }
+            if (name == "explorer") { category = PermissionCategory.Launch; return "opens a File Explorer window"; }
+            if (name == "start-process" || name == "saps" || name == "start" || name == "invoke-item" || name == "ii")
+            {
+                if (name == "start" && Regex.IsMatch(rest, @"^-?(sleep|transcript|job|service|bitstransfer)\b", RegexOptions.IgnoreCase)) return null;
+                string target = LaunchTarget(Words(rest));
+                if (string.IsNullOrEmpty(target))
+                {
+                    if (next != "(") return null;
+                    category = PermissionCategory.Launch;
+                    string inner = i + 2 < parts.Length ? parts[i + 2] : "";
+                    foreach (Match m in GuiExe.Matches(inner))
+                        if (GuiApps.Contains(m.Groups[1].Value)) return "opens the desktop program " + m.Groups[1].Value.ToLowerInvariant();
+                    foreach (string w in Words(inner))
+                    {
+                        string f = w.Trim('"', '\'');
+                        if (Document.IsMatch(f)) return "opens " + f.Substring(Math.Max(f.LastIndexOf('\\'), f.LastIndexOf('/')) + 1) + " with another program (for web pages, use the built-in browser)";
+                    }
+                    return "starts or opens something whose location the command works out, so it cannot be checked";
+                }
+                string why = LaunchDanger(target, rest, workspace, cwd, name == "invoke-item" || name == "ii");
+                if (why != null) category = why.StartsWith("runs an installer", StringComparison.Ordinal) ? PermissionCategory.Install : PermissionCategory.Launch;
+                return why;
+            }
+            string bare = token.Trim('"', '\'');
+            bool pathTok = bare.IndexOf('\\') >= 0 || bare.IndexOf('/') >= 0;
+            if (GuiApps.Contains(name) && !(name == "write" && !bare.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)))
+            {
+                string quiet = Windowless(name, token, rest);
+                if (quiet != "info")
+                {
+                    category = PermissionCategory.Launch;
+                    return quiet != null ? "starts " + name + " without a window" : "opens the desktop program " + name;
+                }
+                if (!pathTok) return null;
+            }
+            bool starts = prev == "" || prev == "\n" || prev == "\r\n" || prev == ";" || prev == "&&" || prev == "||" || prev == "{";
+            if (Document.IsMatch(bare) && bare.IndexOf('"') < 0 && bare.IndexOf('\'') < 0 && !Regex.IsMatch(bare, @"^[a-z][\w+.\-]+://", RegexOptions.IgnoreCase) &&
+                (starts || prev == "&" || viaCmd))
+            {
+                bool called = prev == "&" || viaCmd;
+                bool exists = false;
+                if (!pathTok && !quoted) { try { exists = !string.IsNullOrEmpty(cwd) && File.Exists(Path.Combine(cwd, bare)); } catch { } }
+                if (quoted ? called : (pathTok || called || exists))
+                {
+                    category = PermissionCategory.Launch;
+                    return "opens " + bare.Substring(Math.Max(bare.LastIndexOf('\\'), bare.LastIndexOf('/')) + 1) + " with another program (for web pages, use the built-in browser)";
+                }
+            }
+            bool pathy = token.IndexOf('\\') >= 0 || token.IndexOf('/') >= 0 || token.StartsWith("$env:", StringComparison.OrdinalIgnoreCase) || token.StartsWith("%");
+            if (pathy && Regex.IsMatch(bare, @"\.(exe|com|bat|cmd|ps1|vbs|msc|cpl|scr|lnk|msi|msix|appx)$", RegexOptions.IgnoreCase))
+            {
+                if (InstallerName.IsMatch(bare)) return "runs an installer";
+                bool unknown;
+                string full = Full(token, cwd, out unknown);
+                category = PermissionCategory.Launch;
+                if (unknown) return "starts a program whose location comes from a variable, so it cannot be checked";
+                if (full != null && !Inside(full, workspace) && !DevTools.Contains(name))
+                {
+                    string win = "";
+                    try { win = Environment.GetFolderPath(Environment.SpecialFolder.Windows); } catch { }
+                    if (win.Length == 0 || !AgentPaths.IsInside(full, win) || GuiApps.Contains(name))
+                        return "starts a program from outside the work folder (" + Path.GetFileName(full) + ")";
+                }
+            }
             return null;
         }
 
-        static string LaunchDanger(string target, string workspace, string cwd, bool opener)
+        static string LaunchDanger(string target, string args, string workspace, string cwd, bool opener)
         {
             string t = target.Trim().Trim('"', '\'').Trim();
             if (t.Length == 0) return null;
@@ -778,6 +918,7 @@ namespace MinGent
                 return "opens " + (t.Length > 60 ? t.Substring(0, 60) + "..." : t) + " in another program (use the built-in browser for web pages)";
             if (InstallerName.IsMatch(t)) return "runs an installer";
             string name = BaseName(t);
+            if (GuiApps.Contains(name)) return Windowless(name, t, args) == "headless" ? "starts " + name + " without a window" : "opens the desktop program " + name;
             bool pathy = t.IndexOf('\\') >= 0 || t.IndexOf('/') >= 0 || t.StartsWith(".") || t.StartsWith("$") || t.StartsWith("%");
             if (!pathy)
             {
@@ -788,7 +929,8 @@ namespace MinGent
             }
             bool unknown;
             string full = Full(t, cwd, out unknown);
-            if (unknown) return "opens something whose location comes from a variable, so it cannot be checked";
+            if (unknown && Document.IsMatch(t)) return "opens " + t.Substring(Math.Max(t.LastIndexOf('\\'), t.LastIndexOf('/')) + 1) + " with another program (for web pages, use the built-in browser)";
+            if (unknown) return "starts or opens something whose location comes from a variable, so it cannot be checked";
             if (full == null) return null;
             bool runnable = Regex.IsMatch(full, @"\.(exe|com|bat|cmd|ps1|py|pyw|js|jar)$", RegexOptions.IgnoreCase);
             if (!Inside(full, workspace))

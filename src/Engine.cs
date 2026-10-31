@@ -524,6 +524,16 @@ namespace MinGent
         }
 
         int requested = -1;
+        string requestedKv;
+
+        public bool Matches(string modelPath, int ctx, string kvQuant)
+        {
+            lock (gate)
+            {
+                try { return proc != null && !proc.HasExited && !Starting && string.Equals(ModelPath, modelPath, StringComparison.OrdinalIgnoreCase) && ctx == requested && string.Equals(kvQuant ?? "", requestedKv ?? "", StringComparison.Ordinal); }
+                catch { return false; }
+            }
+        }
 
         public string Start(LocalModel model, int ctx, string kvQuant, Action<string> progress, CancelToken ct)
         {
@@ -531,12 +541,12 @@ namespace MinGent
             if (backend == null) return "The built-in engine is not installed yet. Set it up from Models in the sidebar.";
             lock (gate)
             {
-                try { if (proc != null && !proc.HasExited && string.Equals(ModelPath, model.Path, StringComparison.OrdinalIgnoreCase) && ctx == requested) return null; } catch { }
+                try { if (proc != null && !proc.HasExited && string.Equals(ModelPath, model.Path, StringComparison.OrdinalIgnoreCase) && ctx == requested && string.Equals(kvQuant ?? "", requestedKv ?? "", StringComparison.Ordinal)) return null; } catch { }
             }
             string err = Launch(backend, model, ctx, kvQuant, true, progress, ct);
             if (err != null && ArgsRejected(LogTail(60)))
                 err = Launch(backend, model, ctx > 0 ? ctx : 32768, kvQuant, false, progress, ct);
-            if (err == null) requested = ctx;
+            if (err == null) { requested = ctx; requestedKv = kvQuant; }
             return err;
         }
 

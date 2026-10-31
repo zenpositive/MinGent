@@ -201,7 +201,7 @@ namespace MinGent
         }
     }
 
-    class InputBox : Control
+    class InputBox : Control, IThemed
     {
         public readonly TextBox Box = new CueTextBox();
         readonly string cue;

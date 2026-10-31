@@ -394,12 +394,42 @@ namespace MinGent
             sb.Append("Home: ").Append(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)).Append('\n');
             sb.Append("Workspace: ").Append(ctx.Workspace).Append('\n');
             sb.Append("Developer tools on PATH:\n");
+            Dictionary<string, string> found = OnPath();
+            int n = 0;
+            foreach (string t in Tools)
+            {
+                string p;
+                if (!found.TryGetValue(t, out p)) continue;
+                if (StoreShortcut(p)) p += " (looks like only the Microsoft Store shortcut, which opens the Store instead of running Python)";
+                sb.Append("  ").Append(t).Append(": ").Append(p).Append('\n');
+                n++;
+            }
+            if (n == 0) sb.Append("  (none of the common ones)\n");
+            List<string> missing = new List<string>();
+            foreach (string t in Key) if (!found.ContainsKey(t)) missing.Add(t);
+            if (missing.Count > 0) sb.Append("Not found on PATH: ").Append(string.Join(", ", missing.ToArray())).Append('\n');
+            return ToolOutcome.Ok(sb.ToString(), n + " tools found");
+        }
+
+        static readonly string[] Key = { "python", "node", "git", "dotnet", "java", "go", "cargo" };
+
+        static readonly object scanLock = new object();
+        static string scannedPath;
+        static DateTime scannedAt;
+        static Dictionary<string, string> scanned;
+
+        public static Dictionary<string, string> OnPath()
+        {
+            string path = Environment.GetEnvironmentVariable("PATH") ?? "";
+            lock (scanLock)
+                if (scanned != null && scannedPath == path && (DateTime.UtcNow - scannedAt).TotalMinutes < 2)
+                    return new Dictionary<string, string>(scanned, StringComparer.OrdinalIgnoreCase);
             Dictionary<string, string> found = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             string[] exts = { ".exe", ".cmd", ".bat", ".ps1" };
-            foreach (string dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';'))
+            foreach (string dir in path.Split(';'))
             {
                 string d = dir.Trim().Trim('"');
-                if (d.Length == 0) continue;
+                if (!LocalFolder(d)) continue;
                 foreach (string t in Tools)
                 {
                     if (found.ContainsKey(t)) continue;
@@ -414,20 +444,59 @@ namespace MinGent
                     }
                 }
             }
-            int n = 0;
+            lock (scanLock) { scanned = found; scannedPath = path; scannedAt = DateTime.UtcNow; }
+            return new Dictionary<string, string>(found, StringComparer.OrdinalIgnoreCase);
+        }
+
+        static bool LocalFolder(string d)
+        {
+            if (d.Length == 0) return false;
+            bool drive = d.Length >= 3 && char.IsLetter(d[0]) && d[1] == ':' && (d[2] == '\\' || d[2] == '/');
+            if (!drive && !(Path.DirectorySeparatorChar == '/' && d[0] == '/')) return false;
+            try
+            {
+                if (drive && new DriveInfo(d.Substring(0, 1)).DriveType == DriveType.Network) return false;
+                return Directory.Exists(d);
+            }
+            catch { return false; }
+        }
+
+        public static bool StoreShortcut(string path)
+        {
+            if (string.IsNullOrEmpty(path) || path.Replace('/', '\\').IndexOf("\\WindowsApps\\", StringComparison.OrdinalIgnoreCase) < 0) return false;
+            string name = Path.GetFileNameWithoutExtension(path).ToLowerInvariant();
+            if (name != "python" && name != "python3") return false;
+            try
+            {
+                string dir = Path.GetDirectoryName(path);
+                foreach (string d in Directory.GetDirectories(dir))
+                    if (Path.GetFileName(d).StartsWith("PythonSoftwareFoundation.", StringComparison.OrdinalIgnoreCase)) return false;
+                foreach (string f in Directory.GetFiles(dir))
+                    if (Regex.IsMatch(Path.GetFileName(f), @"^(python3\.\d+|py|pyw|pymanager|pip\d*(\.\d+)?)\.exe$", RegexOptions.IgnoreCase)) return false;
+                return true;
+            }
+            catch { return false; }
+        }
+
+        public static string PathLine()
+        {
+            Dictionary<string, string> found = OnPath();
+            List<string> have = new List<string>(), missing = new List<string>();
             foreach (string t in Tools)
             {
                 string p;
-                if (!found.TryGetValue(t, out p)) continue;
-                if (p.IndexOf("\\WindowsApps\\", StringComparison.OrdinalIgnoreCase) >= 0 && (t == "python" || t == "python3")) p += " (Microsoft Store alias; may just open the Store)";
-                sb.Append("  ").Append(t).Append(": ").Append(p).Append('\n');
-                n++;
+                if (found.TryGetValue(t, out p) && !StoreShortcut(p)) have.Add(t);
             }
-            if (n == 0) sb.Append("  (none of the common ones)\n");
-            List<string> missing = new List<string>();
-            foreach (string t in new string[] { "python", "node", "git", "dotnet", "java", "go", "cargo" }) if (!found.ContainsKey(t)) missing.Add(t);
-            if (missing.Count > 0) sb.Append("Not found on PATH: ").Append(string.Join(", ", missing.ToArray())).Append('\n');
-            return ToolOutcome.Ok(sb.ToString(), n + " tools found");
+            foreach (string t in Key)
+            {
+                string p;
+                if (!found.TryGetValue(t, out p)) missing.Add(t);
+                else if (StoreShortcut(p)) missing.Add(t + " (only a Microsoft Store shortcut)");
+            }
+            StringBuilder sb = new StringBuilder("Developer tools on PATH: ");
+            sb.Append(have.Count > 0 ? string.Join(", ", have.ToArray()) : "none of the common ones").Append('.');
+            if (missing.Count > 0) sb.Append(" Not on PATH: ").Append(string.Join(", ", missing.ToArray())).Append('.');
+            return sb.ToString();
         }
     }
 
@@ -766,6 +835,20 @@ namespace MinGent
         }
 
         public static void ForgetAdopted() { lock (adoptGate) { adopted.Clear(); launches.Clear(); } }
+
+        public static bool AgentInFront()
+        {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) return false;
+            try
+            {
+                IntPtr fg = GetForegroundWindow();
+                if (fg == IntPtr.Zero) return false;
+                IntPtr root = GetAncestor(fg, 3);
+                foreach (AppWindow w in Windows()) if (w.Hwnd == fg || w.Hwnd == root) return true;
+            }
+            catch { }
+            return false;
+        }
 
         static bool Adopt(int pid, Dictionary<int, bool> seen)
         {
@@ -1586,15 +1669,27 @@ namespace MinGent
             if (Environment.OSVersion.Platform != PlatformID.Win32NT) return "app control only works on Windows";
             string why = AppControl.Allowed(w);
             if (why != null) return why;
+            bool early = ctx.Cfg.SideBySide && !w.Adopted && !Refused(ctx, w);
+            if (early) SideBySide(ctx, w);
             AppHighlight.Show(w.Hwnd);
             string denied = Check(ctx, w, acting, cancelOnly);
             if (denied != null) { AppHighlight.Hide(); return denied; }
-            if (ctx.Cfg.SideBySide && AppHighlight.Arrange(w.Hwnd))
-            {
-                ctx.Ct.Sleep(400);
-                AppControl.Refresh(w);
-            }
+            if (!early && ctx.Cfg.SideBySide) SideBySide(ctx, w);
             return null;
+        }
+
+        static void SideBySide(ToolContext ctx, AppWindow w)
+        {
+            if (!AppHighlight.Arrange(w.Hwnd)) return;
+            ctx.Ct.Sleep(400);
+            AppControl.Refresh(w);
+        }
+
+        static bool Refused(ToolContext ctx, AppWindow w)
+        {
+            string exe = (AppControl.ExePath(w.Pid) ?? w.Process).ToLowerInvariant();
+            PermissionState ps = ctx.Session.Perms;
+            lock (ps.AskLock) return ps.DeniedKeys.Contains("app:" + exe) || ps.DeniedKeys.Contains("appview:" + exe);
         }
 
         static string Check(ToolContext ctx, AppWindow w, bool acting, bool cancelOnly)

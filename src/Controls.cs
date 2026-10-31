@@ -219,12 +219,14 @@ namespace MinGent
         }
     }
 
-    class PillButton : Button
+    class PillButton : Button, IThemed
     {
-        readonly Theme th;
+        Theme th;
         readonly bool primary;
         public bool Danger;
         bool hover, down;
+
+        public void SetTheme(Theme t) { th = t; Invalidate(true); }
 
         public PillButton(string text, Theme t, bool primary)
         {
@@ -315,11 +317,13 @@ namespace MinGent
         int MeasureHeight(int width);
     }
 
-    class Card : Control
+    class Card : Control, IThemed
     {
-        readonly Theme th;
+        Theme th;
         readonly List<Control> rows = new List<Control>();
         public bool Dividers = true;
+
+        public void SetTheme(Theme t) { th = t; BackColor = t.Card; Invalidate(true); }
 
         public Card(Theme t)
         {
@@ -374,13 +378,15 @@ namespace MinGent
         }
     }
 
-    class SwitchRow : Control, IRow
+    class SwitchRow : Control, IRow, IThemed
     {
-        readonly Theme th;
+        Theme th;
         readonly Tween knob;
         string note;
         bool on, hover;
         public event EventHandler CheckedChanged;
+
+        public void SetTheme(Theme t) { th = t; Invalidate(true); }
 
         public SwitchRow(Theme t, string title, string note, bool value)
         {
@@ -523,14 +529,16 @@ namespace MinGent
         }
     }
 
-    class FieldRow : Control, IRow
+    class FieldRow : Control, IRow, IThemed
     {
-        readonly Theme th;
+        Theme th;
         readonly string note;
         public readonly Control Field;
         readonly Control extra;
         readonly bool stacked;
         readonly int fieldW, fieldH;
+
+        public void SetTheme(Theme t) { th = t; Invalidate(true); }
 
         public FieldRow(Theme t, string title, string note, Control field, int fieldWidth, int fieldHeight, bool stacked, Control extra)
         {
@@ -615,10 +623,12 @@ namespace MinGent
         }
     }
 
-    class KeysRow : Control, IRow
+    class KeysRow : Control, IRow, IThemed
     {
-        readonly Theme th;
+        Theme th;
         readonly List<string[]> combos = new List<string[]>();
+
+        public void SetTheme(Theme t) { th = t; Invalidate(true); }
 
         public KeysRow(Theme t, string title, params string[] keys)
         {
@@ -665,10 +675,12 @@ namespace MinGent
         }
     }
 
-    class BulletRow : Control, IRow
+    class BulletRow : Control, IRow, IThemed
     {
-        readonly Theme th;
+        Theme th;
         readonly string glyph;
+
+        public void SetTheme(Theme t) { th = t; Invalidate(true); }
 
         public BulletRow(Theme t, string glyph, string text)
         {
@@ -700,13 +712,15 @@ namespace MinGent
         }
     }
 
-    class Segmented : Control
+    class Segmented : Control, IThemed
     {
-        readonly Theme th;
+        Theme th;
         readonly string[] items;
         readonly Tween slide;
         int sel, hot = -1;
         public event EventHandler SelectedIndexChanged;
+
+        public void SetTheme(Theme t) { th = t; Invalidate(true); }
 
         public Segmented(Theme t, string[] list, int selected)
         {
@@ -884,14 +898,16 @@ namespace MinGent
         }
     }
 
-    class NavList : Control
+    class NavList : Control, IThemed
     {
-        readonly Theme th;
+        Theme th;
         readonly List<string> titles = new List<string>();
         readonly List<string> glyphs = new List<string>();
         readonly Tween bar;
         int sel = -1, hot = -1;
         public event EventHandler SelectedIndexChanged;
+
+        public void SetTheme(Theme t) { th = t; BackColor = t.Chrome; Invalidate(true); }
 
         public NavList(Theme t)
         {
@@ -1050,14 +1066,68 @@ namespace MinGent
         }
     }
 
-    class ScrollHost : Control
+    interface IThemed
     {
-        readonly Theme th;
+        void SetTheme(Theme t);
+    }
+
+    sealed class WheelRouter : IMessageFilter
+    {
+        static WheelRouter installed;
+
+        public static void Install()
+        {
+            if (installed != null) return;
+            installed = new WheelRouter();
+            try { Application.AddMessageFilter(installed); } catch { }
+        }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        struct ScrollInfo { public int Size, Mask, Min, Max, Page, Pos, TrackPos; }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        static extern bool GetScrollInfo(IntPtr hwnd, int bar, ref ScrollInfo info);
+
+        public bool PreFilterMessage(ref Message m)
+        {
+            if (m.Msg != 0x020A) return false;
+            TextBox box = Control.FromHandle(m.HWnd) as TextBox;
+            if (box == null) return false;
+            ScrollHost host = null;
+            for (Control p = box.Parent; p != null && host == null; p = p.Parent) host = p as ScrollHost;
+            if (host == null) return false;
+            int delta = (short)((m.WParam.ToInt64() >> 16) & 0xFFFF);
+            if (box.Multiline && CanScroll(box, delta)) return false;
+            host.Wheel(delta);
+            return true;
+        }
+
+        static bool CanScroll(TextBox box, int delta)
+        {
+            try
+            {
+                ScrollInfo si = new ScrollInfo();
+                si.Size = System.Runtime.InteropServices.Marshal.SizeOf(typeof(ScrollInfo));
+                si.Mask = 0x7;
+                if (!GetScrollInfo(box.Handle, 1, ref si)) return false;
+                int last = si.Max - Math.Max(0, si.Page - 1);
+                if (last <= si.Min) return false;
+                return delta > 0 ? si.Pos > si.Min : si.Pos < last;
+            }
+            catch { return true; }
+        }
+    }
+
+    class ScrollHost : Control, IThemed
+    {
+        Theme th;
         public readonly Panel Content = new Panel();
         readonly Tween glide;
         int contentH, target;
         bool dragging, barHover;
         int dragOffset;
+
+        public void SetTheme(Theme t) { th = t; BackColor = t.Chrome; Content.BackColor = t.Chrome; Invalidate(true); }
 
         public ScrollHost(Theme t)
         {
@@ -1069,6 +1139,7 @@ namespace MinGent
             BackColor = t.Chrome;
             Content.BackColor = t.Chrome;
             Controls.Add(Content);
+            WheelRouter.Install();
         }
 
         public static int BarW { get { return UI.S(12); } }
@@ -1216,16 +1287,18 @@ namespace MinGent
         public string Title = "", Note = "", Badge = "";
     }
 
-    class ThemedCombo : Control
+    class ThemedCombo : Control, IThemed
     {
         readonly List<Choice> items = new List<Choice>();
-        readonly Theme th;
+        Theme th;
         int sel = -1;
         bool hover;
         ChoicePopup popup;
         int closedTick = Environment.TickCount - 100000;
         public bool NotesBelow;
         public event EventHandler SelectedIndexChanged;
+
+        public void SetTheme(Theme t) { th = t; Invalidate(true); }
 
         public ThemedCombo(Theme t, string[] list, int selected)
         {

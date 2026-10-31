@@ -1,6 +1,37 @@
 MinGent - what changed
 ======================
 
+Version 1.0.1 beta
+- Web search leaves out results that have nothing to do with the query.
+  Search engines sometimes answer automated searches with a bot check or
+  with unrelated pages; MinGent now tries DuckDuckGo, DuckDuckGo Lite and
+  Bing in turn, and when none of them gives related results it says so and
+  the agent searches in the built-in browser instead. Queries with subscript
+  or superscript digits, full-width letters, or Lao, Khmer or Burmese text
+  match the results that contain them, and when an engine really has no
+  results, the agent is told that, so it tries other words.
+- The reviewer and general helpers use the built-in browser to check web
+  pages; a reviewer only opens pages on this PC or the local network there.
+  MinGent doesn't let a helper open Chrome, Edge or other programs' windows,
+  which it couldn't see anyway. Helpers are told which developer tools are
+  on the PATH, so they don't spend steps looking for Node or Python. Reviews
+  run one at a time.
+- Opening a file with another program by running its path (like .\index.html),
+  Process.Start, Python's webbrowser and rundll32 url.dll now ask first in
+  Auto mode, like Start-Process already did. "code --version", "devenv.com
+  /build" and PowerShell's "write" no longer ask.
+- Desktop programs: MinGent no longer asks about a program from behind its
+  window. A program the agent started goes side by side with MinGent before
+  the question, and for other programs MinGent comes to the front to ask.
+- A command that both opens a program and does something riskier (installs,
+  deletes, touches credentials) is now asked about as the riskier one.
+- Changing the context length or Context memory of the built-in engine takes
+  effect on the next message instead of after restarting MinGent.
+- Settings: the theme and accent color change as soon as you click them, and
+  Cancel puts the old look back. The mouse wheel scrolls the page also when
+  the pointer is over a text box. Cancel keeps none of your changes, also
+  after you said no to stopping a download for offline mode.
+
 Version 1.0 beta - first public release
 - An AI agent for Windows that works in your files, runs commands, searches
   the web, uses its own built-in browser and tests the desktop programs it
