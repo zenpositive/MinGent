@@ -19,7 +19,9 @@ namespace MinGent
         public List<string> EffortLevels;
 
         public string Ref { get { return Provider + ":" + Id; } }
-        public bool Cloud { get { return Provider == "anthropic" || Provider == "openai" || Provider == "gemini" || (Provider == "custom" && !Http.IsLoopback(ModelCatalog.CustomUrl)); } }
+        public bool Cloud { get { return IsCloud(Provider) || (Provider == "custom" && !Http.IsLoopback(ModelCatalog.CustomUrl)); } }
+
+        public static bool IsCloud(string p) { return p == "anthropic" || p == "openai" || p == "gemini" || p == "openrouter"; }
 
         public static string ProviderTitle(string p)
         {
@@ -30,10 +32,18 @@ namespace MinGent
                 case "anthropic": return "Claude (Anthropic)";
                 case "openai": return "OpenAI";
                 case "gemini": return "Gemini (Google)";
+                case "openrouter": return "OpenRouter";
                 case "custom": return "Custom server";
             }
             return p;
         }
+    }
+
+    class KeyCheck
+    {
+        public bool Ok, Rejected;
+        public int Models;
+        public string Message = "";
     }
 
     class ProviderState
@@ -76,7 +86,7 @@ namespace MinGent
 
     class ProviderKeys
     {
-        public string Anthropic = "", OpenAi = "", Gemini = "", Custom = "", LmStudioToken = "";
+        public string Anthropic = "", OpenAi = "", Gemini = "", OpenRouter = "", Custom = "", LmStudioToken = "";
         public string CustomUrl = "", CustomModel = "";
         public int LmLoadContext;
         public int EngineContext;
@@ -87,26 +97,34 @@ namespace MinGent
         public const int LmStudioDefaultPort = 1234;
         public static string CustomUrl = "";
         static readonly object cacheGate = new object();
-        static List<ModelEntry> anthropicCache, openaiCache, geminiCache;
-        static string anthropicCacheKey, openaiCacheKey, geminiCacheKey;
-        static DateTime anthropicWhen, openaiWhen, geminiWhen;
+        static List<ModelEntry> anthropicCache, openaiCache, geminiCache, openrouterCache;
+        static string anthropicCacheKey, openaiCacheKey, geminiCacheKey, openrouterCacheKey;
+        static DateTime anthropicWhen, openaiWhen, geminiWhen, openrouterWhen;
         public static string GeminiBase = "https://generativelanguage.googleapis.com";
+        public static string OpenRouterBase = "https://openrouter.ai/api/v1";
 
         public static CatalogSnapshot Refresh(ProviderKeys k, bool includeCloud, CancelToken ct)
         {
             CatalogSnapshot snap = new CatalogSnapshot();
             CustomUrl = k.CustomUrl ?? "";
             List<Thread> threads = new List<Thread>();
-            List<ModelEntry> lm = new List<ModelEntry>(), eng = new List<ModelEntry>(), an = new List<ModelEntry>(), oa = new List<ModelEntry>(), ge = new List<ModelEntry>(), cu = new List<ModelEntry>();
-            ProviderState sLm = snap.State("lmstudio"), sEng = snap.State("engine"), sAn = snap.State("anthropic"), sOa = snap.State("openai"), sGe = snap.State("gemini"), sCu = snap.State("custom");
+            List<ModelEntry> lm = new List<ModelEntry>(), eng = new List<ModelEntry>(), an = new List<ModelEntry>(), oa = new List<ModelEntry>(), ge = new List<ModelEntry>(), ro = new List<ModelEntry>(), cu = new List<ModelEntry>();
+            ProviderState sLm = snap.State("lmstudio"), sEng = snap.State("engine"), sAn = snap.State("anthropic"), sOa = snap.State("openai"), sGe = snap.State("gemini"), sOr = snap.State("openrouter"), sCu = snap.State("custom");
             threads.Add(Start(delegate { ProbeLmStudio(k, lm, sLm, ct); }));
             threads.Add(Start(delegate { ProbeEngine(k, eng, sEng); }));
-            if (!string.IsNullOrEmpty(k.Anthropic) && includeCloud) threads.Add(Start(delegate { ProbeAnthropic(k.Anthropic, an, sAn, ct); }));
+            string wAn = WrongKey("anthropic", k.Anthropic), wOa = WrongKey("openai", k.OpenAi), wGe = WrongKey("gemini", k.Gemini), wOr = WrongKey("openrouter", k.OpenRouter);
+            if (wAn != null) sAn.Status = wAn;
+            else if (!string.IsNullOrEmpty(k.Anthropic) && includeCloud) threads.Add(Start(delegate { ProbeAnthropic(k.Anthropic, an, sAn, ct); }));
             else { sAn.Status = "Add an API key in Settings to use Claude models"; }
-            if (!string.IsNullOrEmpty(k.OpenAi) && includeCloud) threads.Add(Start(delegate { ProbeOpenAi(k.OpenAi, oa, sOa, ct); }));
+            if (wOa != null) sOa.Status = wOa;
+            else if (!string.IsNullOrEmpty(k.OpenAi) && includeCloud) threads.Add(Start(delegate { ProbeOpenAi(k.OpenAi, oa, sOa, ct); }));
             else { sOa.Status = "Add an API key in Settings to use OpenAI models"; }
-            if (!string.IsNullOrEmpty(k.Gemini) && includeCloud) threads.Add(Start(delegate { ProbeGemini(k.Gemini, ge, sGe, ct); }));
+            if (wGe != null) sGe.Status = wGe;
+            else if (!string.IsNullOrEmpty(k.Gemini) && includeCloud) threads.Add(Start(delegate { ProbeGemini(k.Gemini, ge, sGe, ct); }));
             else { sGe.Status = "Add an API key in Settings to use Gemini models"; }
+            if (wOr != null) sOr.Status = wOr;
+            else if (!string.IsNullOrEmpty(k.OpenRouter) && includeCloud) threads.Add(Start(delegate { ProbeOpenRouter(k.OpenRouter, ro, sOr, ct); }));
+            else { sOr.Status = "Add an API key in Settings to use OpenRouter models"; }
             if (!string.IsNullOrEmpty(k.CustomUrl)) threads.Add(Start(delegate { ProbeCustom(k, cu, sCu, ct); }));
             else { sCu.Status = "No custom server set"; }
             foreach (Thread t in threads) t.Join(15000);
@@ -117,9 +135,66 @@ namespace MinGent
                 snap.Models.AddRange(an);
                 snap.Models.AddRange(oa);
                 snap.Models.AddRange(ge);
+                snap.Models.AddRange(ro);
                 snap.Models.AddRange(cu);
             }
             return snap;
+        }
+
+        public static string KeyOwner(string key)
+        {
+            string k = (key ?? "").Trim();
+            if (k.StartsWith("sk-ant-", StringComparison.Ordinal)) return "anthropic";
+            if (k.StartsWith("sk-or-", StringComparison.Ordinal)) return "openrouter";
+            if (k.StartsWith("AIza", StringComparison.Ordinal)) return "gemini";
+            if (k.StartsWith("sk-", StringComparison.Ordinal)) return "openai";
+            return null;
+        }
+
+        public static string WrongKey(string provider, string key)
+        {
+            string owner = KeyOwner(key);
+            if (owner == null || owner == provider || !ModelEntry.IsCloud(provider)) return null;
+            return "This looks like " + (owner == "openai" || owner == "openrouter" ? "an " : "a ") + ModelEntry.ProviderTitle(owner) + " key, so it was not sent. Paste it in the " + ModelEntry.ProviderTitle(owner) + " row.";
+        }
+
+        public static KeyCheck CheckKey(string provider, string key, CancelToken ct)
+        {
+            KeyCheck c = new KeyCheck();
+            string wrong = WrongKey(provider, key);
+            if (wrong != null) { c.Rejected = true; c.Message = wrong; return c; }
+            List<ModelEntry> list = new List<ModelEntry>();
+            ProviderState st = new ProviderState();
+            st.Provider = provider;
+            key = (key ?? "").Trim();
+            try
+            {
+                switch (provider)
+                {
+                    case "anthropic": ProbeAnthropic(key, list, st, ct); break;
+                    case "openai": ProbeOpenAi(key, list, st, ct); break;
+                    case "gemini": ProbeGemini(key, list, st, ct); break;
+                    case "openrouter": ProbeOpenRouter(key, list, st, ct); break;
+                    default: c.Message = "Unknown provider."; return c;
+                }
+            }
+            catch (Exception ex) { st.Error = ex.Message; }
+            if (ct != null && ct.IsCancelled) return c;
+            c.Rejected = st.NeedsKey;
+            c.Ok = !st.NeedsKey && st.Reachable && (st.Status ?? "").StartsWith("Connected", StringComparison.Ordinal);
+            c.Models = c.Ok ? list.Count : 0;
+            string why = Brief(st.Error);
+            if (c.Ok) c.Message = list.Count == 0 ? "Works, but no chat models are available to this key." : list.Count == 1 ? "Works. 1 model." : "Works. " + list.Count + " models.";
+            else if (c.Rejected) c.Message = "The key was rejected" + (why.Length > 0 ? ": " + why : ".");
+            else c.Message = "Couldn't check the key" + (why.Length > 0 ? ": " + why : ".");
+            return c;
+        }
+
+        static string Brief(string error)
+        {
+            string e = (error ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
+            if (e.Length > 240) e = e.Substring(0, 240).TrimEnd() + "...";
+            return e.TrimEnd('.');
         }
 
         static Thread Start(ThreadStart f)
@@ -502,6 +577,118 @@ namespace MinGent
             lock (cacheGate) { geminiCache = new List<ModelEntry>(list); geminiCacheKey = key; geminiWhen = DateTime.UtcNow; }
         }
 
+        static void ProbeOpenRouter(string key, List<ModelEntry> list, ProviderState st, CancelToken ct)
+        {
+            st.Configured = true;
+            lock (cacheGate)
+            {
+                if (openrouterCache != null && openrouterCacheKey == key && (DateTime.UtcNow - openrouterWhen).TotalMinutes < 30)
+                {
+                    list.AddRange(openrouterCache);
+                    st.Reachable = true;
+                    st.Status = "Connected";
+                    return;
+                }
+            }
+            Dictionary<string, string> h = new Dictionary<string, string>();
+            h["Authorization"] = "Bearer " + key;
+            HttpResult who = Http.Get(OpenRouterBase + "/key", h, 12000, ct);
+            if (!who.Ok)
+            {
+                st.Reachable = !who.ConnectFailed;
+                st.Error = who.Error;
+                st.NeedsKey = who.Status == 401 || who.Status == 403;
+                st.Status = st.NeedsKey ? "The API key was rejected" : "Couldn't list models (" + who.Error + ")";
+                return;
+            }
+            HttpResult r = Http.Get(OpenRouterBase + "/models?supported_parameters=tools&sort=most-popular", h, 15000, ct);
+            if (r.Status == 400 || r.Status == 422) r = Http.Get(OpenRouterBase + "/models?supported_parameters=tools", h, 15000, ct);
+            List<object> data = Json.List(r.Json, "data");
+            if (!r.Ok || data == null)
+            {
+                st.Reachable = !r.ConnectFailed;
+                st.Error = r.Error;
+                st.Status = "Couldn't list models (" + r.Error + ")";
+                return;
+            }
+            list.AddRange(OpenRouterModels(data));
+            st.Reachable = true;
+            st.Status = list.Count > 0 ? "Connected" : "Connected, but it lists no models that can use tools";
+            lock (cacheGate) { openrouterCache = new List<ModelEntry>(list); openrouterCacheKey = key; openrouterWhen = DateTime.UtcNow; }
+        }
+
+        public static List<ModelEntry> OpenRouterModels(List<object> data)
+        {
+            List<ModelEntry> list = new List<ModelEntry>();
+            HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (object o in data)
+            {
+                string id = Json.Str(o, "id");
+                if (string.IsNullOrEmpty(id) || !seen.Add(id)) continue;
+                List<string> pars = Strings(Json.List(o, "supported_parameters"));
+                if (!pars.Contains("tools")) continue;
+                List<string> outs = Strings(Json.List(o, "architecture", "output_modalities"));
+                if (outs.Count > 0 && !outs.Contains("text")) continue;
+                ModelEntry m = new ModelEntry();
+                m.Provider = "openrouter";
+                m.Id = id;
+                string name = Json.Str(o, "name");
+                m.Display = string.IsNullOrEmpty(name) ? id : name;
+                m.Context = Json.Int(o, "context_length");
+                if (m.Context <= 0) m.Context = Json.Int(o, "top_provider", "context_length");
+                if (m.Context <= 0) m.Context = 128000;
+                m.MaxOutput = Json.Int(o, "top_provider", "max_completion_tokens");
+                if (m.MaxOutput <= 0) m.MaxOutput = Math.Max(4096, Math.Min(32000, m.Context / 4));
+                m.Vision = Strings(Json.List(o, "architecture", "input_modalities")).Contains("image");
+                if (pars.Contains("reasoning") || pars.Contains("include_reasoning"))
+                {
+                    object rs = Json.Get(o, "reasoning");
+                    List<string> efforts = Strings(Json.List(o, "reasoning", "supported_efforts"));
+                    List<string> opts = new List<string>();
+                    if ((rs != null && !Json.Bool(rs, "mandatory")) || efforts.Contains("none")) opts.Add("off");
+                    foreach (string lv in new string[] { "minimal", "low", "medium", "high", "xhigh", "max" })
+                        if (efforts.Count > 0 ? efforts.Contains(lv) : lv == "low" || lv == "medium" || lv == "high") opts.Add(lv);
+                    if (opts.Count > 0 && !(opts.Count == 1 && opts[0] == "off")) m.ReasoningOptions = opts;
+                }
+                m.Detail = ContextText(m.Context) + " context" + OpenRouterPrice(o);
+                list.Add(m);
+            }
+            return list;
+        }
+
+        static List<string> Strings(List<object> l)
+        {
+            List<string> r = new List<string>();
+            if (l != null) foreach (object o in l) { string s = o as string; if (!string.IsNullOrEmpty(s)) r.Add(s.ToLowerInvariant()); }
+            return r;
+        }
+
+        static string ContextText(int ctx) { return ctx >= 1000000 ? (ctx / 1000000) + "M" : Math.Max(1, ctx / 1000) + "K"; }
+
+        static string OpenRouterPrice(object o)
+        {
+            double pin, pout;
+            if (!PerToken(Json.Get(o, "pricing", "prompt"), out pin) || !PerToken(Json.Get(o, "pricing", "completion"), out pout) || pin < 0 || pout < 0) return "";
+            if (pin == 0 && pout == 0) return " · free";
+            return " · $" + Dollars(pin * 1e6) + " / $" + Dollars(pout * 1e6) + " per M tokens";
+        }
+
+        static bool PerToken(object v, out double d)
+        {
+            d = 0;
+            if (v is double) { d = (double)v; return true; }
+            string s = v as string;
+            return s != null && double.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out d);
+        }
+
+        static string Dollars(double v)
+        {
+            System.Globalization.CultureInfo inv = System.Globalization.CultureInfo.InvariantCulture;
+            if (v >= 10) return Math.Round(v).ToString("0", inv);
+            if (v >= 1) return v.ToString("0.##", inv);
+            return v.ToString("0.###", inv);
+        }
+
         public static bool IsGeminiChatModel(string id)
         {
             string s = (id ?? "").ToLowerInvariant();
@@ -695,6 +882,17 @@ namespace MinGent
                         b.Model = m.Id;
                         b.Provider = "custom";
                         b.OfficialOpenAi = (k.CustomUrl ?? "").IndexOf("api.openai.com", StringComparison.OrdinalIgnoreCase) >= 0;
+                        return b;
+                    }
+                case "openrouter":
+                    {
+                        OpenAiChatBackend b = new OpenAiChatBackend();
+                        b.BaseUrl = OpenRouterBase;
+                        b.ApiKey = k.OpenRouter;
+                        b.Model = m.Id;
+                        b.Provider = "openrouter";
+                        b.OpenRouter = true;
+                        b.SupportsVision = m.Vision;
                         return b;
                     }
                 case "gemini":

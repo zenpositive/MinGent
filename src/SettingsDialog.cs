@@ -130,7 +130,8 @@ namespace MinGent
         readonly List<ScrollHost> pages = new List<ScrollHost>();
         readonly Button ok, cancel;
 
-        InputBox lmToken, anthropicKey, openaiKey, geminiKey, customUrl, customKey, customModel, workspace, instructions, memoryBox;
+        InputBox lmToken, customUrl, customKey, customModel, workspace, instructions, memoryBox;
+        ApiKeyRow anthropicKey, openaiKey, geminiKey, openrouterKey;
         string memoryOriginal = "";
         ThemedCombo lmCtx, engineCtx, engineKv;
         Segmented themeBox, accentBox;
@@ -305,6 +306,15 @@ namespace MinGent
             return c.Add(new SwitchRow(Th, title, note, value));
         }
 
+        ApiKeyRow KeyRow(Card c, string title, string source, string provider, string page, string saved)
+        {
+            ApiKeyRow r = new ApiKeyRow(Th, title, source, provider, page, Secret.Unprotect(saved));
+            r.OfflineOn = delegate { return offline != null ? offline.Checked : Net.Offline; };
+            return c.Add(r);
+        }
+
+        static string Protect(string key) { return string.IsNullOrEmpty(key) ? "" : Secret.Protect(key); }
+
         static string Words(int tokens) { return "about " + (tokens * 3 / 4).ToString("N0") + " words"; }
 
         static int Round(int tokens) { return Math.Max(50, (int)Math.Round(tokens / 50.0) * 50); }
@@ -417,14 +427,12 @@ namespace MinGent
             engineUpdates = Switch(c, "Offer newer llama.cpp releases", "Off: MinGent only installs the release it was tested with. On: it also looks on GitHub for newer releases, with the CUDA runtime they come with, and offers them in Models. Those are only checked against the checksums GitHub lists for them.", s.OfferEngineUpdates);
             Place(p, c);
 
-            Section(p, "Cloud models", "With a cloud model, your messages and the files the agent reads go to that provider. Keys are encrypted with your Windows account (DPAPI) and only sent to their own provider.");
+            Section(p, "Cloud models", "With a cloud model, your messages and the files the agent reads go to that provider. Keys are encrypted with your Windows account (DPAPI) and only sent to their own provider. MinGent checks a key when you paste it.");
             c = NewCard(p);
-            anthropicKey = MakeField(Secret.Unprotect(s.KeyAnthropic), true, false);
-            Row(c, "Claude API key", "From console.anthropic.com", anthropicKey, UI.S(260));
-            openaiKey = MakeField(Secret.Unprotect(s.KeyOpenAi), true, false);
-            Row(c, "OpenAI API key", "From platform.openai.com", openaiKey, UI.S(260));
-            geminiKey = MakeField(Secret.Unprotect(s.KeyGemini), true, false);
-            Row(c, "Gemini API key", "From aistudio.google.com/apikey. Free keys work, with daily limits.", geminiKey, UI.S(260));
+            anthropicKey = KeyRow(c, "Claude API key", "From platform.claude.com", "anthropic", "https://platform.claude.com/settings/keys", s.KeyAnthropic);
+            openaiKey = KeyRow(c, "OpenAI API key", "From platform.openai.com", "openai", "https://platform.openai.com/api-keys", s.KeyOpenAi);
+            geminiKey = KeyRow(c, "Gemini API key", "From aistudio.google.com. Free keys work, with daily limits.", "gemini", "https://aistudio.google.com/apikey", s.KeyGemini);
+            openrouterKey = KeyRow(c, "OpenRouter API key", "From openrouter.ai. One key for models from many providers.", "openrouter", "https://openrouter.ai/settings/keys", s.KeyOpenRouter);
             Place(p, c);
 
             Section(p, "Other model servers", "Only if you already run one. The built-in engine does the same job.");
@@ -477,7 +485,7 @@ namespace MinGent
 
             Section(p, "Tools", "Every tool is part of MinGent's own C# code: no plugins, no MCP servers, nothing downloaded. Each group you switch on takes room in the model's context, so with a small local model, switch off what you don't use. Reading and changing files, running commands and planning are always on (" + Tokens(AgentToolbox.Create(false, false, false, 32768, false, false, false, false)) + ").");
             c = NewCard(p);
-            web = Switch(c, "Web search and web pages", "Search the web and read pages and YouTube videos. When this is off, the agent still opens addresses on this PC or your local network. " + Cap(Tokens(new WebSearchTool())) + ".", s.AiWeb);
+            web = Switch(c, "Web search and web pages", "Search the web and read pages and YouTube videos. With the built-in browser on, searches open there so you can see them. When this is off, the agent still opens addresses on this PC or your local network. " + Cap(Tokens(new WebSearchTool())) + ".", s.AiWeb);
             browserOn = Switch(c, "Built-in browser", "Open pages, click, type and scroll in MinGent's own browser, which has its own sign-ins. Each chat starts on a new page. " + Cap(Tokens(AgentToolbox.BrowserTools(true))) + "; off by itself when the model's context is under 16K.", s.AiBrowser);
             captcha = Switch(c, "Let the agent try CAPTCHAs (experimental)", "Off (the default): CAPTCHAs are left to you. On: the agent may try to solve them in its own browser, just to see what the model can do; after three failed tries it hands the CAPTCHA to you. A reCAPTCHA logo on a page is never treated as a check.", s.AiCaptcha);
             appsOn = Switch(c, "Programs it starts itself", "Read their windows, click, type and scroll in them. Programs that were already open stay off limits. Store apps and other programs that Windows opens for it need your OK first (except in Full auto). " + Cap(Tokens(AgentToolbox.AppTools(true))) + "; off by itself under 24K.", s.AiApps);
@@ -632,6 +640,14 @@ namespace MinGent
                     return false;
                 }
             }
+            foreach (ApiKeyRow kr in new ApiKeyRow[] { anthropicKey, openaiKey, geminiKey, openrouterKey })
+            {
+                string wrong = kr.Problem;
+                if (wrong == null) continue;
+                Select(1);
+                Alert.Show(this, Th, kr.Text + ": " + wrong, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
             if (offline.Checked && !s.Offline)
             {
                 int n = ModelDownloads.Active().Count;
@@ -651,9 +667,10 @@ namespace MinGent
             int[] ev = (int[])engineCtx.Tag;
             s.EngineContext = ev[Math.Max(0, engineCtx.SelectedIndex)];
             s.EngineKv = engineKv.SelectedIndex == 0 ? "f16" : engineKv.SelectedIndex == 2 ? "q4_0" : "q8_0";
-            s.KeyAnthropic = anthropicKey.Box.Text.Trim().Length > 0 ? Secret.Protect(anthropicKey.Box.Text.Trim()) : "";
-            s.KeyOpenAi = openaiKey.Box.Text.Trim().Length > 0 ? Secret.Protect(openaiKey.Box.Text.Trim()) : "";
-            s.KeyGemini = geminiKey.Box.Text.Trim().Length > 0 ? Secret.Protect(geminiKey.Box.Text.Trim()) : "";
+            s.KeyAnthropic = Protect(anthropicKey.Value);
+            s.KeyOpenAi = Protect(openaiKey.Value);
+            s.KeyGemini = Protect(geminiKey.Value);
+            s.KeyOpenRouter = Protect(openrouterKey.Value);
             s.CustomUrl = customUrl.Box.Text.Trim().TrimEnd('/');
             s.KeyCustom = customKey.Box.Text.Trim().Length > 0 ? Secret.Protect(customKey.Box.Text.Trim()) : "";
             s.CustomModel = customModel.Box.Text.Trim();
@@ -691,6 +708,303 @@ namespace MinGent
             string mem = memoryBox.Box.Text.Replace("\r\n", "\n").Trim();
             if (mem != memoryOriginal.Replace("\r\n", "\n").Trim()) MemoryStore.SaveRaw(mem);
             return true;
+        }
+    }
+
+    class ApiKeyRow : Control, IRow, IThemed
+    {
+        Theme th;
+        readonly string provider, source, page;
+        readonly InputBox field;
+        readonly PillButton change, remove, getKey, cancelEdit, undo;
+        readonly Timer debounce = new Timer();
+        string current, removed, status = "";
+        int tone;
+        bool editing;
+        CancelToken pending;
+        public Func<bool> OfflineOn;
+
+        public void SetTheme(Theme t) { th = t; Invalidate(); }
+
+        public ApiKeyRow(Theme t, string title, string source, string provider, string page, string key)
+        {
+            th = t;
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            SetStyle(ControlStyles.Selectable, false);
+            TabStop = false;
+            Font = UI.Font;
+            Text = title;
+            this.source = source ?? "";
+            this.provider = provider;
+            this.page = page;
+            current = Clean(key);
+            field = new InputBox("Paste your API key");
+            field.Field = true;
+            field.SetTheme(t);
+            field.Box.UseSystemPasswordChar = true;
+            field.Box.AccessibleName = title;
+            change = Button("Change", "Change the " + title);
+            remove = Button("Remove", "Remove the " + title);
+            getKey = Button("Get a key", "Open the page where you create a key");
+            getKey.Glyph = "external";
+            getKey.Width = getKey.PreferredWidth;
+            cancelEdit = Button("Cancel", "Keep the saved key");
+            undo = Button("Undo", "Keep the key");
+            field.TabIndex = 0;
+            getKey.TabIndex = cancelEdit.TabIndex = undo.TabIndex = 1;
+            change.TabIndex = 2;
+            remove.TabIndex = 3;
+            Controls.AddRange(new Control[] { field, getKey, cancelEdit, undo, change, remove });
+            debounce.Interval = 600;
+            debounce.Tick += delegate { debounce.Stop(); CheckTyped(); };
+            field.Box.TextChanged += delegate
+            {
+                debounce.Stop();
+                if (pending != null) { pending.Cancel(); pending = null; }
+                string v = Clean(field.Box.Text);
+                if (v.Length >= 20) { debounce.Start(); return; }
+                SetStatus(v.Length > 0 ? "" : removed != null ? "Removed when you save." : current.Length > 0 ? "Paste the new key. The saved one stays until you do." : "", 0);
+            };
+            field.Box.KeyDown += delegate (object o, KeyEventArgs e)
+            {
+                if (e.KeyCode == Keys.Enter && e.Modifiers == Keys.None) { debounce.Stop(); CheckTyped(); e.Handled = e.SuppressKeyPress = true; }
+            };
+            change.Click += delegate
+            {
+                StopCheck();
+                editing = true;
+                field.Box.Text = "";
+                SetStatus("Paste the new key. The saved one stays until you do.", 0);
+                Arrange();
+                field.Box.Focus();
+            };
+            cancelEdit.Click += delegate
+            {
+                editing = false;
+                field.Box.Text = "";
+                Arrange();
+                change.Focus();
+                Check(current);
+            };
+            remove.Click += delegate
+            {
+                StopCheck();
+                removed = current;
+                current = "";
+                editing = true;
+                field.Box.Text = "";
+                SetStatus("Removed when you save.", 0);
+                Arrange();
+                undo.Focus();
+            };
+            undo.Click += delegate
+            {
+                current = removed ?? "";
+                removed = null;
+                editing = current.Length == 0;
+                field.Box.Text = "";
+                Arrange();
+                if (!editing) change.Focus();
+                Check(current);
+            };
+            getKey.Click += delegate { BrowserPane.OpenExternally(this.page); };
+            MouseUp += delegate (object o, MouseEventArgs e) { if (e.Button == MouseButtons.Right) ShowMenu(e.Location); };
+            editing = current.Length == 0;
+            Arrange();
+            HandleCreated += delegate { if (current.Length > 0 && status.Length == 0) Check(current); };
+        }
+
+        PillButton Button(string text, string name)
+        {
+            PillButton b = new PillButton(text, th, false);
+            b.AccessibleName = name;
+            b.Width = b.PreferredWidth;
+            return b;
+        }
+
+        static string Clean(string key)
+        {
+            string k = (key ?? "").Trim().Trim('"', '\'').Trim();
+            if (k.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)) k = k.Substring(7).Trim();
+            return k;
+        }
+
+        public string Value
+        {
+            get
+            {
+                string typed = Clean(field.Box.Text);
+                return editing && typed.Length > 0 ? typed : current;
+            }
+        }
+
+        public string Problem { get { return ModelCatalog.WrongKey(provider, Value); } }
+
+        public static string Masked(string key)
+        {
+            string k = Clean(key);
+            if (k.Length <= 12) return new string('•', Math.Min(8, Math.Max(1, k.Length)));
+            return k.Substring(0, Math.Min(7, k.Length / 4)) + "…" + k.Substring(k.Length - 4);
+        }
+
+        static int PadX { get { return UI.S(14); } }
+        static int PadY { get { return UI.S(12); } }
+        static int RightW { get { return UI.S(330); } }
+
+        int TextWidth(int width) { return Math.Max(UI.S(80), width - PadX * 2 - RightW - UI.S(20)); }
+
+        public int MeasureHeight(int width)
+        {
+            int tw = TextWidth(width);
+            return Math.Max(UI.S(64), Fonts.Height("Ag", Font, tw) + UI.S(2) + Fonts.Height("Ag", Fonts.Note, tw) * 2 + PadY * 2);
+        }
+
+        void Arrange()
+        {
+            PillButton side = removed != null ? undo : current.Length > 0 ? cancelEdit : getKey;
+            field.Visible = editing;
+            getKey.Visible = editing && side == getKey;
+            cancelEdit.Visible = editing && side == cancelEdit;
+            undo.Visible = editing && side == undo;
+            change.Visible = remove.Visible = !editing;
+            PerformLayout();
+            Invalidate();
+        }
+
+        protected override void OnLayout(LayoutEventArgs e)
+        {
+            base.OnLayout(e);
+            if (field == null) return;
+            int h = UI.S(32), y = (Height - h) / 2, right = Width - PadX;
+            foreach (PillButton b in new PillButton[] { getKey, cancelEdit, undo })
+                b.SetBounds(right - b.Width, y, b.Width, h);
+            PillButton side = undo.Visible ? undo : cancelEdit.Visible ? cancelEdit : getKey;
+            field.SetBounds(right - RightW, y, Math.Max(UI.S(60), RightW - side.Width - UI.S(8)), h);
+            remove.SetBounds(right - remove.Width, y, remove.Width, h);
+            change.SetBounds(remove.Left - UI.S(8) - change.Width, y, change.Width, h);
+        }
+
+        void SetStatus(string text, int kind)
+        {
+            status = text ?? "";
+            tone = kind;
+            string d = status.Length > 0 ? status : source;
+            field.Box.AccessibleDescription = d;
+            change.AccessibleDescription = d;
+            AccessibleDescription = d;
+            Invalidate();
+        }
+
+        void CheckTyped()
+        {
+            string v = Clean(field.Box.Text);
+            if (v.Length > 0) Check(v);
+        }
+
+        void StopCheck()
+        {
+            debounce.Stop();
+            if (pending != null) { pending.Cancel(); pending = null; }
+        }
+
+        void Check(string key)
+        {
+            if (pending != null) { pending.Cancel(); pending = null; }
+            if (string.IsNullOrEmpty(key)) return;
+            bool saved = key == current && !editing;
+            if (OfflineOn != null && OfflineOn())
+            {
+                SetStatus(saved ? "Saved. Keys are not checked while offline mode is on." : "Not checked while offline mode is on.", 0);
+                return;
+            }
+            string wrong = ModelCatalog.WrongKey(provider, key);
+            if (wrong != null) { SetStatus(wrong, 2); return; }
+            if (!IsHandleCreated) return;
+            CancelToken ct = new CancelToken();
+            pending = ct;
+            SetStatus("Checking the key...", 0);
+            string prov = provider;
+            System.Threading.Thread t = new System.Threading.Thread(delegate ()
+            {
+                KeyCheck c;
+                try { c = ModelCatalog.CheckKey(prov, key, ct); }
+                catch (Exception ex) { c = new KeyCheck(); c.Message = "Couldn't check the key: " + ex.Message; }
+                if (ct.IsCancelled) return;
+                try
+                {
+                    BeginInvoke(new Action(delegate
+                    {
+                        if (ct.IsCancelled || IsDisposed) return;
+                        pending = null;
+                        Checked(key, c);
+                    }));
+                }
+                catch { }
+            });
+            t.IsBackground = true;
+            t.Start();
+        }
+
+        void Checked(string key, KeyCheck c)
+        {
+            if (editing ? Clean(field.Box.Text) != key : key != current) return;
+            if (c.Ok && editing && Clean(field.Box.Text) == key)
+            {
+                bool had = field.Box.Focused;
+                current = key;
+                removed = null;
+                editing = false;
+                field.Box.Text = "";
+                Arrange();
+                if (had) change.Focus();
+            }
+            SetStatus(c.Message, c.Ok ? 1 : c.Rejected ? 2 : 0);
+        }
+
+        void ShowMenu(Point at)
+        {
+            string text = status.Length > 0 ? status : source;
+            if (text.Length == 0) return;
+            ContextMenuStrip m = Menus.Create(th);
+            m.Items.Add(Menus.Item("Copy this message", false, delegate { try { Clipboard.SetText(Text + ": " + text); } catch { } }));
+            m.Closed += delegate { BeginInvoke(new Action(delegate { m.Dispose(); })); };
+            m.Show(this, at);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.Clear(Parent != null ? Parent.BackColor : th.Card);
+            int tw = TextWidth(Width);
+            string line2 = status.Length > 0 ? status : source;
+            int h1 = Fonts.Height(Text, Font, tw);
+            int lineH = Fonts.Height("Ag", Fonts.Note, tw);
+            int h2 = Math.Min(Fonts.Height(line2, Fonts.Note, tw), lineH * 2);
+            int y = (Height - h1 - (h2 > 0 ? UI.S(2) + h2 : 0)) / 2;
+            TextRenderer.DrawText(g, Text, Font, new Rectangle(PadX, y, tw, h1), Enabled ? th.Fore : th.MenuDisabled, Fonts.Wrap);
+            if (h2 > 0)
+            {
+                Color c = status.Length > 0 && tone == 1 ? th.Good : status.Length > 0 && tone == 2 ? th.Error : th.ChromeDim;
+                TextRenderer.DrawText(g, line2, Fonts.Note, new Rectangle(PadX, y + h1 + UI.S(2), tw, h2), c, Fonts.Wrap | TextFormatFlags.EndEllipsis);
+            }
+            if (!editing && current.Length > 0)
+            {
+                string m = Masked(current);
+                int mw = Fonts.Width(m, Font);
+                int x = change.Left - UI.S(12) - mw;
+                if (x > PadX + tw) TextRenderer.DrawText(g, m, Font, new Rectangle(x, 0, mw + UI.S(2), Height), th.ChromeDim, Fonts.Line);
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                debounce.Stop();
+                debounce.Dispose();
+                if (pending != null) pending.Cancel();
+            }
+            base.Dispose(disposing);
         }
     }
 }

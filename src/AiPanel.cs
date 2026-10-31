@@ -60,6 +60,7 @@ namespace MinGent
         CatalogSnapshot catalog;
         volatile bool refreshing;
         DateTime lastRefresh = DateTime.MinValue;
+        ContextMenuStrip modelMenu;
         AgentSession session = new AgentSession();
         string chatFile;
         string chatTitle = "";
@@ -531,6 +532,11 @@ namespace MinGent
                         refreshing = false;
                         if (snap != null) catalog = snap;
                         UpdateModelChip();
+                        if (modelMenu != null && !modelMenu.IsDisposed && modelMenu.Visible)
+                        {
+                            FillModelMenu(modelMenu);
+                            modelMenu.Show(modelChip, new Point(0, -UI.S(4)), ToolStripDropDownDirection.AboveRight);
+                        }
                     }));
                 }
                 catch { refreshing = false; }
@@ -545,9 +551,10 @@ namespace MinGent
             k.Anthropic = Secret.Unprotect(settings.KeyAnthropic);
             k.OpenAi = Secret.Unprotect(settings.KeyOpenAi);
             k.Gemini = Secret.Unprotect(settings.KeyGemini);
+            k.OpenRouter = Secret.Unprotect(settings.KeyOpenRouter);
             k.Custom = Secret.Unprotect(settings.KeyCustom);
             k.LmStudioToken = Secret.Unprotect(settings.KeyLmStudio);
-            SecretWatch.Set(k.Anthropic, k.OpenAi, k.Gemini, k.Custom, k.LmStudioToken);
+            SecretWatch.Set(k.Anthropic, k.OpenAi, k.Gemini, k.OpenRouter, k.Custom, k.LmStudioToken);
             k.CustomUrl = settings.CustomUrl;
             k.CustomModel = settings.CustomModel;
             k.LmLoadContext = settings.LmContext;
@@ -575,6 +582,7 @@ namespace MinGent
             foreach (ModelEntry e in snap.Models) if (e.Provider == "anthropic") return e.Ref;
             foreach (ModelEntry e in snap.Models) if (e.Provider == "openai") return e.Ref;
             foreach (ModelEntry e in snap.Models) if (e.Provider == "gemini") return e.Ref;
+            foreach (ModelEntry e in snap.Models) if (e.Provider == "openrouter") return e.Ref;
             foreach (ModelEntry e in snap.Models) if (e.Provider == "custom") return e.Ref;
             return "";
         }
@@ -636,7 +644,7 @@ namespace MinGent
             List<string> opts = new List<string>();
             if (m == null || m.ReasoningOptions == null) return opts;
             foreach (string o in m.ReasoningOptions) if (!opts.Contains(o)) opts.Add(o);
-            if (m.Provider == "lmstudio" || m.Provider == "custom" || m.Provider == "gemini")
+            if (m.Provider == "lmstudio" || m.Provider == "custom" || m.Provider == "gemini" || m.Provider == "openrouter")
             {
                 List<string> learned = OpenAiChatBackend.Learned(m.Id);
                 if (learned != null && learned.Count > 0)
@@ -710,19 +718,27 @@ namespace MinGent
         void ShowModelMenu()
         {
             ContextMenuStrip m = Menus.Create(th);
+            RefreshConnection(true);
+            FillModelMenu(m);
+            modelMenu = m;
+            m.Closed += delegate { BeginInvoke(new Action(delegate { if (modelMenu == m) modelMenu = null; m.Dispose(); })); };
+            m.Show(modelChip, new Point(0, -UI.S(4)), ToolStripDropDownDirection.AboveRight);
+        }
+
+        void FillModelMenu(ContextMenuStrip m)
+        {
+            m.SuspendLayout();
+            m.Items.Clear();
             Rectangle wa = Screen.FromControl(this).WorkingArea;
-            if (catalog == null)
-            {
-                m.Items.Add(Menus.Header("Looking for models...", th));
-                RefreshConnection(true);
-            }
+            if (catalog == null) m.Items.Add(Menus.Header("Looking for models...", th));
             else
             {
                 string cur = ModelRef();
                 bool custom = !string.IsNullOrEmpty(settings.CustomUrl);
                 bool lm = cur.StartsWith("lmstudio:", StringComparison.Ordinal) || catalog.Models.Exists(delegate (ModelEntry x) { return x.Provider == "lmstudio"; }) || ModelCatalog.LmStudioInstalled();
-                int sections = 4 + (lm ? 1 : 0) + (custom ? 1 : 0), filled = 0;
-                foreach (string p in new string[] { "engine", "lmstudio", "anthropic", "openai", "gemini", "custom" })
+                bool router = cur.StartsWith("openrouter:", StringComparison.Ordinal) || !string.IsNullOrEmpty(settings.KeyOpenRouter);
+                int sections = 4 + (lm ? 1 : 0) + (router ? 1 : 0) + (custom ? 1 : 0), filled = 0;
+                foreach (string p in new string[] { "engine", "lmstudio", "anthropic", "openai", "gemini", "openrouter", "custom" })
                     foreach (ModelEntry e in catalog.Models) if (e.Provider == p) { filled++; break; }
                 int rows = (wa.Height - UI.S(120)) / UI.S(28) - sections * 2 - 4;
                 int cap = Math.Max(4, Math.Min(40, rows / Math.Max(1, filled)));
@@ -731,6 +747,7 @@ namespace MinGent
                 AddProviderSection(m, "anthropic", "Claude (Anthropic API)", cur, cap);
                 AddProviderSection(m, "openai", "OpenAI API", cur, cap);
                 AddProviderSection(m, "gemini", "Gemini (Google AI)", cur, cap);
+                if (router) AddProviderSection(m, "openrouter", "OpenRouter", cur, cap);
                 if (custom) AddProviderSection(m, "custom", "Custom server", cur, cap);
             }
             m.Items.Add(new ToolStripSeparator());
@@ -738,10 +755,11 @@ namespace MinGent
             if (upd != null) m.Items.Add(Menus.Item("Update llama.cpp to " + upd.Version + "...", false, delegate { host.ShowModelLibrary(); }));
             m.Items.Add(Menus.Item("Download or manage models...", false, delegate { host.ShowModelLibrary(); }));
             m.Items.Add(Menus.Item("API keys and model settings...", false, delegate { host.ShowSettings(); }));
-            m.Items.Add(Menus.Item("Refresh", false, delegate { RefreshConnection(true); }));
-            m.Closed += delegate { BeginInvoke(new Action(delegate { m.Dispose(); })); };
+            ToolStripMenuItem again = Menus.Item(refreshing ? "Checking for models..." : "Refresh", false, delegate { RefreshConnection(true); });
+            again.Enabled = !refreshing;
+            m.Items.Add(again);
             m.MaximumSize = new Size(wa.Width - UI.S(40), wa.Height - UI.S(40));
-            m.Show(modelChip, new Point(0, -UI.S(4)), ToolStripDropDownDirection.AboveRight);
+            m.ResumeLayout();
         }
 
         void AddProviderSection(ContextMenuStrip m, string provider, string title, string cur, int cap)
@@ -750,7 +768,7 @@ namespace MinGent
             List<ModelEntry> list = new List<ModelEntry>();
             foreach (ModelEntry e in catalog.Models) if (e.Provider == provider) list.Add(e);
             if (m.Items.Count > 0) m.Items.Add(new ToolStripSeparator());
-            bool keyless = (provider == "anthropic" || provider == "openai" || provider == "gemini") && list.Count == 0;
+            bool keyless = ModelEntry.IsCloud(provider) && list.Count == 0 && catalog.State(provider).Configured == false;
             string status = keyless ? "" : ps.Status;
             bool showStatus = status.Length > 0 && (list.Count == 0 || provider == "lmstudio");
             bool shortStatus = showStatus && status.Length <= 30 && status.IndexOf(" - ", StringComparison.Ordinal) < 0;
@@ -783,8 +801,8 @@ namespace MinGent
             }
             if (list.Count == 0)
             {
-                if (provider == "anthropic" || provider == "openai" || provider == "gemini")
-                    m.Items.Add(Menus.Item("Add an API key...", false, delegate { host.ShowSettings(); }));
+                if (ModelEntry.IsCloud(provider))
+                    m.Items.Add(Menus.Item(ps.NeedsKey ? "Check the API key..." : ps.Configured ? "API key settings..." : "Add an API key...", false, delegate { host.ShowSettings("Models"); }));
                 else if (provider == "engine")
                     m.Items.Add(Menus.Item(Engine.Instance.Installed ? "Download a model..." : "Set up the built-in engine...", false, delegate { host.ShowModelLibrary(); }));
             }
@@ -808,6 +826,7 @@ namespace MinGent
                 if (string.Equals(cur, list[i].Ref, StringComparison.OrdinalIgnoreCase)) sel = i;
             }
             ChoicePopup p = new ChoicePopup(th, items, sel, false, UI.S(300));
+            if (list.Count > 12) p.MakeFilterable(UI.S(420));
             p.Picked += delegate (int i) { if (i >= 0 && i < list.Count) Choose(list[i].Ref); };
             p.Closed += delegate { BeginInvoke(new Action(delegate { p.Dispose(); })); };
             Rectangle wa = Screen.FromControl(this).WorkingArea;
@@ -848,7 +867,7 @@ namespace MinGent
                         : "No model is set up yet. Open the model library to set up the built-in engine and download a model (free, runs on this PC), or add an API key in Settings.";
             }
             string provider = r.Substring(0, r.IndexOf(':') > 0 ? r.IndexOf(':') : r.Length);
-            bool cloud = provider == "anthropic" || provider == "openai" || provider == "gemini";
+            bool cloud = ModelEntry.IsCloud(provider);
             if (snap == null || (DateTime.UtcNow - snap.When).TotalSeconds > 8 || provider == "lmstudio" || provider == "engine")
             {
                 progress("Connecting to " + ModelEntry.ProviderTitle(provider));
@@ -924,6 +943,7 @@ namespace MinGent
                 if (provider == "anthropic" && string.IsNullOrEmpty(k.Anthropic)) return "Add your Anthropic API key in Settings to use Claude models.";
                 if (provider == "openai" && string.IsNullOrEmpty(k.OpenAi)) return "Add your OpenAI API key in Settings to use OpenAI models.";
                 if (provider == "gemini" && string.IsNullOrEmpty(k.Gemini)) return "Add your Gemini API key in Settings to use Gemini models. You can get a free one at aistudio.google.com/apikey.";
+                if (provider == "openrouter" && string.IsNullOrEmpty(k.OpenRouter)) return "Add your OpenRouter API key in Settings to use OpenRouter models.";
                 if (ps.NeedsKey) return ModelEntry.ProviderTitle(provider) + " rejected the API key. Check it in Settings.";
                 if (!string.IsNullOrEmpty(ps.Error)) return ModelEntry.ProviderTitle(provider) + ": " + ps.Error;
                 entry = new ModelEntry();
@@ -943,9 +963,11 @@ namespace MinGent
             using (OpenFileDialog d = new OpenFileDialog())
             {
                 d.Title = "Attach an image, a document or a file";
-                d.Filter = "Images, documents and text|*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.pdf;*.docx;*.xlsx;*.pptx;*.odt;*.ods;*.odp;*.rtf;*.epub;*.txt;*.md;*.cs;*.py;*.js;*.ts;*.json;*.html;*.css;*.xml;*.csv;*.log"
+                d.Filter = "Images, documents, sound and text|*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.pdf;*.docx;*.xlsx;*.pptx;*.odt;*.ods;*.odp;*.rtf;*.epub;*.wav;*.mp3;*.m4a;*.flac;*.ogg;*.opus;*.wma;*.aac;*.aif;*.aiff;*.txt;*.md;*.cs;*.py;*.js;*.ts;*.json;*.html;*.css;*.xml;*.csv;*.log"
                     + "|Documents (PDF, Word, Excel, PowerPoint)|*.pdf;*.docx;*.docm;*.dotx;*.xlsx;*.xlsm;*.xltx;*.pptx;*.pptm;*.ppsx;*.odt;*.ods;*.odp;*.rtf;*.epub"
-                    + "|Images|*.png;*.jpg;*.jpeg;*.gif;*.bmp|All files|*.*";
+                    + "|Images|*.png;*.jpg;*.jpeg;*.gif;*.bmp"
+                    + "|Sound files|*.wav;*.wave;*.mp3;*.m4a;*.m4b;*.aac;*.flac;*.ogg;*.oga;*.opus;*.wma;*.aif;*.aiff;*.aifc;*.amr;*.mka;*.caf;*.ac3;*.mp2"
+                    + "|All files|*.*";
                 d.Multiselect = true;
                 if (d.ShowDialog(FindForm()) != DialogResult.OK) return;
                 foreach (string f in d.FileNames) AttachFile(f);
@@ -1046,6 +1068,7 @@ namespace MinGent
 
         void CheckInbox()
         {
+            if (running && session.InboxRead != null) return;
             for (int i = 0; i < queued.Count; i++)
             {
                 ChatItem u = queued[i];
@@ -1315,6 +1338,8 @@ namespace MinGent
             string notes = ReadMemory(ws);
             AgentSession sess = session;
             Bridge ui = new Bridge(this, run);
+            replyFirst = false;
+            session.InboxRead = delegate (List<int> ids) { ui.Post(delegate { OnInboxRead(ids); }); };
             Thread t = new Thread(delegate ()
             {
                 string error = null;
@@ -1763,7 +1788,7 @@ namespace MinGent
                 curAssistant = new ChatItem();
                 curAssistant.Kind = ChatKind.Assistant;
                 curAssistant.Streaming = true;
-                chat.Add(curAssistant);
+                AddReply(curAssistant);
             }
             curAssistant.Text += d;
             chat.Changed(curAssistant);
@@ -1797,10 +1822,62 @@ namespace MinGent
                 ChatItem a = new ChatItem();
                 a.Kind = ChatKind.Assistant;
                 a.Text = text;
-                chat.Add(a);
+                AddReply(a);
             }
             curAssistant = null;
             curThinking = null;
+        }
+
+        bool replyFirst;
+
+        void AddReply(ChatItem a)
+        {
+            if (replyFirst && curActivity != null && chat.Items.Contains(curActivity))
+            {
+                replyFirst = false;
+                chat.InsertBefore(a, curActivity);
+            }
+            else chat.Add(a);
+        }
+
+        void OnInboxRead(List<int> ids)
+        {
+            List<ChatItem> read = new List<ChatItem>();
+            foreach (ChatItem u in queued) if (u.InboxId > 0 && ids.Contains(u.InboxId)) read.Add(u);
+            if (read.Count == 0) { CheckInbox(); return; }
+            FinishStreaming();
+            curAssistant = null;
+            curThinking = null;
+            foreach (ChatItem u in read)
+            {
+                queued.Remove(u);
+                u.Queued = false;
+                u.InboxId = 0;
+                if (chat.EditingItem == u) chat.CancelEdit();
+                u.Touch();
+                chat.Items.Remove(u);
+                chat.Add(u);
+            }
+            if (running && curActivity != null && curActivity.Label.Length == 0)
+            {
+                curActivity.Running = false;
+                curActivity.Seconds += Math.Max(0, (DateTime.UtcNow - curActivity.Started).TotalSeconds);
+                chat.Changed(curActivity);
+                ChatItem next = new ChatItem();
+                next.Kind = ChatKind.Activity;
+                next.Turn = curTurn;
+                next.RunId = liveRun;
+                next.Started = DateTime.UtcNow;
+                next.Running = true;
+                next.Expanded = curActivity.Expanded;
+                next.Phase = "Reading your message";
+                next.CurrentTask = curActivity.CurrentTask;
+                chat.Add(next);
+                curActivity = next;
+                replyFirst = true;
+            }
+            UpdateQueueNotes();
+            chat.ScrollToEnd();
         }
 
         static string IconFor(string tool)
@@ -1820,6 +1897,7 @@ namespace MinGent
                 case "open_in_editor": return "file";
                 case "ask_user": return "ask";
                 case "present_plan": return "map";
+                case "analyze_audio": return "wave";
             }
             if (tool.StartsWith("browser_")) return "cursor";
             return "dot";
@@ -1829,6 +1907,7 @@ namespace MinGent
         {
             FinishStreaming();
             curAssistant = null;
+            replyFirst = false;
             ChatItem it = new ChatItem();
             it.Kind = ChatKind.Tool;
             it.CallId = c.Id + "#" + c.Name;
@@ -1927,7 +2006,7 @@ namespace MinGent
             };
             chat.Add(it);
             chat.ScrollToEnd();
-            composer.Prompt = q.Wait ? "Type a message for the agent, or press Done when you're through" : q.Options.Count > 0 ? "Type a different answer, or pick one above" : "Type your answer";
+            composer.Prompt = q.Wait ? "Type a message for the agent, or press Done when you're through" : "Answer the question above";
             if (curActivity != null) chat.InvalidateItem(curActivity);
             host.RevealAssistant();
             Attention(FindForm());
@@ -1981,6 +2060,12 @@ namespace MinGent
             {
                 composer.Prompt = null;
                 PlanAnswered(q, a);
+                if (a != null && !a.Cancelled && a.Choice < 0 && !string.IsNullOrEmpty(a.Text) && !running)
+                {
+                    string said = a.Text;
+                    BeginInvoke(new Action(delegate { if (!running) StartRun(said, new List<ImageData>(), null, null, null); }));
+                    return;
+                }
                 if (a == null || a.Cancelled || a.Choice < 0 || a.Choice >= q.Options.Count) return;
                 string c = q.Options[a.Choice];
                 if ((c == PresentPlanTool.Start || c == PresentPlanTool.StartAuto) && !running)

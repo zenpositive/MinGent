@@ -48,7 +48,7 @@ namespace MinGent
         public int MdOx = -1, MdOy = -1, BubbleOff, BubbleW;
         public List<KeyValuePair<Rectangle, int>> Buttons = new List<KeyValuePair<Rectangle, int>>();
         public List<string> DetailLines;
-        public int Top;
+        public int Top, AnswerY;
 
         public void Touch() { Version++; }
     }
@@ -110,10 +110,13 @@ namespace MinGent
         bool wasEmpty = true;
 
         const int BtnAllow = 1, BtnAlways = 2, BtnDeny = 3, BtnExpand = 10, BtnAction = 11, BtnCopyMsg = 12, BtnUndo = 13, BtnOption = 100;
-        const int BtnUserCopy = 20, BtnUserEdit = 21, BtnUserDelete = 22, BtnRetry = 23, BtnEditCancel = 24, BtnEditSend = 25, BtnQueueEdit = 26, BtnQueueRemove = 27;
+        const int BtnUserCopy = 20, BtnUserEdit = 21, BtnUserDelete = 22, BtnRetry = 23, BtnEditCancel = 24, BtnEditSend = 25, BtnQueueEdit = 26, BtnQueueRemove = 27, BtnAnswer = 30, BtnAnswerSend = 31;
 
         ChatItem editing;
         readonly CueTextBox editBox = new CueTextBox();
+        readonly CueTextBox answerBox = new CueTextBox();
+        ChatItem answering;
+        int answerLines = 1;
         int editLines = 1;
         public Func<ChatItem, string, bool> EditSubmit;
         public Func<bool> CanChange;
@@ -181,6 +184,101 @@ namespace MinGent
                 Relayout();
             };
             Controls.Add(editBox);
+            answerBox.Multiline = true;
+            answerBox.AcceptsReturn = true;
+            answerBox.WordWrap = true;
+            answerBox.BorderStyle = BorderStyle.None;
+            answerBox.ScrollBars = ScrollBars.None;
+            answerBox.Visible = false;
+            answerBox.Font = fonts.Body;
+            answerBox.AccessibleName = "Your own answer";
+            answerBox.KeyDown += delegate (object sender, KeyEventArgs e)
+            {
+                if (e.KeyCode == Keys.Enter && !e.Shift && !e.Control && !e.Alt) { e.Handled = e.SuppressKeyPress = true; SubmitAnswer(); }
+                else if (e.KeyCode == Keys.Escape && answerBox.TextLength > 0) { e.Handled = e.SuppressKeyPress = true; answerBox.Text = ""; }
+                else if (e.KeyCode == Keys.A && e.Modifiers == Keys.Control) { e.Handled = e.SuppressKeyPress = true; answerBox.SelectAll(); }
+            };
+            answerBox.TextChanged += delegate
+            {
+                if (answering == null) return;
+                int n = AnswerLines(AnswerBoxW(answering));
+                InvalidateItem(answering);
+                if (n == answerLines) return;
+                answerLines = n;
+                answering.Touch();
+                Relayout();
+            };
+            answerBox.GotFocus += delegate { if (answering != null) InvalidateItem(answering); };
+            answerBox.LostFocus += delegate { if (answering != null) InvalidateItem(answering); };
+            Controls.Add(answerBox);
+        }
+
+        int AnswerBoxW(ChatItem it) { return Math.Max(UI.S(40), ContentW - (it.Group != null ? Indent : 0) - UI.S(28) - UI.S(40) - UI.S(44)); }
+
+        int AnswerLines(int width)
+        {
+            string t = answerBox.Text;
+            if (t.Length == 0 || width <= 0) return 1;
+            Size sz = TextRenderer.MeasureText(t.EndsWith("\n") ? t + " " : t, answerBox.Font, new Size(Math.Max(10, width - UI.S(4)), 100000), TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | TextFormatFlags.NoPrefix);
+            return Math.Max(1, Math.Min(8, (int)Math.Ceiling(sz.Height / (double)Math.Max(1, answerBox.Font.Height))));
+        }
+
+        int AnswerRowH { get { return Math.Max(UI.S(40), answerLines * answerBox.Font.Height + UI.S(18)); } }
+
+        static bool WritesIn(ChatItem it)
+        {
+            return it != null && it.Kind == ChatKind.Question && it.Question != null && !it.Question.Wait && it.Question.FreeText && it.Decision < 0;
+        }
+
+        public bool AnswerFocused { get { return answerBox.Focused; } }
+
+        public void FocusAnswer()
+        {
+            if (answering == null || !answerBox.Visible) return;
+            Reveal(answering);
+            answerBox.Focus();
+        }
+
+        void SubmitAnswer()
+        {
+            ChatItem it = answering;
+            if (!WritesIn(it)) return;
+            string t = answerBox.Text.Replace("\r\n", "\n").Trim();
+            if (t.Length == 0) { answerBox.Focus(); return; }
+            bool focused = answerBox.Focused;
+            UserAnswer a = new UserAnswer();
+            UserQuestion q = it.Question;
+            if (q != null && !q.Wait)
+            {
+                for (int i = 0; i < q.Options.Count && a.Choice < 0; i++)
+                    if (string.Equals(q.Options[i].Trim(), t, StringComparison.OrdinalIgnoreCase)) a.Choice = i;
+                if (a.Choice < 0 && q.PlanApproval) a.Choice = PlanReply.Choice(q.Options, t);
+            }
+            if (a.Choice < 0) a.Text = t;
+            answerBox.Text = "";
+            AnswerQuestion(it, a);
+            if (focused && EditEnded != null) EditEnded(this, EventArgs.Empty);
+        }
+
+        void PositionAnswer()
+        {
+            ChatItem pq = PendingQuestion();
+            if (!WritesIn(pq) || pq.Hidden) pq = null;
+            if (pq != answering)
+            {
+                bool had = answerBox.Focused;
+                answering = pq;
+                answerBox.Text = "";
+                answerLines = 1;
+                if (pq != null) answerBox.Cue = pq.Question.PlanApproval ? "Or type what to change in the plan" : pq.Question.Options.Count > 0 ? "Type a different answer" : "Type your answer";
+                if (pq == null && had && EditEnded != null) EditEnded(this, EventArgs.Empty);
+            }
+            if (answering == null || answering.LayoutVersion < 0) { if (answerBox.Visible) answerBox.Visible = false; return; }
+            int x = ItemX(answering) + UI.S(14) + UI.S(40);
+            int y = answering.Top - scrollY + answering.AnswerY + (AnswerRowH - answerLines * answerBox.Font.Height) / 2;
+            Rectangle r = new Rectangle(x, y, AnswerBoxW(answering), answerLines * answerBox.Font.Height);
+            if (answerBox.Bounds != r) answerBox.Bounds = r;
+            if (!answerBox.Visible) answerBox.Visible = true;
         }
 
         int UserRowH { get { return UI.S(28); } }
@@ -296,6 +394,7 @@ namespace MinGent
 
         void PositionEditor()
         {
+            PositionAnswer();
             if (editing == null) { if (editBox.Visible) editBox.Visible = false; return; }
             if (!Items.Contains(editing) || editing.Hidden) { CancelEdit(); return; }
             int x = ItemX(editing) + UI.S(14);
@@ -334,6 +433,10 @@ namespace MinGent
             editBox.ForeColor = t.Fore;
             editBox.CueColor = t.ChromeDim;
             editBox.MenuTheme = t;
+            answerBox.BackColor = CardBack;
+            answerBox.ForeColor = t.Fore;
+            answerBox.CueColor = t.ChromeDim;
+            answerBox.MenuTheme = t;
             foreach (ChatItem it in Items) it.LayoutVersion = -1;
             Relayout();
         }
@@ -346,6 +449,7 @@ namespace MinGent
             ChatFonts old = fonts;
             fonts = new ChatFonts(fontSize, monoName);
             editBox.Font = fonts.Body;
+            answerBox.Font = fonts.Body;
             if (old != null) old.Dispose();
             MakeTitleFont();
             foreach (ChatItem it in Items) it.LayoutVersion = -1;
@@ -398,11 +502,23 @@ namespace MinGent
 
         public ChatItem Add(ChatItem it)
         {
-            Items.Add(it);
+            int at = Items.Count;
+            if (!(it.Kind == ChatKind.User && it.Queued))
+                while (at > 0 && Items[at - 1].Kind == ChatKind.User && Items[at - 1].Queued) at--;
+            Items.Insert(at, it);
             blinkTimer.Stop();
             Relayout();
             if (!anim.Enabled && AnyRunning()) anim.Start();
             return it;
+        }
+
+        public void InsertBefore(ChatItem it, ChatItem anchor)
+        {
+            int at = anchor != null ? Items.IndexOf(anchor) : -1;
+            if (at < 0) { Add(it); return; }
+            Items.Insert(at, it);
+            Relayout();
+            if (!anim.Enabled && AnyRunning()) anim.Start();
         }
 
         public void Changed(ChatItem it)
@@ -453,27 +569,44 @@ namespace MinGent
 
         void ComputeGroups()
         {
-            foreach (ChatItem it in Items) { it.Group = null; it.Hidden = false; }
+            foreach (ChatItem it in Items) { it.Group = null; it.Hidden = false; if (it.Kind == ChatKind.Activity && it.Members != null) it.Members.Clear(); }
             int n = Items.Count, s = 0;
             while (s < n)
             {
                 int k = s;
                 if (Items[k].Kind == ChatKind.User && !Items[k].MidRun) k++;
                 while (k < n && !(Items[k].Kind == ChatKind.User && !Items[k].MidRun)) k++;
-                GroupTurn(s, k);
+                ChatItem carry = null;
+                int a = s;
+                while (a < k)
+                {
+                    int b = a + 1;
+                    while (b < k && !SegmentStart(b)) b++;
+                    carry = GroupTurn(a, b, carry);
+                    a = b;
+                }
                 s = k;
             }
+            foreach (ChatItem it in Items)
+                if (it.Kind == ChatKind.Activity && it.Label.Length == 0) it.Hidden = (it.Members == null || it.Members.Count == 0) && !it.Running;
         }
 
-        void GroupTurn(int s, int e)
+        bool SegmentStart(int i)
+        {
+            ChatItem it = Items[i];
+            if (it.Kind != ChatKind.User || !it.MidRun || it.Queued) return false;
+            ChatItem prev = Items[i - 1];
+            return !(prev.Kind == ChatKind.User && prev.MidRun && !prev.Queued);
+        }
+
+        ChatItem GroupTurn(int s, int e, ChatItem carry)
         {
             int a = -1;
             for (int i = s; i < e; i++) if (Items[i].Kind == ChatKind.Activity && Items[i].Label.Length == 0) { a = i; break; }
-            if (a < 0) return;
-            ChatItem act = Items[a];
+            ChatItem act = a >= 0 ? Items[a] : carry;
+            if (act == null) return null;
             if (act.Members == null) act.Members = new List<ChatItem>();
-            act.Members.Clear();
-            for (int i = a + 1; i < e; i++)
+            for (int i = a >= 0 ? a + 1 : s; i < e; i++)
             {
                 ChatItem it = Items[i];
                 if (it.Kind == ChatKind.Assistant && it.Text.Trim().Length > 0 && Answer(i, e)) continue;
@@ -485,7 +618,7 @@ namespace MinGent
                 it.Hidden = !act.Expanded && !pinned;
                 act.Members.Add(it);
             }
-            act.Hidden = act.Members.Count == 0 && !act.Running;
+            return act;
         }
 
         bool Answer(int i, int e)
@@ -773,7 +906,12 @@ namespace MinGent
                         {
                             for (int i = 0; i < q.Options.Count; i++) h += OptionRowH(g, q.Options[i], inner) + UI.S(6);
                             if (q.Options.Count > 0) h -= UI.S(6);
-                            if (q.FreeText) h += (q.Options.Count > 0 ? UI.S(10) : 0) + f.SmallLineH;
+                            if (q.FreeText)
+                            {
+                                if (q.Options.Count > 0) h += UI.S(6);
+                                it.AnswerY = h;
+                                h += AnswerRowH;
+                            }
                         }
                         it.H = h + UI.S(14);
                         it.Md = null;
@@ -782,12 +920,10 @@ namespace MinGent
                 case ChatKind.Notice:
                 case ChatKind.Error:
                     {
-                        Font font = it.Kind == ChatKind.Error ? f.Body : f.Small;
-                        int inner = w - (it.Kind == ChatKind.Error ? UI.S(40) : UI.S(24));
-                        Size sz = TextRenderer.MeasureText(g, it.Text, font, new Size(inner, 4000), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
-                        int h = sz.Height + UI.S(it.Kind == ChatKind.Error ? 20 : 6);
-                        if (it.Kind == ChatKind.Error && it.Action != null) h += UI.S(40);
-                        it.H = h;
+                        bool err = it.Kind == ChatKind.Error;
+                        int inner = w - (err ? UI.S(40) : UI.S(24));
+                        it.Md = MdRenderer.PlainFlow(g, it.Text, inner, f, err ? f.Body : f.Small, err ? DrawOp.RFore : it.Level == 2 ? DrawOp.RError : DrawOp.RDim);
+                        it.H = it.Md.Height + UI.S(err ? 20 + 40 : 6);
                         break;
                     }
                 case ChatKind.Footer:
@@ -1085,7 +1221,7 @@ namespace MinGent
                     {
                         Color c = it.Level == 2 ? th.Error : th.ChromeDim;
                         Glyphs.Draw(it.Level >= 1 ? "warning" : "dot", g, new Rectangle(x - UI.S(1), y + UI.S(2), UI.S(16), f.SmallLineH), c);
-                        TextRenderer.DrawText(g, it.Text, f.Small, new Rectangle(x + UI.S(22), y + UI.S(2), w - UI.S(22), it.H), c, TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+                        PaintMd(g, it, idx, x, y, x + UI.S(22), y + UI.S(2), clip, false, -1, -1);
                         break;
                     }
                 case ChatKind.Error:
@@ -1095,15 +1231,20 @@ namespace MinGent
                         Glyphs.FillRound(g, Theme.Blend(th.Back, th.Error, th.Dark ? 0.12 : 0.06), box, UI.S(12));
                         Glyphs.DrawRound(g, edge, new Rectangle(box.X, box.Y, box.Width - 1, box.Height - 1), UI.S(12));
                         Glyphs.Draw("warning", g, new Rectangle(x + UI.S(8), y + UI.S(9), UI.S(16), f.LineH), th.Error);
-                        int textH = it.H - UI.S(20) - (it.Action != null ? UI.S(40) : 0);
-                        TextRenderer.DrawText(g, it.Text, f.Body, new Rectangle(x + UI.S(30), y + UI.S(10), w - UI.S(40), textH + 2), th.Fore, TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+                        PaintMd(g, it, idx, x, y, x + UI.S(30), y + UI.S(10), clip, false, -1, -1);
+                        int bx = x + UI.S(30);
                         if (it.Action != null)
                         {
                             int bw = TextRenderer.MeasureText(g, it.ActionLabel, f.Body).Width + UI.S(24);
-                            Rectangle br = new Rectangle(x + UI.S(30), y + it.H - UI.S(40), bw, UI.S(30));
+                            Rectangle br = new Rectangle(bx, y + it.H - UI.S(40), bw, UI.S(30));
                             SetButton(it, br, BtnAction, y);
                             DrawButton(g, br, it.ActionLabel, false, hoverItem == idx && hoverButton == BtnAction);
+                            bx = br.Right + UI.S(8);
                         }
+                        string cl = copiedMsg == idx ? "Copied" : "Copy error";
+                        Rectangle cr = new Rectangle(bx, y + it.H - UI.S(40), Math.Max(TextRenderer.MeasureText(g, "Copy error", f.Body).Width, TextRenderer.MeasureText(g, "Copied", f.Body).Width) + UI.S(24), UI.S(30));
+                        SetButton(it, cr, BtnCopyMsg, y);
+                        DrawButton(g, cr, cl, false, hoverItem == idx && hoverButton == BtnCopyMsg);
                         break;
                     }
                 case ChatKind.Footer:
@@ -1173,7 +1314,7 @@ namespace MinGent
         static string SummaryHead(ChatItem a, out string tail)
         {
             tail = "";
-            HashSet<string> read = new HashSet<string>(), edit = new HashSet<string>(), gone = new HashSet<string>();
+            HashSet<string> read = new HashSet<string>(), edit = new HashSet<string>(), gone = new HashSet<string>(), sound = new HashSet<string>();
             int cmd = 0, search = 0, web = 0, browse = 0, list = 0, help = 0, other = 0;
             bool thought = false;
             if (a.Members != null)
@@ -1192,15 +1333,17 @@ namespace MinGent
                         case "cursor": browse++; break;
                         case "folder": list++; break;
                         case "branch": help++; break;
+                        case "wave": sound.Add(FileKey(m.Label)); break;
                         case "checklist": case "ask": break;
                         default: other++; break;
                     }
                 }
             List<string> parts = new List<string>();
-            if (!string.IsNullOrEmpty(a.Label) && read.Count + edit.Count + gone.Count + cmd + search + web + browse + list + help + other == 0) { tail = Secs(a.Seconds); return a.Label; }
+            if (!string.IsNullOrEmpty(a.Label) && read.Count + edit.Count + gone.Count + sound.Count + cmd + search + web + browse + list + help + other == 0) { tail = Secs(a.Seconds); return a.Label; }
             if (read.Count > 0) parts.Add("read " + Plural(read.Count, "file", "files"));
             if (edit.Count > 0) parts.Add("edited " + Plural(edit.Count, "file", "files"));
             if (gone.Count > 0) parts.Add("deleted " + Plural(gone.Count, "item", "items"));
+            if (sound.Count > 0) parts.Add("analyzed " + Plural(sound.Count, "sound file", "sound files"));
             if (cmd > 0) parts.Add("ran " + Plural(cmd, "command", "commands"));
             if (search > 0) parts.Add("searched " + (search == 1 ? "once" : search + " times"));
             if (web > 0) parts.Add("read " + Plural(web, "web page", "web pages"));
@@ -1642,9 +1785,23 @@ namespace MinGent
             }
             if (q.FreeText)
             {
-                if (q.Options.Count > 0) iy += UI.S(4);
-                string hint = q.Options.Count > 0 ? "Or type a different answer below" : "Type your answer below";
-                TextRenderer.DrawText(g, hint, f.Small, new Rectangle(ix, iy, inner, f.SmallLineH), th.ChromeDim, TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
+                Rectangle r = new Rectangle(ix, y + it.AnswerY, inner, AnswerRowH);
+                bool focused = answering == it && answerBox.Focused, hot = hoverItem == idx && (hoverButton == BtnAnswer || hoverButton == BtnAnswerSend);
+                Glyphs.DrawRound(g, focused ? th.Accent : hot ? Theme.Blend(th.InputBorder, th.Fore, 0.35) : th.InputBorder, new Rectangle(r.X, r.Y, r.Width - 1, r.Height - 1), UI.S(8));
+                Rectangle nb = new Rectangle(r.X + UI.S(10), r.Y + (UI.S(40) - UI.S(20)) / 2, UI.S(20), UI.S(20));
+                Glyphs.FillRound(g, th.Chrome, nb, UI.S(5));
+                Glyphs.Draw("pencil", g, Rectangle.Inflate(nb, -UI.S(3), -UI.S(3)), th.ChromeFore);
+                SetButton(it, r, BtnAnswer, y);
+                bool ready = answering == it && answerBox.Text.Trim().Length > 0;
+                int sb = UI.S(28);
+                Rectangle sr = new Rectangle(r.Right - UI.S(8) - sb, r.Bottom - UI.S(6) - sb, sb, sb);
+                if (ready)
+                {
+                    Glyphs.FillRound(g, hoverItem == idx && hoverButton == BtnAnswerSend ? Theme.Blend(th.Accent, th.Dark ? Color.White : Color.Black, 0.12) : th.Accent, sr, sb / 2);
+                    Glyphs.Draw("send", g, Rectangle.Inflate(sr, -UI.S(6), -UI.S(6)), th.OnAccent);
+                    SetButton(it, sr, BtnAnswerSend, y);
+                }
+                else Glyphs.Draw("send", g, Rectangle.Inflate(sr, -UI.S(6), -UI.S(6)), th.MenuDisabled);
             }
         }
 
@@ -1899,7 +2056,7 @@ namespace MinGent
             int item = h.Item, button = h.Button, copy = h.Copy, sug = h.Sug, act = h.Act;
             bool changed = item != hoverItem || button != hoverButton || copy != hoverCopy || h.Link != hoverLink || h.Bar != sbHover || sug != hoverSuggestion || act != hoverAction || h.Jump != jumpHover;
             hoverItem = item; hoverButton = button; hoverCopy = copy; hoverLink = h.Link; sbHover = h.Bar; hoverSuggestion = sug; hoverAction = act; jumpHover = h.Jump;
-            Cursor = (button >= 0 || copy >= 0 || h.Link != null || sug >= 0 || act >= 0 || h.Jump) ? Cursors.Hand : TextUnder(h) ? Cursors.IBeam : Cursors.Default;
+            Cursor = button == BtnAnswer ? Cursors.IBeam : (button >= 0 || copy >= 0 || h.Link != null || sug >= 0 || act >= 0 || h.Jump) ? Cursors.Hand : TextUnder(h) ? Cursors.IBeam : Cursors.Default;
             string want = h.Link ?? ButtonTip(h.Button);
             if (want != tipLink)
             {
@@ -2101,6 +2258,8 @@ namespace MinGent
                 case BtnRetry: if (RetryRequested != null && Changeable && LastAnswer(it)) RetryRequested(it); break;
                 case BtnEditCancel: CancelEdit(); break;
                 case BtnEditSend: SubmitEdit(); break;
+                case BtnAnswer: if (answering == it && answerBox.Visible) answerBox.Focus(); break;
+                case BtnAnswerSend: if (answering == it) SubmitAnswer(); break;
                 case BtnQueueEdit: if (it.Queued && QueueEditRequested != null) QueueEditRequested(it); break;
                 case BtnQueueRemove: if (it.Queued && QueueRemoveRequested != null) QueueRemoveRequested(it); break;
                 default:
@@ -2340,7 +2499,8 @@ namespace MinGent
                             : it.Kind == ChatKind.Permission ? it.Ask.Title + (string.IsNullOrEmpty(it.Ask.Summary) ? "" : "\n" + it.Ask.Summary) + "\n" + it.Ask.Detail
                             : it.Kind == ChatKind.Question ? QuestionText(it)
                             : it.Kind == ChatKind.Activity ? Summary(it) : it.Text;
-                if (!string.IsNullOrEmpty(text)) m.Items.Add(Menus.Item(it.Kind == ChatKind.Assistant ? "Copy this reply (Markdown)" : it.Kind == ChatKind.User ? "Copy this message" : "Copy", false, delegate { SetClipboard(text); }));
+                string what = it.Kind == ChatKind.Assistant ? "Copy this reply (Markdown)" : it.Kind == ChatKind.User ? "Copy this message" : it.Kind == ChatKind.Error ? "Copy the error" : hasSel ? "Copy all of it" : "Copy";
+                if (!string.IsNullOrEmpty(text)) m.Items.Add(Menus.Item(what, false, delegate { SetClipboard(text); }));
                 if (it.Kind == ChatKind.User && it.Queued && editing != it)
                 {
                     ChatItem target = it;

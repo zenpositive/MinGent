@@ -507,12 +507,14 @@ namespace MinGent
         public bool Keypad, Extended, Printable;
         public char Char;
         public bool Ctrl, Shift, Alt, Win;
+        public List<KeyPress> With;
         public int CdpModifiers { get { return (Alt ? 1 : 0) | (Ctrl ? 2 : 0) | (Win ? 4 : 0) | (Shift ? 8 : 0); } }
     }
 
     static class KeyCombo
     {
         static readonly Dictionary<string, string[]> Named = new Dictionary<string, string[]>(StringComparer.Ordinal);
+        static readonly Dictionary<string, char> Marks = new Dictionary<string, char>(StringComparer.Ordinal);
         const string Shifted = "~!@#$%^&*()_+{}|:\"<>?", Unshifted = "`1234567890-=[]\\;',./";
         static readonly string[] PunctCodes = { "Backquote", "Digit1", "Digit2", "Digit3", "Digit4", "Digit5", "Digit6", "Digit7", "Digit8", "Digit9", "Digit0", "Minus", "Equal", "BracketLeft", "BracketRight", "Backslash", "Semicolon", "Quote", "Comma", "Period", "Slash" };
         static readonly int[] PunctVks = { 192, 49, 50, 51, 52, 53, 54, 55, 56, 57, 48, 189, 187, 219, 221, 220, 186, 222, 188, 190, 191 };
@@ -526,8 +528,42 @@ namespace MinGent
 
         static string Norm(string s) { return Regex.Replace((s ?? "").ToLowerInvariant(), @"[\s_\-]", ""); }
 
+        static void M(char c, params string[] names) { foreach (string n in names) Marks[Norm(n)] = c; }
+
         static KeyCombo()
         {
+            M('-', "minus", "hyphen", "dash", "subtract", "oemminus");
+            M('=', "equal", "equals", "equalsign", "oemplus");
+            M('+', "plus", "plussign");
+            M(',', "comma", "oemcomma");
+            M('.', "period", "dot", "fullstop", "oemperiod");
+            M('/', "slash", "forwardslash", "oem2");
+            M('\\', "backslash", "oem5", "intlbackslash");
+            M(';', "semicolon", "oem1");
+            M(':', "colon");
+            M('\'', "quote", "apostrophe", "singlequote", "oem7");
+            M('"', "doublequote", "quotationmark");
+            M('`', "backquote", "backtick", "grave", "graveaccent", "oem3");
+            M('~', "tilde");
+            M('[', "bracketleft", "leftbracket", "openbracket", "lbracket", "oem4");
+            M(']', "bracketright", "rightbracket", "closebracket", "rbracket", "oem6");
+            M('{', "braceleft", "leftbrace", "openbrace", "lbrace", "curlyleft");
+            M('}', "braceright", "rightbrace", "closebrace", "rbrace", "curlyright");
+            M('(', "parenleft", "leftparen", "openparen", "lparen", "leftparenthesis");
+            M(')', "parenright", "rightparen", "closeparen", "rparen", "rightparenthesis");
+            M('<', "lessthan", "less", "lt");
+            M('>', "greaterthan", "greater", "gt");
+            M('?', "question", "questionmark");
+            M('!', "exclamation", "exclamationmark", "exclaim", "bang");
+            M('@', "at", "atsign");
+            M('#', "hash", "pound", "numbersign", "sharp");
+            M('$', "dollar", "dollarsign");
+            M('%', "percent");
+            M('^', "caret", "circumflex");
+            M('&', "ampersand");
+            M('*', "asterisk", "star");
+            M('_', "underscore");
+            M('|', "pipe", "verticalbar");
             N("Enter", "Enter", 13, "\r", false, "return", "ret", "cr", "newline");
             N("Tab", "Tab", 9, null, false);
             N("Escape", "Escape", 27, null, false, "esc");
@@ -578,39 +614,99 @@ namespace MinGent
 
         static readonly Regex Media = new Regex(@"^(media|volume|audio|mute|play|pause?play|nexttrack|prevtrack|previoustrack|stop|browser)", RegexOptions.CultureInvariant);
 
-        public static KeyPress Parse(string combo, out string error)
+        static bool IsModifier(string name) { return Modifier(name, new KeyPress()); }
+
+        public static KeyPress Parse(string combo, out string error) { return Parse(combo, false, out error); }
+
+        public static KeyPress Parse(string combo, bool hold, out string error)
         {
             error = null;
             string c = (combo ?? "").Trim();
             if (c.Length == 0 && combo != null && combo.Length > 0) c = " ";
             if (c.Length == 0) { error = "no key given"; return null; }
-            KeyPress k = new KeyPress();
-            string main;
-            if (c.Length == 1) { main = c; c = ""; }
-            else if (c.EndsWith("++")) { main = "+"; c = c.Substring(0, c.Length - 2); }
+            List<string> parts = new List<string>();
+            bool lone = c.Length == 1;
+            if (lone) parts.Add(c);
             else
             {
-                int last = c.LastIndexOf('+');
-                main = last >= 0 ? c.Substring(last + 1) : c;
-                c = last >= 0 ? c.Substring(0, last) : "";
-                if (main.Length == 0) { error = "\"" + combo + "\" has no key after the +"; return null; }
+                string body = c;
+                bool plusKey = body.EndsWith("++");
+                if (plusKey) body = body.Substring(0, body.Length - 2);
+                else if (body.EndsWith("+")) { error = "\"" + combo + "\" has no key after the +"; return null; }
+                foreach (string p in body.Split('+')) if (p.Trim().Length > 0) parts.Add(p.Trim());
+                if (plusKey) parts.Add("+");
+                if (parts.Count == 0) { error = "no key given"; return null; }
             }
-            if (c.Length > 0 && !(main == "+" && c.Length == 0))
-                foreach (string m in c.Split('+'))
+            List<string> keys = new List<string>();
+            foreach (string p in parts) if (!IsModifier(p)) keys.Add(p);
+            KeyPress k = new KeyPress();
+            string main;
+            if (keys.Count == 0)
+            {
+                main = parts[parts.Count - 1];
+                for (int i = 0; i < parts.Count - 1; i++) Modifier(parts[i], k);
+            }
+            else
+            {
+                main = keys[keys.Count - 1];
+                foreach (string p in parts) Modifier(p, k);
+                if (keys.Count > 4) { error = "\"" + combo + "\" has too many keys at once (at most 4 besides Ctrl, Shift, Alt and Win)"; return null; }
+                for (int i = 0; i < keys.Count - 1; i++)
                 {
-                    if (m.Trim().Length == 0) continue;
-                    if (!Modifier(m, k)) { error = "\"" + m.Trim() + "\" is not a modifier key (use Ctrl, Shift, Alt or Win)"; return null; }
+                    KeyPress w = new KeyPress();
+                    string werr;
+                    if (!Fill(keys[i], false, w, out werr))
+                    {
+                        error = Named.ContainsKey(Norm(keys[i])) || keys[i].Length == 1 ? werr : "\"" + keys[i] + "\" is not a key or a modifier (modifiers are Ctrl, Shift, Alt and Win)";
+                        return null;
+                    }
+                    w.Label = Shown(w);
+                    if (k.With == null) k.With = new List<KeyPress>();
+                    k.With.Add(w);
                 }
+            }
+            if (!Fill(main, lone && !hold, k, out error))
+            {
+                if (keys.Count > 1 && !(Named.ContainsKey(Norm(main)) || main.Length == 1)) error = "\"" + main + "\" is not a key or a modifier (modifiers are Ctrl, Shift, Alt and Win)";
+                return null;
+            }
+            List<string> label = new List<string>();
+            if (k.Ctrl) label.Add("Ctrl");
+            if (k.Alt) label.Add("Alt");
+            if (k.Shift && !(k.Printable && k.Char != 0 && lone && !hold)) label.Add("Shift");
+            if (k.Win) label.Add("Win");
+            if (k.With != null) foreach (KeyPress w in k.With) label.Add(w.Label);
+            label.Add(k.Key == " " ? "Space" : k.Key.Length == 1 && char.IsLetter(k.Key[0]) && (k.Ctrl || k.Alt || k.Win || k.With != null || hold) ? k.Key.ToUpperInvariant() : k.Key);
+            k.Label = string.Join("+", label.ToArray());
+            return k;
+        }
+
+        static string Shown(KeyPress w)
+        {
+            return w.Key == " " ? "Space" : w.Key.Length == 1 && char.IsLetter(w.Key[0]) ? w.Key.ToUpperInvariant() : w.Key;
+        }
+
+        static bool Fill(string main, bool lone, KeyPress k, out string error)
+        {
+            error = null;
             string nm = Norm(main);
             string[] v;
+            char mark;
+            if (main.Length > 1 && !Named.ContainsKey(nm))
+            {
+                Match code = Regex.Match(nm, @"^(?:key([a-z])|digit([0-9]))$");
+                if (code.Success) { main = code.Groups[1].Success ? code.Groups[1].Value : code.Groups[2].Value; nm = main; }
+                else if (Marks.TryGetValue(nm, out mark)) { main = mark.ToString(); nm = main; }
+            }
             if (main.Length > 1 && Named.TryGetValue(nm, out v))
             {
                 k.Key = v[0]; k.Code = v[1]; k.Vk = int.Parse(v[2], CultureInfo.InvariantCulture); k.Text = v[3].Length > 0 ? v[3] : null; k.Extended = v[4].Length > 0;
                 k.Keypad = k.Code.StartsWith("Numpad", StringComparison.Ordinal);
                 if (k.Keypad) k.Location = 3;
                 if (k.Code == "Enter" || k.Code == "Space") k.Printable = true;
+                return true;
             }
-            else if (main.Length == 1 || (main.Length == 2 && char.IsSurrogatePair(main, 0)))
+            if (main.Length == 1 || (main.Length == 2 && char.IsSurrogatePair(main, 0)))
             {
                 char ch = main[0];
                 k.Printable = true;
@@ -618,7 +714,7 @@ namespace MinGent
                 if (ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z')
                 {
                     char up = char.ToUpperInvariant(ch);
-                    if (ch == up && main.Length == 1 && !k.Ctrl && !k.Alt && !k.Win && combo.Trim().Length == 1) k.Shift = true;
+                    if (ch == up && main.Length == 1 && !k.Ctrl && !k.Alt && !k.Win && lone) k.Shift = true;
                     k.Code = "Key" + up;
                     k.Vk = up;
                     k.Key = k.Shift ? up.ToString() : char.ToLowerInvariant(ch).ToString();
@@ -638,26 +734,23 @@ namespace MinGent
                     if (u >= 0) k.Key = Shifted[u].ToString();
                 }
                 k.Text = k.Key;
+                return true;
             }
-            else if (Media.IsMatch(nm)) { error = "media and volume keys are not supported"; return null; }
-            else { error = "unknown key \"" + main + "\". Use a key name such as Enter, Tab, Escape, Backspace, Delete, Insert, Space, ArrowUp, PageDown, Home, End, F1-F24, Numpad0-9 or ContextMenu, or a single character, with Ctrl+, Shift+, Alt+ in front for shortcuts"; return null; }
-            List<string> parts = new List<string>();
-            if (k.Ctrl) parts.Add("Ctrl");
-            if (k.Alt) parts.Add("Alt");
-            if (k.Shift && !(k.Printable && k.Char != 0 && main.Length == 1 && combo.Trim().Length == 1)) parts.Add("Shift");
-            if (k.Win) parts.Add("Win");
-            parts.Add(k.Key == " " ? "Space" : k.Key.Length == 1 && char.IsLetter(k.Key[0]) && (k.Ctrl || k.Alt || k.Win) ? k.Key.ToUpperInvariant() : k.Key);
-            k.Label = string.Join("+", parts.ToArray());
-            return k;
+            if (Media.IsMatch(nm)) { error = "media and volume keys are not supported"; return false; }
+            error = "unknown key \"" + main + "\". Use a key name such as Enter, Tab, Escape, Backspace, Delete, Insert, Space, ArrowUp, PageDown, Home, End, F1-F24, Numpad0-9, ContextMenu, Minus, Equal, Comma, Period or Slash, or a single character, with Ctrl+, Shift+, Alt+ in front for shortcuts";
+            return false;
         }
 
-        public static List<KeyPress> Sequence(string spec, int repeat, out string error)
+        public static List<KeyPress> Sequence(string spec, int repeat, out string error) { return Sequence(spec, repeat, false, out error); }
+
+        public static List<KeyPress> Sequence(string spec, int repeat, bool hold, out string error)
         {
             error = null;
             List<KeyPress> res = new List<KeyPress>();
             string s = spec ?? "";
             if (s.Length > 0 && s.Trim().Length == 0) s = "Space";
             s = Regex.Replace(s, @"\b(page|arrow|caps|num|scroll|print|context|space)\s+(up|down|left|right|lock|screen|menu|bar)\b", "$1$2", RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"(?<=\S)[ \t]*\+[ \t]*(?=\S)", "+");
             List<string> tokens = new List<string>();
             foreach (string t in Regex.Split(s.Trim(), @"\s+"))
             {
@@ -669,7 +762,7 @@ namespace MinGent
             if (tokens.Count > 40) { error = "press at most 40 keys at a time"; return null; }
             foreach (string t in tokens)
             {
-                KeyPress k = Parse(t, out error);
+                KeyPress k = Parse(t, hold, out error);
                 if (k == null) return null;
                 res.Add(k);
             }
@@ -682,6 +775,39 @@ namespace MinGent
                 res = all;
             }
             return res;
+        }
+
+        public static string Describe(List<KeyPress> keys, int holdMs)
+        {
+            if (holdMs <= 0) return "Pressed " + Describe(keys);
+            string secs = holdMs % 1000 == 0 ? (holdMs / 1000).ToString(CultureInfo.InvariantCulture) : (holdMs / 1000.0).ToString("0.##", CultureInfo.InvariantCulture);
+            return "Held " + Describe(keys) + " down for " + secs + (holdMs == 1000 ? " second" : " seconds") + (keys.Count > 1 ? " each" : "");
+        }
+
+        public const int MaxHoldMs = 10000;
+
+        public static List<KeyPress> Parts(KeyPress k)
+        {
+            List<KeyPress> l = new List<KeyPress>();
+            if (k.With != null)
+                foreach (KeyPress w in k.With)
+                {
+                    KeyPress c = new KeyPress();
+                    c.Key = w.Key; c.Code = w.Code; c.Vk = w.Vk; c.Text = w.Text; c.Char = w.Char; c.Printable = w.Printable; c.Extended = w.Extended; c.Keypad = w.Keypad;
+                    c.Ctrl = k.Ctrl; c.Shift = k.Shift; c.Alt = k.Alt; c.Win = k.Win;
+                    c.Label = k.Label;
+                    l.Add(c);
+                }
+            l.Add(k);
+            return l;
+        }
+
+        public static string HoldError(List<KeyPress> keys, int holdMs)
+        {
+            if (holdMs < 0) return "hold_ms can't be negative";
+            if (holdMs > MaxHoldMs) return "hold keys for at most " + MaxHoldMs + " ms (10 seconds) at a time; to hold longer, call the tool again";
+            if (holdMs > 0 && (long)holdMs * keys.Count > 20000) return "that holds keys for more than 20 seconds in one call; hold fewer keys or for a shorter time";
+            return null;
         }
 
         public static string Describe(List<KeyPress> keys)
@@ -1349,9 +1475,16 @@ namespace MinGent
             SendInput(1, i, InputSize);
         }
 
+        static void ShowPointer(int x, int y, bool click)
+        {
+            int wait = AgentCursor.PointAt(new Point(x, y), click);
+            if (click && wait > 0) Thread.Sleep(Math.Min(wait, 200));
+        }
+
         public static void Click(int x, int y, MouseSpec m)
         {
             if (m == null) m = new MouseSpec();
+            ShowPointer(x, y, true);
             POINT old;
             GetCursorPos(out old);
             SetCursorPos(x, y);
@@ -1374,6 +1507,7 @@ namespace MinGent
 
         public static void Hover(int x, int y)
         {
+            ShowPointer(x, y, false);
             SetCursorPos(x, y);
             Thread.Sleep(60);
             SetCursorPos(x + 1, y);
@@ -1383,6 +1517,7 @@ namespace MinGent
 
         public static void Wheel(int x, int y, bool horizontal, int notches)
         {
+            ShowPointer(x, y, false);
             POINT old;
             GetCursorPos(out old);
             SetCursorPos(x, y);
@@ -1405,6 +1540,8 @@ namespace MinGent
 
         public static void Drag(int x1, int y1, int x2, int y2)
         {
+            ShowPointer(x1, y1, true);
+            AgentCursor.PointAt(new Point(x2, y2), false);
             POINT old;
             GetCursorPos(out old);
             SetCursorPos(x1, y1);
@@ -1423,16 +1560,20 @@ namespace MinGent
             SetCursorPos(old.X, old.Y);
         }
 
-        public static string Press(AppWindow w, List<KeyPress> keys)
+        public static string Press(AppWindow w, List<KeyPress> keys) { return Press(w, keys, 0, null); }
+
+        public static string Press(AppWindow w, List<KeyPress> keys, int holdMs, CancelToken ct)
         {
             int tid = GetWindowThreadProcessId(w.Hwnd, IntPtr.Zero);
             IntPtr hkl = GetKeyboardLayout(tid);
             for (int n = 0; n < keys.Count; n++)
             {
                 KeyPress k = keys[n];
-                string sys = SystemKey(k);
+                string sys = null;
+                foreach (KeyPress part in KeyCombo.Parts(k)) if (sys == null) sys = SystemKey(part);
                 if (sys != null) return sys;
-                if ((n % 8 == 0 || k.Alt || k.Ctrl) && !StillFocused(w)) return "the keys stopped after " + n + " of " + keys.Count + " because another window came to the front";
+                if (ct != null && ct.IsCancelled) return "stopped by the user";
+                if ((n % 8 == 0 || k.Alt || k.Ctrl || holdMs > 0) && !StillFocused(w)) return "the keys stopped after " + n + " of " + keys.Count + " because another window came to the front";
                 List<ushort> mods = new List<ushort>();
                 ushort vk;
                 bool ext = k.Extended;
@@ -1441,13 +1582,13 @@ namespace MinGent
                     short r = VkKeyScanEx(k.Char, hkl);
                     if (r == -1)
                     {
-                        if (k.Ctrl || k.Alt) return "\"" + k.Label + "\" can't be pressed: the character " + k.Char + " is not on this keyboard layout";
+                        if (k.Ctrl || k.Alt || holdMs > 0 || k.With != null) return "\"" + k.Label + "\" can't be " + (holdMs > 0 ? "held" : "pressed") + ": the character " + k.Char + " is not on this keyboard layout";
                         TypeChar(k.Char);
                         continue;
                     }
                     vk = (ushort)(r & 0xFF);
                     bool shift = (r & 0x100) != 0 || k.Shift;
-                    if (k.Char >= 'A' && k.Char <= 'Z' && !k.Shift && (k.Ctrl || k.Alt)) shift = false;
+                    if (k.Char >= 'A' && k.Char <= 'Z' && !k.Shift && (k.Ctrl || k.Alt || k.With != null)) shift = false;
                     if (k.Ctrl || (r & 0x200) != 0) mods.Add(0x11);
                     if (k.Alt || (r & 0x400) != 0) mods.Add(0x12);
                     if (shift) mods.Add(0x10);
@@ -1459,10 +1600,69 @@ namespace MinGent
                     if (k.Alt) mods.Add(0x12);
                     if (k.Shift) mods.Add(0x10);
                 }
-                Key(vk, mods, ext);
+                if (holdMs <= 0 && k.With == null) Key(vk, mods, ext);
+                else
+                {
+                    List<ushort> with = new List<ushort>();
+                    List<bool> withExt = new List<bool>();
+                    if (k.With != null)
+                        foreach (KeyPress x in k.With)
+                        {
+                            ushort xv = (ushort)x.Vk;
+                            if (x.Printable && x.Char != 0)
+                            {
+                                short r = VkKeyScanEx(x.Char, hkl);
+                                if (r == -1) return "\"" + k.Label + "\" can't be pressed: the character " + x.Char + " is not on this keyboard layout";
+                                xv = (ushort)(r & 0xFF);
+                            }
+                            with.Add(xv);
+                            withExt.Add(x.Extended);
+                        }
+                    string lost = Hold(w, vk, ext, mods, with, withExt, holdMs, ct);
+                    if (lost != null) return lost;
+                }
                 if (n + 1 < keys.Count) Thread.Sleep(k.Code == "Enter" || k.Code == "Tab" ? 90 : 25);
             }
             return null;
+        }
+
+        static string Hold(AppWindow w, ushort vk, bool ext, List<ushort> mods, List<ushort> with, List<bool> withExt, int holdMs, CancelToken ct)
+        {
+            List<INPUT> pressed = new List<INPUT>();
+            string why = null;
+            try
+            {
+                foreach (ushort m in mods) { Send(KeyInput(m, false)); pressed.Add(KeyInput(m, true)); Thread.Sleep(15); }
+                for (int i = 0; i < with.Count; i++) { Send(Ext(KeyInput(with[i], false), withExt[i])); pressed.Add(Ext(KeyInput(with[i], true), withExt[i])); Thread.Sleep(15); }
+                Send(Ext(KeyInput(vk, false), ext));
+                pressed.Add(Ext(KeyInput(vk, true), ext));
+                if (holdMs <= 0) { Thread.Sleep(40); return null; }
+                DateTime start = DateTime.UtcNow, end = start.AddMilliseconds(holdMs), next = start.AddMilliseconds(500);
+                while (DateTime.UtcNow < end)
+                {
+                    if (ct != null && ct.IsCancelled) { why = "stopped by the user; the keys were let go"; break; }
+                    if (!StillFocused(w)) { why = "the keys were let go after " + (int)(DateTime.UtcNow - start).TotalMilliseconds + " ms because another window came to the front"; break; }
+                    if (DateTime.UtcNow >= next) { Send(Ext(KeyInput(vk, false), ext)); next = next.AddMilliseconds(80); }
+                    Thread.Sleep(15);
+                }
+            }
+            finally
+            {
+                for (int i = pressed.Count - 1; i >= 0; i--) { Send(pressed[i]); Thread.Sleep(10); }
+            }
+            return why;
+        }
+
+        static INPUT Ext(INPUT i, bool extended)
+        {
+            if (extended) i.u.ki.flags |= 0x0001;
+            return i;
+        }
+
+        static void Send(INPUT i)
+        {
+            INPUT[] one = { i };
+            SendInput(1, one, InputSize);
         }
 
         static void TypeChar(char c)
@@ -1476,6 +1676,7 @@ namespace MinGent
 
         public static void Click(int x, int y, bool right, bool dbl)
         {
+            ShowPointer(x, y, true);
             POINT old;
             GetCursorPos(out old);
             SetCursorPos(x, y);
@@ -1542,59 +1743,6 @@ namespace MinGent
             i.u.ki.flags = flags;
             return i;
         }
-
-        public static bool ParseKey(string spec, out ushort vk, out List<ushort> mods, out string error)
-        {
-            vk = 0;
-            mods = new List<ushort>();
-            error = null;
-            string[] parts = (spec ?? "").Split('+');
-            for (int i = 0; i < parts.Length; i++)
-            {
-                string p = parts[i].Trim().ToLowerInvariant();
-                if (p.Length == 0) continue;
-                if (i < parts.Length - 1)
-                {
-                    if (p == "ctrl" || p == "control") mods.Add(0x11);
-                    else if (p == "alt") mods.Add(0x12);
-                    else if (p == "shift") mods.Add(0x10);
-                    else { error = "unknown modifier \"" + parts[i] + "\""; return false; }
-                    continue;
-                }
-                switch (p)
-                {
-                    case "enter": case "return": vk = 0x0D; break;
-                    case "tab": vk = 0x09; break;
-                    case "esc": case "escape": vk = 0x1B; break;
-                    case "space": vk = 0x20; break;
-                    case "backspace": vk = 0x08; break;
-                    case "delete": case "del": vk = 0x2E; break;
-                    case "insert": vk = 0x2D; break;
-                    case "home": vk = 0x24; break;
-                    case "end": vk = 0x23; break;
-                    case "pageup": vk = 0x21; break;
-                    case "pagedown": vk = 0x22; break;
-                    case "up": case "arrowup": vk = 0x26; break;
-                    case "down": case "arrowdown": vk = 0x28; break;
-                    case "left": case "arrowleft": vk = 0x25; break;
-                    case "right": case "arrowright": vk = 0x27; break;
-                    default:
-                        if (p.Length == 1 && char.IsLetterOrDigit(p[0])) vk = (ushort)char.ToUpperInvariant(p[0]);
-                        else if (p.Length >= 2 && p[0] == 'f')
-                        {
-                            int n;
-                            if (int.TryParse(p.Substring(1), out n) && n >= 1 && n <= 12) vk = (ushort)(0x70 + n - 1);
-                        }
-                        break;
-                }
-                if (vk == 0) { error = "unknown key \"" + parts[i] + "\""; return false; }
-            }
-            if (vk == 0) { error = "no key given"; return false; }
-            bool win = false;
-            foreach (ushort m in mods) if (m == 0x5B) win = true;
-            if (win) { error = "the Windows key is not allowed"; return false; }
-            return true;
-        }
     }
 
     static class ClipboardGuard
@@ -1621,9 +1769,15 @@ namespace MinGent
             lock (gate) return now != 0 && now == owned;
         }
 
-        public static bool IsCopy(KeyPress k) { return k.Ctrl && !k.Alt && (k.Code == "KeyC" || k.Code == "KeyX" || k.Code == "Insert") || (k.Shift && !k.Ctrl && !k.Alt && k.Code == "Delete"); }
+        static bool Has(KeyPress k, string code)
+        {
+            foreach (KeyPress p in KeyCombo.Parts(k)) if (p.Code == code) return true;
+            return false;
+        }
 
-        public static bool IsPaste(KeyPress k) { return (k.Ctrl && !k.Alt && k.Code == "KeyV") || (k.Shift && !k.Ctrl && !k.Alt && k.Code == "Insert"); }
+        public static bool IsCopy(KeyPress k) { return k.Ctrl && !k.Alt && (Has(k, "KeyC") || Has(k, "KeyX") || Has(k, "Insert")) || (k.Shift && !k.Ctrl && !k.Alt && Has(k, "Delete")); }
+
+        public static bool IsPaste(KeyPress k) { return (k.Ctrl && !k.Alt && Has(k, "KeyV")) || (k.Shift && !k.Ctrl && !k.Alt && Has(k, "Insert")); }
 
         static readonly Regex PasteWords = new Regex(@"^\s*(paste|einf\u00FCgen|coller|pegar|incolla|liit\u00E4|plakken|wklej|\u0432\u0441\u0442\u0430\u0432\u0438\u0442\u044C|klistra in|lim inn|inds\u00E6t|vlo\u017Eit|beilleszt\u00E9s|yap\u0131\u015Ft\u0131r|\u8CBC\u308A\u4ED8\u3051|\u7C98\u8D34|\u8CBC\u4E0A|\uBD99\uC5EC\uB123\uAE30)\b",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -2115,8 +2269,8 @@ namespace MinGent
             get
             {
                 return "Press keys in a desktop program you started, like a person at the keyboard. Any key works: Enter, Tab, Escape, Backspace, Delete, Insert, Space, arrows, PageUp/PageDown, Home, End, " +
-                       "F1-F24, Numpad keys, ContextMenu, Alt (menu bar) or a single character, with Ctrl+, Shift+ and Alt+ for shortcuts (Ctrl+S, Ctrl+Shift+Z, Alt+F4). " +
-                       "Several keys separated by spaces are pressed in order (\"Tab Tab Enter\"); repeat presses the whole sequence again.";
+                       "F1-F24, Numpad keys, ContextMenu, Alt (menu bar) or a single character, with Ctrl+, Shift+ and Alt+ for shortcuts (Ctrl+S, Ctrl+Shift+Z, Alt+F4). Keys joined with + go down together (Shift+W, W+D). " +
+                       "Several keys separated by spaces are pressed in order (\"Tab Tab Enter\"); repeat presses the whole sequence again. hold_ms keeps the keys held down that long, for games and anything else that reacts to a held key.";
             }
         }
         public override Dictionary<string, object> Schema
@@ -2125,23 +2279,28 @@ namespace MinGent
             {
                 return Obj("key", P("string", "Key, shortcut or space-separated sequence"), true,
                            "repeat", P("integer", "How many times to press it (default 1)"), false,
+                           "hold_ms", P("integer", "Hold the keys down this many milliseconds before letting go (at most 10000)"), false,
                            "window", WindowArg(), false);
             }
         }
-        public override string Label(Dictionary<string, object> a) { int n = I(a, "repeat", 1); return "Press " + S(a, "key") + (n > 1 ? " x" + n : "") + " in the app"; }
+        public override string Label(Dictionary<string, object> a) { int n = I(a, "repeat", 1), h = I(a, "hold_ms", 0); return (h > 0 ? "Hold " : "Press ") + S(a, "key") + (h > 0 ? " for " + (h % 1000 == 0 ? (h / 1000) + " s" : h + " ms") : "") + (n > 1 ? " x" + n : "") + " in the app"; }
         public override bool Untrusted { get { return true; } }
 
         public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
         {
             string perr;
-            List<KeyPress> keys = KeyCombo.Sequence(S(a, "key"), I(a, "repeat", 1), out perr);
+            int hold = I(a, "hold_ms", 0);
+            List<KeyPress> keys = KeyCombo.Sequence(S(a, "key"), I(a, "repeat", 1), hold > 0, out perr);
             if (keys == null) return ToolOutcome.Fail(perr);
-            bool escOnly = true, paste = false, copy = false;
+            string herr = KeyCombo.HoldError(keys, hold);
+            if (herr != null) return ToolOutcome.Fail(herr);
+            bool escOnly = hold <= 0, paste = false, copy = false;
             foreach (KeyPress k in keys)
             {
-                string sys = AppControl.SystemKey(k);
+                string sys = null;
+                foreach (KeyPress x in KeyCombo.Parts(k)) if (sys == null) sys = AppControl.SystemKey(x);
                 if (sys != null) return ToolOutcome.Fail(sys);
-                if (!(k.Vk == 27 && !k.Ctrl && !k.Alt && !k.Shift)) escOnly = false;
+                if (!(k.Vk == 27 && !k.Ctrl && !k.Alt && !k.Shift && k.With == null)) escOnly = false;
                 if (ClipboardGuard.IsPaste(k)) paste = true;
                 if (ClipboardGuard.IsCopy(k)) copy = true;
             }
@@ -2160,9 +2319,9 @@ namespace MinGent
             string f = AppControl.Focus(w);
             if (f != null) return ToolOutcome.Fail(f);
             uint before = copy ? ClipboardGuard.Now() : 0;
-            string kerr = AppControl.Press(w, keys);
+            string kerr = AppControl.Press(w, keys, hold, ctx.Ct);
             if (kerr != null) return ToolOutcome.Fail(kerr);
-            string how = "Pressed " + KeyCombo.Describe(keys);
+            string how = KeyCombo.Describe(keys, hold);
             ToolOutcome o = After(ctx, w, 400, how);
             if (copy) ClipboardGuard.AfterCopy(before);
             return o;

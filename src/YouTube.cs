@@ -22,7 +22,7 @@ namespace MinGent
 
         public class Video
         {
-            public string Id = "", Title = "", Channel = "", Published = "", Description = "", Status = "", Reason = "";
+            public string Id = "", Title = "", Channel = "", Published = "", Description = "", Status = "", Reason = "", ApiKey;
             public int Seconds;
             public long Views;
             public readonly List<Track> Tracks = new List<Track>();
@@ -78,6 +78,14 @@ namespace MinGent
         {
             object player = ObjectAfter(html, "ytInitialPlayerResponse");
             if (player == null) return null;
+            Video v = FromPlayer(player);
+            Match key = Regex.Match(html ?? "", "\"INNERTUBE_API_KEY\"\\s*:\\s*\"([A-Za-z0-9_-]{20,60})\"");
+            if (key.Success) v.ApiKey = key.Groups[1].Value;
+            return v;
+        }
+
+        public static Video FromPlayer(object player)
+        {
             Video v = new Video();
             v.Status = Json.Str(player, "playabilityStatus", "status") ?? "";
             v.Reason = Json.Str(player, "playabilityStatus", "reason") ?? "";
@@ -110,6 +118,26 @@ namespace MinGent
             return v;
         }
 
+        public static string PlayerBase = "https://www.youtube.com/youtubei/v1/player";
+
+        public static Video AppPlayer(string id, string apiKey, CancelToken ct, out string error)
+        {
+            error = null;
+            Dictionary<string, object> client = Json.O("clientName", "ANDROID", "clientVersion", "20.10.38", "androidSdkVersion", 30, "hl", "en", "gl", "US");
+            string body = Json.Write(Json.O("context", Json.O("client", client), "videoId", id, "contentCheckOk", true, "racyCheckOk", true));
+            Dictionary<string, string> h = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            h["User-Agent"] = "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip";
+            h["Accept-Language"] = "en-US,en;q=0.8";
+            HttpResult r = Http.PostJson(PlayerBase + "?prettyPrint=false" + (string.IsNullOrEmpty(apiKey) ? "" : "&key=" + Uri.EscapeDataString(apiKey)), h, body, 20000, ct);
+            if (!r.Ok) { error = r.Error ?? "YouTube did not answer"; return null; }
+            object player = r.Json;
+            if (player == null) { error = "YouTube sent something MinGent could not read"; return null; }
+            Video v = FromPlayer(player);
+            if (v.Id.Length == 0) v.Id = id;
+            else if (!string.Equals(v.Id, id, StringComparison.Ordinal)) { error = "YouTube answered with a different video"; return null; }
+            return v;
+        }
+
         public static Video Info(string id, CancelToken ct, out string error)
         {
             error = null;
@@ -138,6 +166,8 @@ namespace MinGent
             }
             return best;
         }
+
+        public static bool NeedsToken(Track t) { return t != null && Regex.IsMatch(t.Url ?? "", @"[?&]exp=xpe(&|$)"); }
 
         public static string Captions(Track t, CancelToken ct, out string error)
         {

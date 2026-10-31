@@ -1161,6 +1161,18 @@ namespace MinGent
             return string.Join("\\", outp.ToArray());
         }
 
+        const string Gap = @"[ \t]+";
+        const string WaitPart = @"(?:timeout(?:\.exe)?" + Gap + @"(?:/t" + Gap + @")?[0-9]{1,5}(?:" + Gap + @"/nobreak)?(?:[ \t]*>[ \t]*nul)?" +
+            @"|(?:start-sleep|sleep)(?:" + Gap + @"-(?:seconds|s|milliseconds|ms|m|duration)\b)?" + Gap + @"[0-9]{1,6}(?:\.[0-9]+)?" +
+            @"|ping(?:\.exe)?" + Gap + @"(?:(?:-n|/n)" + Gap + @"[0-9]{1,4}" + Gap + @"(?:127\.0\.0\.1|localhost|::1)|(?:127\.0\.0\.1|localhost|::1)" + Gap + @"(?:-n|/n)" + Gap + @"[0-9]{1,4})(?:[ \t]*>[ \t]*nul)?" +
+            @"|\[(?:system\.)?threading\.thread\]::sleep\([ \t]*[0-9]{1,7}[ \t]*\))";
+        static readonly Regex Waits = new Regex(@"^[ \t\r\n]*" + WaitPart + @"(?:[ \t]*(?:;|&&|\r?\n)[ \t]*" + WaitPart + @")*[ \t]*;?[ \t\r\n]*$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        public static bool OnlyWaits(string command, string shell)
+        {
+            return shell == "powershell" && !string.IsNullOrEmpty(command) && command.Length < 400 && Waits.IsMatch(command);
+        }
+
         public static bool NeedsInternet(string command)
         {
             string c = command ?? "";

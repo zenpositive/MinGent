@@ -355,6 +355,24 @@ namespace MinGent
                 "................",
                 "................"
             };
+            Art["wave"] = new string[] {
+                "................",
+                "................",
+                "......g.........",
+                "......g...g.....",
+                "......g.w.g.....",
+                "..w...g.w.g.....",
+                "..w.w.g.w.g.w...",
+                "w.w.w.g.w.g.w.w.",
+                "w.w.w.g.w.g.w.w.",
+                "..w.w.g.w.g.w...",
+                "..w...g.w.g.....",
+                "......g.w.g.....",
+                "......g...g.....",
+                "......g.........",
+                "................",
+                "................"
+            };
             Names["ask"] = "ask";
             Names["bookmark"] = "bookmark";
             Names["branch"] = "branch";
@@ -376,6 +394,7 @@ namespace MinGent
             Names["sliders"] = "sliders";
             Names["terminal"] = "terminal";
             Names["trash"] = "trash";
+            Names["wave"] = "wave";
         }
 
         public static bool Has(string name) { return name != null && Names.ContainsKey(name); }

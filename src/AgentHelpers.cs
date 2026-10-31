@@ -232,7 +232,7 @@ namespace MinGent
 
         public static bool Parallel(AgentConfig cfg)
         {
-            return cfg != null && cfg.Model != null && (cfg.Model.Provider == "anthropic" || cfg.Model.Provider == "openai" || cfg.Model.Provider == "gemini");
+            return cfg != null && cfg.Model != null && ModelEntry.IsCloud(cfg.Model.Provider);
         }
 
         public static bool BrowserFor(string kind, ToolContext ctx)

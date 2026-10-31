@@ -711,7 +711,7 @@ namespace MinGent
             string err;
             GgufInfo g = m.PartIndex > 1 ? null : Gguf.Read(path, out err);
             if (m.PartIndex <= 1 && g == null) m.Error = "unreadable";
-            bool proj = fi.Name.StartsWith("mmproj", StringComparison.OrdinalIgnoreCase) || (g != null && (g.Type == "mmproj" || g.Architecture == "clip"));
+            bool proj = ModelTraits.IsProjectorName(fi.Name) || (g != null && (g.Type == "mmproj" || g.Architecture == "clip"));
             m.IsProjector = proj;
             m.Helper = !proj && (Gguf.Helper(rel, fi.Length) || (g != null && !string.IsNullOrEmpty(g.Type) && g.Type != "model"));
             if (g != null)
@@ -721,10 +721,7 @@ namespace MinGent
                 m.Quant = Gguf.QuantName(g, fi.Name);
                 m.ParamsText = g.SizeLabel;
                 if (string.IsNullOrEmpty(m.ParamsText) && g.ParameterCount > 0) m.ParamsText = FormatParams(g.ParameterCount);
-                string t = g.ChatTemplate ?? "";
-                m.NativeEffort = t.IndexOf("reasoning_effort", StringComparison.Ordinal) >= 0;
-                m.Thinking = m.NativeEffort || t.IndexOf("<think>", StringComparison.Ordinal) >= 0 || t.IndexOf("enable_thinking", StringComparison.Ordinal) >= 0 || t.IndexOf("reasoning_content", StringComparison.Ordinal) >= 0;
-                m.ToolTemplate = t.IndexOf("tools", StringComparison.Ordinal) >= 0;
+                ModelTraits.FromTemplate(g.ChatTemplate, out m.ToolTemplate, out m.Thinking, out m.NativeEffort);
                 m.Temp = g.Temp; m.TopP = g.TopP; m.MinP = g.MinP; m.TopK = g.TopK;
                 string nm = !string.IsNullOrEmpty(g.Name) ? g.Name : null;
                 m.DisplayName = nm ?? CleanName(fi.Name);
@@ -953,7 +950,7 @@ namespace MinGent
         public string Id = "", Author = "";
         public long Downloads, Likes;
         public DateTime Modified, Created;
-        public bool Gated, Official, Verified, GoodSize;
+        public bool Gated, Official, Verified, GoodSize, Vision, Thinking, TemplateKnown, Tools;
         public string BaseModel = "", Pipeline = "";
         public List<string> Tags = new List<string>();
 
@@ -1008,6 +1005,22 @@ namespace MinGent
         }
     }
 
+    static class ModelTraits
+    {
+        public static void FromTemplate(string template, out bool tools, out bool thinking, out bool nativeEffort)
+        {
+            string t = template ?? "";
+            nativeEffort = t.IndexOf("reasoning_effort", StringComparison.Ordinal) >= 0;
+            thinking = nativeEffort || t.IndexOf("<think>", StringComparison.Ordinal) >= 0 || t.IndexOf("enable_thinking", StringComparison.Ordinal) >= 0 || t.IndexOf("reasoning_content", StringComparison.Ordinal) >= 0;
+            tools = t.IndexOf("tools", StringComparison.Ordinal) >= 0;
+        }
+
+        public static bool IsProjectorName(string fileName)
+        {
+            return (fileName ?? "").IndexOf("mmproj", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+    }
+
     class HubFile
     {
         public string Path = "", Sha256 = "";
@@ -1051,7 +1064,7 @@ namespace MinGent
             return i > 0 ? id.Substring(0, i) : "";
         }
 
-        static List<HubRepo> Parse(List<object> arr, int max)
+        public static List<HubRepo> Parse(List<object> arr, int max)
         {
             List<HubRepo> list = new List<HubRepo>();
             foreach (object o in arr)
@@ -1080,6 +1093,20 @@ namespace MinGent
                             h.BaseModel = s.Substring(11);
                         else if (s.StartsWith("base_model:quantized:") && h.BaseModel.Length == 0) h.BaseModel = s.Substring(21);
                     }
+                List<object> files = Json.List(o, "siblings");
+                if (files != null)
+                    foreach (object f in files)
+                    {
+                        string name = System.IO.Path.GetFileName(Json.Str(f, "rfilename") ?? "");
+                        if (ModelTraits.IsProjectorName(name) && name.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase)) { h.Vision = true; break; }
+                    }
+                string template = Json.Str(o, "gguf", "chat_template");
+                if (!string.IsNullOrEmpty(template))
+                {
+                    bool effort;
+                    ModelTraits.FromTemplate(template, out h.Tools, out h.Thinking, out effort);
+                    h.TemplateKnown = true;
+                }
                 string baseOrg = h.BaseModel.IndexOf('/') > 0 ? h.BaseModel.Substring(0, h.BaseModel.IndexOf('/')) : "";
                 h.Verified = TrustedPublishers.Contains(h.Author);
                 h.Official = h.Verified && baseOrg.Length > 0 && string.Equals(baseOrg, h.Author, StringComparison.OrdinalIgnoreCase);
@@ -1089,21 +1116,35 @@ namespace MinGent
             return list;
         }
 
-        static List<object> Query(string query, string range, string sort, int limit, CancelToken ct, out string error)
+        const string Fields = "&expand[]=author&expand[]=downloads&expand[]=likes&expand[]=gated&expand[]=pipeline_tag&expand[]=lastModified&expand[]=createdAt&expand[]=tags";
+
+        public static string ListUrl(string query, string range, string sort, int limit, bool details)
+        {
+            return Api + "/api/models?filter=gguf&sort=" + sort + "&direction=-1&limit=" + limit + Fields + (details ? "&expand[]=siblings&expand[]=gguf" : "") +
+                   (string.IsNullOrEmpty(query) ? "" : "&search=" + Uri.EscapeDataString(query.Trim())) +
+                   (string.IsNullOrEmpty(range) ? "" : "&num_parameters=" + Uri.EscapeDataString(range));
+        }
+
+        static List<object> Query(string query, string range, string sort, int limit, bool details, CancelToken ct, out string error)
         {
             error = null;
-            string url = Api + "/api/models?filter=gguf&sort=" + sort + "&direction=-1&limit=" + limit + "&full=true" +
-                         (string.IsNullOrEmpty(query) ? "" : "&search=" + Uri.EscapeDataString(query.Trim())) +
-                         (string.IsNullOrEmpty(range) ? "" : "&num_parameters=" + Uri.EscapeDataString(range));
-            HttpResult r = Http.Get(url, null, 20000, ct);
+            HttpResult r = Http.Get(ListUrl(query, range, sort, limit, details), null, 20000, ct);
             List<object> arr = r.Json as List<object>;
+            if ((!r.Ok || arr == null) && r.Status >= 400 && r.Status < 500 && !(ct != null && ct.IsCancelled))
+            {
+                string plain = Api + "/api/models?filter=gguf&sort=" + sort + "&direction=-1&limit=" + limit + "&full=true" +
+                               (string.IsNullOrEmpty(query) ? "" : "&search=" + Uri.EscapeDataString(query.Trim())) +
+                               (string.IsNullOrEmpty(range) ? "" : "&num_parameters=" + Uri.EscapeDataString(range));
+                r = Http.Get(plain, null, 20000, ct);
+                arr = r.Json as List<object>;
+            }
             if (!r.Ok || arr == null) { error = r.Error ?? "Hugging Face did not answer."; return null; }
             return arr;
         }
 
         public static List<HubRepo> Search(string query, CancelToken ct, out string error)
         {
-            List<object> arr = Query(query, null, "downloads", 60, ct, out error);
+            List<object> arr = Query(query, null, "downloads", 60, true, ct, out error);
             return arr == null ? new List<HubRepo>() : Parse(arr, 40);
         }
 
@@ -1111,7 +1152,7 @@ namespace MinGent
         {
             HashSet<string> ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             string err;
-            List<object> arr = Query(query, ParamRange(), "downloads", 60, ct, out err);
+            List<object> arr = Query(query, ParamRange(), "downloads", 60, false, ct, out err);
             if (arr != null) foreach (HubRepo h in Parse(arr, 60)) ids.Add(h.Id);
             return ids;
         }
@@ -1126,7 +1167,7 @@ namespace MinGent
         public static List<HubRepo> Suggested(CancelToken ct, out string error)
         {
             List<HubRepo> res = new List<HubRepo>();
-            List<object> arr = Query(null, ParamRange(), "trendingScore", 100, ct, out error);
+            List<object> arr = Query(null, ParamRange(), "trendingScore", 100, true, ct, out error);
             if (arr == null) return res;
             Dictionary<string, int> slot = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             foreach (HubRepo h in Parse(arr, 100))
@@ -1253,7 +1294,7 @@ namespace MinGent
                 f.Sha256 = (Json.Str(o, "lfs", "oid") ?? Json.Str(o, "lfs", "sha256") ?? "").ToLowerInvariant();
                 if (!Regex.IsMatch(f.Sha256, "^[0-9a-f]{64}$")) f.Sha256 = "";
                 string fn = System.IO.Path.GetFileName(p);
-                if (fn.StartsWith("mmproj", StringComparison.OrdinalIgnoreCase)) projs.Add(f);
+                if (ModelTraits.IsProjectorName(fn)) projs.Add(f);
                 else if (!Gguf.Helper(p, f.Size)) ggufs.Add(f);
             }
             HubFile proj = null;

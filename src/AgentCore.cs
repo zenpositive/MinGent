@@ -77,13 +77,14 @@ namespace MinGent
         bool Available { get; }
         string Navigate(string url, CancelToken ct, out string summary);
         string Read(CancelToken ct, out string text);
+        string OpenSearch(string url, CancelToken ct, out string html, out string finalUrl);
         string ClickElement(string refId, MouseSpec mouse, CancelToken ct, out string summary);
         string ClickAt(double x, double y, MouseSpec mouse, CancelToken ct, out string summary);
         string Hover(string refId, double x, double y, CancelToken ct, out string summary);
         string Drag(string fromRef, double fromX, double fromY, string toRef, double toX, double toY, CancelToken ct, out string summary);
         string TypeText(string refId, string text, bool submit, bool clear, CancelToken ct, out string summary);
         string FocusedInfo(CancelToken ct, out string kind, out bool sensitive);
-        string PressKey(List<KeyPress> keys, CancelToken ct, out string summary);
+        string PressKey(List<KeyPress> keys, int holdMs, CancelToken ct, out string summary);
         string Scroll(string direction, string refId, double x, double y, int pixels, CancelToken ct, out string summary);
         bool CaptchaOnPage { get; }
         string YouTubeTranscript(string url, CancelToken ct, out object result);
@@ -520,7 +521,7 @@ namespace MinGent
         static readonly string[] ReadOnly = {
             "read_file", "list_directory", "find_files", "search_text", "command_status", "web_search", "web_fetch",
             "browser_navigate", "browser_read", "browser_scroll", "browser_screenshot", "app_read", "app_screenshot", "app_scroll",
-            "todo_write", "ask_user", "open_in_editor", "system_info", "close_pane", Tool };
+            "todo_write", "ask_user", "open_in_editor", "system_info", "close_pane", "analyze_audio", Tool };
 
         public static bool Visible(string name)
         {
@@ -989,16 +990,21 @@ namespace MinGent
             }
         }
 
+        public Action<List<int>> InboxRead;
+
         bool DeliverInbox(bool asNewTurn)
         {
             List<string> msgs = new List<string>();
+            List<int> ids = new List<int>();
             lock (inboxGate)
             {
-                while (msgs.Count < inbox.Count && !inbox[msgs.Count].Held) msgs.Add(inbox[msgs.Count].Text);
+                while (msgs.Count < inbox.Count && !inbox[msgs.Count].Held) { ids.Add(inbox[msgs.Count].Id); msgs.Add(inbox[msgs.Count].Text); }
                 if (msgs.Count == 0) return false;
                 inbox.RemoveRange(0, msgs.Count);
                 inboxDelivered += msgs.Count;
             }
+            Action<List<int>> read = InboxRead;
+            if (read != null) { try { read(ids); } catch { } }
             string body = string.Join("\n\n", msgs.ToArray());
             Msg last = History.Count > 0 ? History[History.Count - 1] : null;
             if (!asNewTurn && last != null && last.Role == "tool")
@@ -1604,6 +1610,7 @@ namespace MinGent
         {
             if (raw == "anthropic") return provider == "anthropic";
             if (raw == "openai-responses") return provider == "openai";
+            if (raw.StartsWith("openrouter|", StringComparison.Ordinal)) return provider == "openrouter";
             return true;
         }
 

@@ -13,6 +13,7 @@ namespace MinGent
     {
         public string Title = "", Sub = "";
         public List<KeyValuePair<string, int>> Badges = new List<KeyValuePair<string, int>>();
+        public List<string> Traits = new List<string>();
         public List<string> Buttons = new List<string>();
         public object Tag;
         public int Progress = -1;
@@ -29,6 +30,9 @@ namespace MinGent
         Theme th = Theme.Light(Color.SteelBlue);
         int scroll, hoverRow = -1, hoverBtn = -1, downRow = -1, downBtn = -1, dragOff;
         bool sbDrag, sbHover;
+        readonly ToolTip tip = new ToolTip();
+        readonly List<KeyValuePair<Rectangle, string>> tipSpots = new List<KeyValuePair<Rectangle, string>>();
+        string tipShown;
         public event Action<RowItem, string> ButtonClicked;
         public event Action<RowItem> RowClicked;
 
@@ -40,6 +44,47 @@ namespace MinGent
         }
 
         public void SetTheme(Theme t) { th = t; BackColor = t.Back; Invalidate(); }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) tip.Dispose();
+            base.Dispose(disposing);
+        }
+
+        public static string TraitName(string trait)
+        {
+            switch (trait)
+            {
+                case "tools": return "Tool use";
+                case "notools": return "No tool use";
+                case "vision": return "Vision";
+                case "thinking": return "Thinking";
+            }
+            return trait;
+        }
+
+        public static string TraitTip(string trait)
+        {
+            switch (trait)
+            {
+                case "tools": return "Tool use: this model can call tools. The agent needs this to read and change files, run commands and use the browser.";
+                case "notools": return "No tool use: this model's chat template has no tool calls, so the agent may not be able to work with it.";
+                case "vision": return "Vision: this model can see images, such as pictures you attach and screenshots of pages and programs.";
+                case "thinking": return "Thinking: this model can think before it answers. The Thinking chip under the message box sets how much.";
+            }
+            return null;
+        }
+
+        Color TraitColor(string trait)
+        {
+            if (trait == "notools") return th.Error;
+            if (th.HighContrast) return th.Fore;
+            if (trait == "tools") return th.Dark ? Color.FromArgb(0x86, 0xAE, 0xFF) : Color.FromArgb(0x23, 0x63, 0xC9);
+            if (trait == "vision") return th.Dark ? Color.FromArgb(0xE9, 0xB5, 0x4E) : Color.FromArgb(0x9A, 0x62, 0x00);
+            return th.Dark ? Color.FromArgb(0xB8, 0xA0, 0xFF) : Color.FromArgb(0x6E, 0x47, 0xC4);
+        }
+
+        static string TraitIcon(string trait) { return trait == "vision" ? "eye" : trait == "thinking" ? "bulb" : trait == "notools" ? "warning" : "tool"; }
 
         int RowH { get { return UI.S(RowHeight); } }
         int MaxScroll { get { return Math.Max(0, Items.Count * RowH - Height); } }
@@ -114,7 +159,6 @@ namespace MinGent
         {
             if (row < 0 || row >= Items.Count) return;
             RowItem it = Items[row];
-            if (it.Buttons.Count == 0) return;
             ContextMenuStrip m = Menus.Create(th);
             m.ShowCheckMargin = false;
             foreach (string b in it.Buttons)
@@ -124,12 +168,21 @@ namespace MinGent
                 mi.Enabled = name != "In use";
                 m.Items.Add(mi);
             }
+            List<string> traits = new List<string>();
+            foreach (string t in it.Traits) traits.Add(TraitName(t));
+            string text = string.Join("\r\n", new string[] { it.Title, string.Join(", ", traits.ToArray()), it.Sub, it.ProgressText }).Replace("\r\n\r\n", "\r\n").Trim();
+            if (text.Length > 0)
+            {
+                if (m.Items.Count > 0) m.Items.Add(new ToolStripSeparator());
+                m.Items.Add(Menus.Item("Copy details", false, delegate { try { Clipboard.SetText(text); } catch { } }));
+            }
             m.Closed += delegate { BeginInvoke(new Action(delegate { m.Dispose(); })); };
             m.Show(this, at);
         }
 
         void PaintRows(Graphics g)
         {
+            tipSpots.Clear();
             if (Items.Count == 0)
             {
                 TextRenderer.DrawText(g, EmptyText, Font, new Rectangle(UI.S(16), UI.S(16), Width - UI.S(32), Height - UI.S(32)), th.ChromeDim, TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.PreserveGraphicsClipping);
@@ -154,10 +207,24 @@ namespace MinGent
                 int warnW = 0;
                 foreach (KeyValuePair<string, int> b in badges) warnW += TextRenderer.MeasureText(b.Key, Font).Width + UI.S(20);
                 badges.AddRange(it.Badges.FindAll(delegate (KeyValuePair<string, int> k) { return k.Value != 2; }));
-                int tw = Math.Min(TextRenderer.MeasureText(it.Title, Font).Width, Math.Max(UI.S(40), textRight - x - UI.S(18) - warnW));
+                int chip = UI.S(24), chipGap = UI.S(4);
+                int traitW = it.Traits.Count > 0 ? it.Traits.Count * (chip + chipGap) + UI.S(6) : 0;
+                int tw = Math.Min(TextRenderer.MeasureText(it.Title, Font).Width, Math.Max(UI.S(40), textRight - x - UI.S(18) - warnW - traitW));
                 using (Font bold = Fonts.Semibold(Font.Size))
                     TextRenderer.DrawText(g, it.Title, bold, new Rectangle(x, top, tw + UI.S(14), UI.S(20)), th.Fore, TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.PreserveGraphicsClipping);
                 int bx = x + tw + UI.S(18);
+                foreach (string t in it.Traits)
+                {
+                    Rectangle cr = new Rectangle(bx, top, chip, UI.S(20));
+                    if (cr.Right > textRight) break;
+                    Color c = TraitColor(t);
+                    Glyphs.FillRound(g, Theme.Blend(th.Back, c, th.Dark ? 0.20 : 0.12), cr, UI.S(6));
+                    Rectangle ir = new Rectangle(cr.X + (cr.Width - UI.S(14)) / 2, cr.Y + (cr.Height - UI.S(14)) / 2, UI.S(14), UI.S(14));
+                    Glyphs.Draw(TraitIcon(t), g, ir, c);
+                    tipSpots.Add(new KeyValuePair<Rectangle, string>(cr, TraitTip(t)));
+                    bx += chip + chipGap;
+                }
+                if (it.Traits.Count > 0) bx += UI.S(6);
                 foreach (KeyValuePair<string, int> b in badges)
                 {
                     int bw = TextRenderer.MeasureText(b.Key, Font).Width + UI.S(14);
@@ -224,9 +291,17 @@ namespace MinGent
             int row, btn;
             HitTest(e.Location, out row, out btn);
             if (row != hoverRow || btn != hoverBtn || sb != sbHover) { hoverRow = row; hoverBtn = btn; sbHover = sb; Cursor = btn >= 0 ? Cursors.Hand : Cursors.Default; Invalidate(); }
+            string hint = null;
+            foreach (KeyValuePair<Rectangle, string> s in tipSpots) if (s.Key.Contains(e.Location)) { hint = s.Value; break; }
+            if (hint != tipShown) { tipShown = hint; tip.SetToolTip(this, hint); }
         }
 
-        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); if (!sbDrag) { hoverRow = hoverBtn = -1; sbHover = false; Invalidate(); } }
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            if (tipShown != null) { tipShown = null; tip.SetToolTip(this, null); }
+            if (!sbDrag) { hoverRow = hoverBtn = -1; sbHover = false; Invalidate(); }
+        }
 
         protected override void OnMouseDown(MouseEventArgs e)
         {
@@ -875,8 +950,9 @@ namespace MinGent
                 bool inUse = string.Equals(cur, "engine:" + m.Path, StringComparison.OrdinalIgnoreCase);
                 if (inUse) it.Badges.Add(new KeyValuePair<string, int>("In use", 1));
                 if (!m.Incomplete) it.Badges.Add(FitBadge(m.TotalBytes, shape));
-                if (m.ProjectorPath != null) it.Badges.Add(new KeyValuePair<string, int>("Vision", 0));
-                if (!m.ToolTemplate) it.Badges.Add(new KeyValuePair<string, int>("No tool template", 2));
+                it.Traits.Add(m.ToolTemplate ? "tools" : "notools");
+                if (m.ProjectorPath != null) it.Traits.Add("vision");
+                if (m.Thinking) it.Traits.Add("thinking");
                 if (!m.Incomplete && !inUse) it.Buttons.Add("Use");
                 it.Buttons.Add("Folder");
                 if (m.OwnDownload) it.Buttons.Add("Delete");
@@ -993,6 +1069,9 @@ namespace MinGent
                         string trust = r.TrustLabel;
                         if (trust.Length > 0) it.Badges.Add(new KeyValuePair<string, int>(trust, trust == "Few downloads" ? 2 : 1));
                         if (r.Gated) it.Badges.Add(new KeyValuePair<string, int>("Needs login", 2));
+                        if (r.TemplateKnown) it.Traits.Add(r.Tools ? "tools" : "notools");
+                        if (r.Vision) it.Traits.Add("vision");
+                        if (r.Thinking) it.Traits.Add("thinking");
                         it.Tag = r;
                         repos.Items.Add(it);
                     }

@@ -47,7 +47,7 @@ namespace MinGent
         public string AiWorkspace = "";
         public string AiLastChat = "";
         public float ChatFontSize = 10f;
-        public string KeyAnthropic = "", KeyOpenAi = "", KeyGemini = "", KeyCustom = "", KeyLmStudio = "";
+        public string KeyAnthropic = "", KeyOpenAi = "", KeyGemini = "", KeyOpenRouter = "", KeyCustom = "", KeyLmStudio = "";
         public string CustomUrl = "", CustomModel = "";
         public int LmContext;
         public bool LmUnloadOthers = true;
@@ -60,7 +60,7 @@ namespace MinGent
         public bool Offline, KeepNetLog, KeepErrorLog;
 
         static readonly string[] KeptOnReset = {
-            "KeyAnthropic", "KeyOpenAi", "KeyGemini", "KeyCustom", "KeyLmStudio", "CustomUrl", "CustomModel",
+            "KeyAnthropic", "KeyOpenAi", "KeyGemini", "KeyOpenRouter", "KeyCustom", "KeyLmStudio", "CustomUrl", "CustomModel",
             "ModelsFolder", "ModelsOldFolders", "AiModel", "AiLastLmModel", "AiLastChat",
             "Bounds", "Maximized", "NotesVisible", "AgentVisible", "SidebarCollapsed", "NotesWidth", "BrowserWidth", "BrowserVisible",
             "AiAutoExplained", "AiPlanExplained", "AiFullExplained", "AiInstructions", "AiMemory", "Offline" };
@@ -164,6 +164,7 @@ namespace MinGent
                         case "keyAnthropic": s.KeyAnthropic = v; break;
                         case "keyOpenAi": s.KeyOpenAi = v; break;
                         case "keyGemini": s.KeyGemini = v; break;
+                        case "keyOpenRouter": s.KeyOpenRouter = v; break;
                         case "keyCustom": s.KeyCustom = v; break;
                         case "keyLmStudio": s.KeyLmStudio = v; break;
                         case "customUrl": s.CustomUrl = v; break;
@@ -262,6 +263,7 @@ namespace MinGent
                 if (KeyAnthropic.Length > 0) w("keyAnthropic", KeyAnthropic);
                 if (KeyOpenAi.Length > 0) w("keyOpenAi", KeyOpenAi);
                 if (KeyGemini.Length > 0) w("keyGemini", KeyGemini);
+                if (KeyOpenRouter.Length > 0) w("keyOpenRouter", KeyOpenRouter);
                 if (KeyCustom.Length > 0) w("keyCustom", KeyCustom);
                 if (KeyLmStudio.Length > 0) w("keyLmStudio", KeyLmStudio);
                 w("customUrl", CustomUrl);

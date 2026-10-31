@@ -529,6 +529,8 @@ namespace MinGent
         public string BaseUrl = "", ApiKey = "";
         public bool OfficialOpenAi;
         public bool Gemini, GeminiBudget;
+        public bool OpenRouter;
+        int affordable;
         public const string SkipSignature = "skip_thought_signature_validator";
         public bool SendUsage = true;
         public bool PromptProgress;
@@ -579,6 +581,12 @@ namespace MinGent
                 r = StreamOnce(body, req, sink, ct);
                 if (r.Error == null || r.Cancelled || r.Text.Length > 0 || r.ToolCalls.Count > 0 || r.ContextOverflow) break;
                 string low = r.Error.ToLowerInvariant();
+                if (OpenRouter && r.Status == 402)
+                {
+                    int can = Affordable(r.Error);
+                    if (can >= 1024 && (affordable == 0 || can < affordable) && can < req.MaxTokens) { affordable = can; continue; }
+                    break;
+                }
                 if (low.Contains("tool call arguments") && !Quirks.Has(ObjArgsKey) && HasBadArgs(req)) { Quirks.Flag(ObjArgsKey, true); continue; }
                 if (low.Contains("roles must alternate") && !Quirks.Has(AlternateKey) && UserAfterTool(req)) { Quirks.Flag(AlternateKey, true); continue; }
                 bool effortProblem = eff != null && (low.Contains("reasoning") || low.Contains("effort") || low.Contains("think"));
@@ -644,6 +652,13 @@ namespace MinGent
             return EffortLevels.Nearest(w, acc);
         }
 
+        public static int Affordable(string error)
+        {
+            Match m = Regex.Match(error ?? "", @"can only afford\s+(\d{1,9})", RegexOptions.IgnoreCase);
+            int n;
+            return m.Success && int.TryParse(m.Groups[1].Value, out n) ? n : 0;
+        }
+
         public static List<string> AcceptedFrom(string error)
         {
             Match lead = Regex.Match(error, "\\b(supported|allowed|valid|expected|one of|must be|possible|accepted)\\b", RegexOptions.IgnoreCase);
@@ -691,7 +706,11 @@ namespace MinGent
                 {
                     Dictionary<string, object> a = Json.O("role", "assistant", "content", m.Text ?? "");
                     if (Gemini && string.IsNullOrEmpty(m.Text) && m.ToolCalls != null && m.ToolCalls.Count > 0 && !noTools) a["content"] = null;
-                    if (reasoningBack && !Gemini && !noTools && i > lastUser && !string.IsNullOrEmpty(m.Reasoning) && m.ToolCalls != null && m.ToolCalls.Count > 0) a["reasoning_content"] = m.Reasoning;
+                    if (OpenRouter)
+                    {
+                        if (reasoningBack && !noTools && i > lastUser && m.ToolCalls != null && m.ToolCalls.Count > 0 && m.RawBlocks != null && m.RawProvider == RawTag) a["reasoning_details"] = m.RawBlocks;
+                    }
+                    else if (reasoningBack && !Gemini && !noTools && i > lastUser && !string.IsNullOrEmpty(m.Reasoning) && m.ToolCalls != null && m.ToolCalls.Count > 0) a["reasoning_content"] = m.Reasoning;
                     if (m.ToolCalls != null && m.ToolCalls.Count > 0)
                     {
                         if (noTools)
@@ -757,7 +776,7 @@ namespace MinGent
                 body["tool_choice"] = "auto";
             }
             if (OfficialOpenAi) body["max_completion_tokens"] = req.MaxTokens;
-            else if (req.MaxTokens > 0) body["max_tokens"] = req.MaxTokens;
+            else if (req.MaxTokens > 0) body["max_tokens"] = affordable > 0 ? Math.Min(req.MaxTokens, affordable) : req.MaxTokens;
             if (BudgetThinking)
             {
                 if (req.Effort == "off") body["reasoning_effort"] = "none";
@@ -770,6 +789,10 @@ namespace MinGent
                         body["reasoning_budget_message"] = "\n\nI have thought enough. Now I will act on what I have worked out so far.\n";
                     }
                 }
+            }
+            else if (OpenRouter)
+            {
+                if (effort != null) body["reasoning"] = Json.O("effort", effort);
             }
             else if (Gemini && effort != null && effort != "none" && req.ShowThinking && reasoningBack)
             {
@@ -796,9 +819,56 @@ namespace MinGent
             return Json.O("role", "user", "content", parts);
         }
 
+        string RawTag { get { return "openrouter|" + Model; } }
+
+        public static void MergeDetail(List<object> into, object part)
+        {
+            Dictionary<string, object> d = part as Dictionary<string, object>;
+            if (d == null) return;
+            string type = Json.Str(d, "type") ?? "";
+            object idx = Json.Get(d, "index");
+            Dictionary<string, object> target = null;
+            if (idx is double)
+            {
+                foreach (object o in into)
+                {
+                    Dictionary<string, object> od = o as Dictionary<string, object>;
+                    object oi = od != null ? Json.Get(od, "index") : null;
+                    if (oi is double && (double)oi == (double)idx && (Json.Str(od, "type") ?? "") == type) { target = od; break; }
+                }
+            }
+            else if (into.Count > 0 && (type == "reasoning.text" || type == "reasoning.summary"))
+            {
+                Dictionary<string, object> last = into[into.Count - 1] as Dictionary<string, object>;
+                if (last != null && (Json.Str(last, "type") ?? "") == type && !(Json.Get(last, "index") is double) && Json.Get(last, "signature") == null) target = last;
+            }
+            if (target == null) { into.Add(new Dictionary<string, object>(d)); return; }
+            foreach (KeyValuePair<string, object> kv in d)
+            {
+                if (kv.Value == null || kv.Key == "type" || kv.Key == "index") continue;
+                if ((kv.Key == "text" || kv.Key == "summary" || kv.Key == "data") && kv.Value is string)
+                    target[kv.Key] = (Json.Str(target, kv.Key) ?? "") + (string)kv.Value;
+                else target[kv.Key] = kv.Value;
+            }
+        }
+
+        static string DetailText(List<object> parts)
+        {
+            if (parts == null) return null;
+            StringBuilder sb = new StringBuilder();
+            foreach (object p in parts)
+            {
+                string t = Json.Str(p, "type");
+                if (t == "reasoning.text") sb.Append(Json.Str(p, "text") ?? "");
+                else if (t == "reasoning.summary") sb.Append(Json.Str(p, "summary") ?? "");
+            }
+            return sb.ToString();
+        }
+
         class Acc
         {
             public ThinkSplitter Split;
+            public readonly List<object> Details = new List<object>();
             public readonly StringBuilder Reasoning = new StringBuilder();
             public readonly List<ToolCall> Calls = new List<ToolCall>();
             public readonly List<StringBuilder> Args = new List<StringBuilder>();
@@ -816,6 +886,7 @@ namespace MinGent
                 delegate (string ev, string data, LlmResult res) { OnData(ev, data, res, acc, sink); });
             acc.Split.Finish();
             r.Text = acc.Split.Visible.ToString();
+            if (OpenRouter && acc.Details.Count > 0) { r.RawProvider = RawTag; r.RawBlocks = acc.Details; }
             string reasoning = acc.Reasoning.ToString();
             if (acc.Split.Thought.Length > 0) reasoning = reasoning.Length > 0 ? reasoning + "\n" + acc.Split.Thought : acc.Split.Thought.ToString();
             r.Reasoning = reasoning;
@@ -873,6 +944,9 @@ namespace MinGent
                 if (msg != null)
                 {
                     string rz = Json.Str(msg, "reasoning_content") ?? Json.Str(msg, "reasoning");
+                    List<object> det = OpenRouter ? Json.List(msg, "reasoning_details") : null;
+                    if (det != null) foreach (object d in det) MergeDetail(acc.Details, d);
+                    if (string.IsNullOrEmpty(rz)) rz = DetailText(det);
                     if (!string.IsNullOrEmpty(rz)) { acc.Split.DropThought = true; acc.Reasoning.Append(rz); if (sink != null) sink.OnReasoning(rz); }
                     string content = Json.Str(msg, "content");
                     if (!string.IsNullOrEmpty(content)) acc.Split.Feed(content);
@@ -915,6 +989,9 @@ namespace MinGent
             if (delta != null)
             {
                 string rz = Json.Str(delta, "reasoning_content") ?? Json.Str(delta, "reasoning");
+                List<object> det = OpenRouter ? Json.List(delta, "reasoning_details") : null;
+                if (det != null) foreach (object d in det) MergeDetail(acc.Details, d);
+                if (string.IsNullOrEmpty(rz)) rz = DetailText(det);
                 if (!string.IsNullOrEmpty(rz)) { acc.Split.DropThought = true; acc.Reasoning.Append(rz); if (sink != null) sink.OnReasoning(rz); }
                 string content = Json.Str(delta, "content");
                 if (!string.IsNullOrEmpty(content)) acc.Split.Feed(content);

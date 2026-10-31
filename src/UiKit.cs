@@ -168,6 +168,35 @@ namespace MinGent
                     case "dot":
                         g.FillEllipse(b, cx - 2.5f * u, cy - 2.5f * u, 5f * u, 5f * u);
                         break;
+                    case "tool":
+                        {
+                            PointF[] head = { new PointF(cx + 6.8f * u, cy - 0.02f * u), new PointF(cx + 3.98f * u, cy + 2.81f * u), new PointF(cx - 2.81f * u, cy - 3.98f * u), new PointF(cx + 0.02f * u, cy - 6.8f * u) };
+                            g.FillPolygon(b, head);
+                            using (Pen handle = StrokePen(c, w * 1.25f)) g.DrawLine(handle, cx - 6f * u, cy + 6f * u, cx + 1.6f * u, cy - 1.6f * u);
+                            break;
+                        }
+                    case "eye":
+                        g.DrawBezier(p, cx - 7f * u, cy, cx - 3.5f * u, cy - 5.5f * u, cx + 3.5f * u, cy - 5.5f * u, cx + 7f * u, cy);
+                        g.DrawBezier(p, cx + 7f * u, cy, cx + 3.5f * u, cy + 5.5f * u, cx - 3.5f * u, cy + 5.5f * u, cx - 7f * u, cy);
+                        g.FillEllipse(b, cx - 2.3f * u, cy - 2.3f * u, 4.6f * u, 4.6f * u);
+                        break;
+                    case "bulb":
+                        g.DrawArc(p, cx - 4.6f * u, cy - 6.8f * u, 9.2f * u, 9.2f * u, 135f, 270f);
+                        g.DrawLine(p, cx - 3.25f * u, cy + 1.05f * u, cx - 1.9f * u, cy + 3.4f * u);
+                        g.DrawLine(p, cx + 3.25f * u, cy + 1.05f * u, cx + 1.9f * u, cy + 3.4f * u);
+                        g.DrawLine(p, cx - 1.9f * u, cy + 3.4f * u, cx + 1.9f * u, cy + 3.4f * u);
+                        g.DrawLine(p, cx - 1.4f * u, cy + 5.6f * u, cx + 1.4f * u, cy + 5.6f * u);
+                        break;
+                    case "wave":
+                        {
+                            float[] hs = { 1f, 3f, 2f, 6f, 4f, 5f, 2f, 1f };
+                            for (int i = 0; i < hs.Length; i++)
+                            {
+                                float x = cx + (i * 2 - 7) * 0.9f * u;
+                                g.DrawLine(p, x, cy - hs[i] * u, x, cy + hs[i] * u);
+                            }
+                            break;
+                        }
                     case "branch":
                         {
                             float nr = 1.9f * u;

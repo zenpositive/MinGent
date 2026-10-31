@@ -693,7 +693,7 @@ namespace MinGent
         public MBox Box;
         public int Base;
         public const int KText = 0, KCodeSpan = 1, KCodeBlock = 2, KLine = 3, KCheck = 4, KCopy = 5, KQuoteBar = 6, KTableBorder = 7, KStrike = 8, KHeaderBand = 9, KMath = 10;
-        public const int RFore = 0, RDim = 1, RLink = 2, RCodeFore = 3, RAccent = 4, RSyntax = 100;
+        public const int RFore = 0, RDim = 1, RLink = 2, RCodeFore = 3, RAccent = 4, RError = 5, RSyntax = 100;
     }
 
     class MdLayout
@@ -1377,6 +1377,22 @@ namespace MinGent
             return y;
         }
 
+        public static MdLayout PlainFlow(Graphics g, string text, int width, ChatFonts f, Font font, int role)
+        {
+            MdLayout L = new MdLayout();
+            int y = 0;
+            bool first = true;
+            foreach (string line in (text ?? "").Replace("\r\n", "\n").Split('\n'))
+            {
+                List<MdRun> runs = new List<MdRun>();
+                runs.Add(new MdRun(line.Length > 0 ? line.Replace("\t", "    ") : " ", 0, null));
+                y = Flow(g, runs, 0, width, y, f, L.Ops, font == f.Body ? null : font, role, (byte)(first ? 3 : 2));
+                first = false;
+            }
+            L.Height = y;
+            return L;
+        }
+
         public static MdLayout PlainBox(Graphics g, string text, int width, ChatFonts f, int maxLines)
         {
             MdLayout L = new MdLayout();
@@ -1450,6 +1466,7 @@ namespace MinGent
                 case DrawOp.RLink: return th.Dark ? Theme.Blend(th.Accent, Color.White, 0.25) : Theme.Blend(th.Accent, Color.Black, 0.1);
                 case DrawOp.RCodeFore: return th.Fore;
                 case DrawOp.RAccent: return th.Accent;
+                case DrawOp.RError: return th.HighContrast ? th.Fore : th.Error;
                 default: return dimAll ? th.ChromeDim : th.Fore;
             }
         }

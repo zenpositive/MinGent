@@ -1508,6 +1508,21 @@ namespace MinGent
             list.Cancelled += delegate { Close(); };
         }
 
+        protected override void OnClosing(ToolStripDropDownClosingEventArgs e)
+        {
+            if (e.CloseReason == ToolStripDropDownCloseReason.Keyboard && list.Filterable && list.ClearFilter()) { e.Cancel = true; return; }
+            base.OnClosing(e);
+        }
+
+        public void MakeFilterable(int minWidth)
+        {
+            list.Filterable = true;
+            Size sz = list.Measure(minWidth);
+            list.Size = sz;
+            foreach (ToolStripItem it in Items) it.Size = sz;
+            Size = sz;
+        }
+
         public void LimitHeight(int h)
         {
             if (h <= 0 || h >= Height) return;
@@ -1556,6 +1571,9 @@ namespace MinGent
         public bool Rounded;
         public event Action<int> Picked;
         public event EventHandler Cancelled;
+        bool filterable;
+        string query = "";
+        List<int> view;
 
         public ChoiceList(Theme t, List<Choice> list, int selected, bool notesBelow)
         {
@@ -1571,16 +1589,37 @@ namespace MinGent
             BackColor = t.MenuBack;
         }
 
-        static int Pad { get { return UI.S(4); } }
+        public bool Filterable
+        {
+            get { return filterable; }
+            set { filterable = value; Invalidate(); }
+        }
 
-        int RowH(int i) { return below && items[i].Note.Length > 0 ? UI.S(50) : UI.S(34); }
+        static int Pad { get { return UI.S(4); } }
+        static int SearchH { get { return UI.S(40); } }
+        int ListTop { get { return Pad + (filterable ? SearchH : 0); } }
+
+        int Count { get { return view == null ? items.Count : view.Count; } }
+        int ItemAt(int pos) { return view == null ? pos : view[pos]; }
+
+        int RowH(int pos) { return below && items[ItemAt(pos)].Note.Length > 0 ? UI.S(50) : UI.S(34); }
 
         int ContentH
         {
             get
             {
-                int h = Pad * 2;
-                for (int i = 0; i < items.Count; i++) h += RowH(i);
+                int h = ListTop + Pad;
+                for (int i = 0; i < Count; i++) h += RowH(i);
+                return h;
+            }
+        }
+
+        int FullH
+        {
+            get
+            {
+                int h = Pad * 2 + (filterable ? SearchH : 0);
+                for (int i = 0; i < items.Count; i++) h += below && items[i].Note.Length > 0 ? UI.S(50) : UI.S(34);
                 return h;
             }
         }
@@ -1603,40 +1642,82 @@ namespace MinGent
                 w = Math.Max(w, line);
             }
             w += Pad * 2 + UI.S(18) + UI.S(16);
-            int maxW = UI.S(520);
+            int maxW = UI.S(filterable ? 600 : 520);
             int maxH = UI.S(420);
             try { maxH = Math.Max(UI.S(200), Screen.FromPoint(Control.MousePosition).WorkingArea.Height * 6 / 10); } catch { }
-            return new Size(Math.Min(maxW, Math.Max(minWidth, w)), Math.Min(maxH, ContentH));
+            return new Size(Math.Min(maxW, Math.Max(minWidth, w)), Math.Min(maxH, FullH));
         }
 
-        Rectangle RowRect(int i)
+        Rectangle RowRect(int pos)
         {
-            int y = Pad - scroll;
-            for (int k = 0; k < i; k++) y += RowH(k);
-            return new Rectangle(Pad, y, Width - Pad * 2 - (MaxScroll > 0 ? UI.S(6) : 0), RowH(i));
+            int y = ListTop - scroll;
+            for (int k = 0; k < pos; k++) y += RowH(k);
+            return new Rectangle(Pad, y, Width - Pad * 2 - (MaxScroll > 0 ? UI.S(6) : 0), RowH(pos));
         }
 
         int IndexAt(Point p)
         {
-            for (int i = 0; i < items.Count; i++) if (RowRect(i).Contains(p)) return i;
+            if (p.Y < ListTop) return -1;
+            for (int i = 0; i < Count; i++) if (RowRect(i).Contains(p)) return i;
             return -1;
         }
 
         void SetHot(int i)
         {
-            if (i < 0 || i >= items.Count || i == hot) return;
+            if (i < 0 || i >= Count || i == hot) return;
             hot = i;
             Rectangle r = RowRect(i);
-            if (r.Top < Pad) scroll = Math.Max(0, scroll - (Pad - r.Top));
+            if (r.Top < ListTop) scroll = Math.Max(0, scroll - (ListTop - r.Top));
             else if (r.Bottom > Height - Pad) scroll = Math.Min(MaxScroll, scroll + r.Bottom - (Height - Pad));
             Invalidate();
             AccessibilityNotifyClients(AccessibleEvents.Focus, hot);
             AccessibilityNotifyClients(AccessibleEvents.Selection, hot);
         }
 
-        public void Pick(int i)
+        public void Pick(int pos)
         {
-            if (i >= 0 && i < items.Count && Picked != null) Picked(i);
+            if (pos >= 0 && pos < Count && Picked != null) Picked(ItemAt(pos));
+        }
+
+        public static bool Matches(Choice c, string query)
+        {
+            string hay = (c.Title + " " + c.Note + " " + c.Badge).ToLowerInvariant();
+            foreach (string w in (query ?? "").ToLowerInvariant().Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries))
+                if (hay.IndexOf(w, StringComparison.Ordinal) < 0) return false;
+            return true;
+        }
+
+        int clearedAt = Environment.TickCount - 100000;
+        bool clearEcho;
+
+        public bool ClearFilter()
+        {
+            bool echo = clearEcho;
+            clearEcho = false;
+            if (echo && filterable && query.Length == 0 && unchecked(Environment.TickCount - clearedAt) < 400) return true;
+            if (!filterable || query.Length == 0) return false;
+            SetQuery("");
+            clearedAt = Environment.TickCount;
+            clearEcho = true;
+            return true;
+        }
+
+        void SetQuery(string q)
+        {
+            query = q ?? "";
+            if (query.Trim().Length == 0) view = null;
+            else
+            {
+                view = new List<int>();
+                for (int i = 0; i < items.Count; i++) if (Matches(items[i], query)) view.Add(i);
+            }
+            hot = 0;
+            if (view == null && sel >= 0) hot = sel;
+            else if (view != null) { int at = view.IndexOf(sel); if (at >= 0) hot = at; }
+            scroll = 0;
+            CenterHot();
+            Invalidate();
+            AccessibilityNotifyClients(AccessibleEvents.Reorder, -1);
         }
 
         bool revealed;
@@ -1650,11 +1731,11 @@ namespace MinGent
 
         public void CenterHot()
         {
-            if (Height <= 0 || hot < 0 || hot >= items.Count) return;
+            if (Height <= 0 || hot < 0 || hot >= Count) return;
             revealed = true;
-            int y = Pad;
+            int y = 0;
             for (int k = 0; k < hot; k++) y += RowH(k);
-            scroll = Math.Max(0, Math.Min(MaxScroll, y - (Height - RowH(hot)) / 2));
+            scroll = Math.Max(0, Math.Min(MaxScroll, y - (Height - ListTop - RowH(hot)) / 2));
             Invalidate();
         }
 
@@ -1688,7 +1769,7 @@ namespace MinGent
             Keys k = keyData & Keys.KeyCode;
             if ((keyData & Keys.Alt) != 0) return k == Keys.F4 || k == Keys.Up || k == Keys.Down || base.IsInputKey(keyData);
             if ((keyData & Keys.Control) != 0) return base.IsInputKey(keyData);
-            if (k == Keys.Up || k == Keys.Down || k == Keys.Home || k == Keys.End || k == Keys.PageUp || k == Keys.PageDown || k == Keys.Enter || k == Keys.Space || k == Keys.Escape || k == Keys.Tab) return true;
+            if (k == Keys.Up || k == Keys.Down || k == Keys.Home || k == Keys.End || k == Keys.PageUp || k == Keys.PageDown || k == Keys.Enter || k == Keys.Space || k == Keys.Escape || k == Keys.Tab || k == Keys.Back) return true;
             return base.IsInputKey(keyData);
         }
 
@@ -1704,15 +1785,38 @@ namespace MinGent
                 }
                 return;
             }
-            if (e.Control) return;
+            if (e.Control)
+            {
+                if (filterable && e.KeyCode == Keys.V)
+                {
+                    string clip = "";
+                    try { clip = Clipboard.GetText(); } catch { }
+                    clip = clip.Replace("\r", " ").Replace("\n", " ").Trim();
+                    if (clip.Length > 0) SetQuery((query + clip).Substring(0, Math.Min(80, (query + clip).Length)));
+                    e.Handled = e.SuppressKeyPress = true;
+                }
+                else if (filterable && e.KeyCode == Keys.Back && query.Length > 0) { SetQuery(""); e.Handled = e.SuppressKeyPress = true; }
+                return;
+            }
             switch (e.KeyCode)
             {
-                case Keys.Down: SetHot(Math.Min(items.Count - 1, hot + 1)); break;
+                case Keys.Down: SetHot(Math.Min(Count - 1, hot + 1)); break;
                 case Keys.Up: SetHot(Math.Max(0, hot - 1)); break;
-                case Keys.PageDown: case Keys.End: SetHot(items.Count - 1); break;
+                case Keys.PageDown: case Keys.End: SetHot(Count - 1); break;
                 case Keys.PageUp: case Keys.Home: SetHot(0); break;
-                case Keys.Enter: case Keys.Space: case Keys.Tab: Pick(hot); break;
-                case Keys.Escape: if (Cancelled != null) Cancelled(this, EventArgs.Empty); break;
+                case Keys.Enter: case Keys.Tab: Pick(hot); break;
+                case Keys.Space:
+                    if (filterable && query.Length > 0) return;
+                    Pick(hot);
+                    break;
+                case Keys.Back:
+                    if (!filterable || query.Length == 0) return;
+                    SetQuery(query.Substring(0, query.Length - 1));
+                    break;
+                case Keys.Escape:
+                    if (ClearFilter()) break;
+                    if (Cancelled != null) Cancelled(this, EventArgs.Empty);
+                    break;
                 default: return;
             }
             e.Handled = e.SuppressKeyPress = true;
@@ -1721,7 +1825,14 @@ namespace MinGent
         protected override void OnKeyPress(KeyPressEventArgs e)
         {
             base.OnKeyPress(e);
-            if (char.IsControl(e.KeyChar) || items.Count == 0) return;
+            if (char.IsControl(e.KeyChar)) return;
+            if (filterable)
+            {
+                if (query.Length < 80 && !(e.KeyChar == ' ' && query.Length == 0)) SetQuery(query + e.KeyChar);
+                e.Handled = true;
+                return;
+            }
+            if (items.Count == 0) return;
             string k = e.KeyChar.ToString();
             for (int n = 1; n <= items.Count; n++)
             {
@@ -1735,13 +1846,14 @@ namespace MinGent
         {
             Graphics g = e.Graphics;
             g.Clear(th.MenuBack);
-            for (int i = 0; i < items.Count; i++)
+            for (int pos = 0; pos < Count; pos++)
             {
-                Rectangle r = RowRect(i);
-                if (r.Bottom < 0 || r.Top > Height) continue;
+                Rectangle r = RowRect(pos);
+                if (r.Bottom < ListTop || r.Top > Height) continue;
+                int i = ItemAt(pos);
                 Choice c = items[i];
-                bool hc = th.HighContrast && i == hot;
-                if (i == hot) Glyphs.FillRound(g, th.MenuHover, r, UI.S(6));
+                bool hc = th.HighContrast && pos == hot;
+                if (pos == hot) Glyphs.FillRound(g, th.MenuHover, r, UI.S(6));
                 if (i == sel && !th.HighContrast)
                 {
                     int bh = UI.S(16);
@@ -1774,11 +1886,28 @@ namespace MinGent
                 else if (noteW > 0)
                     TextRenderer.DrawText(g, c.Note, Fonts.Note, new Rectangle(right - noteW, r.Y, noteW, r.Height), dim, Fonts.Line | TextFormatFlags.Right);
             }
+            if (filterable)
+            {
+                using (SolidBrush b = new SolidBrush(th.MenuBack)) g.FillRectangle(b, 0, 0, Width, ListTop);
+                Rectangle box = new Rectangle(Pad + UI.S(4), Pad + UI.S(4), Width - Pad * 2 - UI.S(8), SearchH - UI.S(8));
+                Glyphs.FillRound(g, th.Well, box, UI.S(8));
+                Glyphs.DrawRound(g, th.WellBorder, new Rectangle(box.X, box.Y, box.Width - 1, box.Height - 1), UI.S(8));
+                Glyphs.Draw("search", g, new Rectangle(box.X + UI.S(10), box.Y + (box.Height - UI.S(16)) / 2, UI.S(16), UI.S(16)), th.ChromeDim);
+                Rectangle tr = new Rectangle(box.X + UI.S(34), box.Y, box.Width - UI.S(44), box.Height);
+                if (query.Length == 0) TextRenderer.DrawText(g, "Type to filter " + items.Count + " models", Font, tr, th.ChromeDim, Fonts.Line);
+                else
+                {
+                    TextRenderer.DrawText(g, query, Font, tr, th.Fore, Fonts.Line);
+                    int qw = Math.Min(Fonts.Width(query, Font), tr.Width - UI.S(4));
+                    using (Pen p = new Pen(th.Accent, Math.Max(1, UI.S(1)))) g.DrawLine(p, tr.X + qw + UI.S(1), tr.Y + UI.S(8), tr.X + qw + UI.S(1), tr.Bottom - UI.S(8));
+                }
+                if (Count == 0) TextRenderer.DrawText(g, "No model matches “" + query.Trim() + "”. Backspace changes the filter.", Fonts.Note, new Rectangle(Pad + UI.S(14), ListTop + UI.S(8), Width - Pad * 2 - UI.S(28), UI.S(40)), th.ChromeDim, Fonts.Wrap);
+            }
             if (MaxScroll > 0)
             {
-                int track = Height - Pad * 2;
-                int len = Math.Max(UI.S(24), track * Height / Math.Max(1, ContentH));
-                int y = Pad + (track - len) * scroll / Math.Max(1, MaxScroll);
+                int track = Height - ListTop - Pad;
+                int len = Math.Max(UI.S(24), track * (Height - ListTop) / Math.Max(1, ContentH - ListTop));
+                int y = ListTop + (track - len) * scroll / Math.Max(1, MaxScroll);
                 Glyphs.FillRound(g, th.Thumb, new Rectangle(Width - UI.S(7), y, UI.S(4), len), UI.S(2));
             }
             if (!Rounded)
@@ -1793,9 +1922,10 @@ namespace MinGent
             readonly ChoiceList o;
             public ListAcc(ChoiceList l) : base(l) { o = l; }
             public override AccessibleRole Role { get { return AccessibleRole.List; } }
-            public override int GetChildCount() { return o.items.Count; }
-            public override AccessibleObject GetChild(int index) { return index >= 0 && index < o.items.Count ? new ItemAcc(o, this, index) : null; }
-            public override AccessibleObject GetFocused() { return o.hot >= 0 && o.hot < o.items.Count ? GetChild(o.hot) : null; }
+            public override string Name { get { return o.filterable ? (o.query.Length > 0 ? "Models matching " + o.query : "Models, type to filter") : base.Name; } set { } }
+            public override int GetChildCount() { return o.Count; }
+            public override AccessibleObject GetChild(int index) { return index >= 0 && index < o.Count ? new ItemAcc(o, this, index) : null; }
+            public override AccessibleObject GetFocused() { return o.hot >= 0 && o.hot < o.Count ? GetChild(o.hot) : null; }
             public override AccessibleObject GetSelected() { return GetFocused(); }
         }
 
@@ -1803,13 +1933,14 @@ namespace MinGent
         {
             readonly ChoiceList o;
             readonly AccessibleObject parent;
-            readonly int i;
-            public ItemAcc(ChoiceList l, AccessibleObject p, int index) { o = l; parent = p; i = index; }
+            readonly int pos;
+            public ItemAcc(ChoiceList l, AccessibleObject p, int index) { o = l; parent = p; pos = index; }
             public override string Name
             {
                 get
                 {
-                    Choice c = o.items[i];
+                    if (pos >= o.Count) return "";
+                    Choice c = o.items[o.ItemAt(pos)];
                     string s = c.Title;
                     if (c.Badge.Length > 0) s += ", " + c.Badge;
                     if (c.Note.Length > 0) s += ", " + c.Note;
@@ -1819,19 +1950,19 @@ namespace MinGent
             }
             public override AccessibleRole Role { get { return AccessibleRole.ListItem; } }
             public override AccessibleObject Parent { get { return parent; } }
-            public override Rectangle Bounds { get { return o.RectangleToScreen(o.RowRect(i)); } }
+            public override Rectangle Bounds { get { return pos < o.Count ? o.RectangleToScreen(o.RowRect(pos)) : Rectangle.Empty; } }
             public override AccessibleStates State
             {
                 get
                 {
                     AccessibleStates s = AccessibleStates.Focusable | AccessibleStates.Selectable;
-                    if (i == o.hot) s |= AccessibleStates.Focused | AccessibleStates.Selected;
-                    if (i == o.sel) s |= AccessibleStates.Checked;
+                    if (pos == o.hot) s |= AccessibleStates.Focused | AccessibleStates.Selected;
+                    if (pos < o.Count && o.ItemAt(pos) == o.sel) s |= AccessibleStates.Checked;
                     return s;
                 }
             }
             public override string DefaultAction { get { return "Choose"; } }
-            public override void DoDefaultAction() { o.Pick(i); }
+            public override void DoDefaultAction() { o.Pick(pos); }
         }
     }
 }
@@ -1892,6 +2023,17 @@ namespace MinGent
             }
             AcceptButton = bs[def];
             CancelButton = bs[cancel];
+            if (labels.Length == 1 && (icon == MessageBoxIcon.Error || icon == MessageBoxIcon.Warning))
+            {
+                Button copy = Dialogs.MakeButton("Copy", Th, false);
+                copy.TabIndex = 99;
+                copy.Location = new Point(pad + iconW, y);
+                copy.Click += delegate
+                {
+                    try { Clipboard.SetText(CopyText()); copy.Text = "Copied"; } catch { }
+                };
+                Controls.Add(copy);
+            }
             ClientSize = new Size(ClientSize.Width, y + bs[0].Height + pad);
             Shown += delegate { bs[def].Focus(); };
             buttons = bs;
@@ -1935,11 +2077,13 @@ namespace MinGent
         {
             if (keyData == (Keys.Control | Keys.C))
             {
-                try { Clipboard.SetText(Text + "\r\n\r\n" + message.Replace("\r\n", "\n").Replace("\n", "\r\n")); } catch { }
+                try { Clipboard.SetText(CopyText()); } catch { }
                 return true;
             }
             return base.ProcessCmdKey(ref msg, keyData);
         }
+
+        string CopyText() { return Text + "\r\n\r\n" + message.Replace("\r\n", "\n").Replace("\n", "\r\n"); }
 
         protected override void OnPaint(PaintEventArgs e)
         {

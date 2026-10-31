@@ -88,8 +88,8 @@ namespace MinGent
             Add("browser_click", "browser_click_element", "browser_tap");
             AddMany(new string[] { "browser_type", "app_type" }, null, "type", "type_text", "fill", "input", "input_text", "enter_text", "fill_field", "fill_input", "set_value", "form_input");
             Add("browser_type", "browser_fill", "browser_input", "browser_fill_form", "browser_type_text");
-            AddMany(new string[] { "browser_press_key", "app_key" }, null, "press_key", "press", "key", "keypress", "send_key", "keyboard", "key_press", "send_keys", "hotkey", "shortcut", "keyboard_shortcut");
-            Add("browser_press_key", "browser_key", "browser_press", "browser_keypress", "browser_send_key");
+            AddMany(new string[] { "browser_press_key", "app_key" }, null, "press_key", "press", "key", "keypress", "send_key", "keyboard", "key_press", "send_keys", "hotkey", "shortcut", "keyboard_shortcut", "hold_key", "hold_keys", "key_hold", "keydown", "key_down", "press_and_hold", "hold_down");
+            Add("browser_press_key", "browser_key", "browser_press", "browser_keypress", "browser_send_key", "browser_hold_key", "browser_key_down");
             Add("browser_scroll", "scroll", "scroll_page", "page_scroll", "browser_scroll_page", "mouse_wheel", "wheel", "scroll_element");
             AddMany(new string[] { "browser_hover", "app_hover" }, null, "hover", "mouse_move", "move_mouse", "mouse_over", "mouseover", "hover_element", "move_to", "mouse_hover", "point_at");
             Add("browser_hover", "browser_mouse_move", "browser_move_mouse", "browser_mouseover");
@@ -108,6 +108,7 @@ namespace MinGent
             AddImplied("memory", Json.O("action", "add"), "remember", "save_memory", "add_memory", "memorize", "store_memory", "save_note", "update_memory", "write_memory", "memory_add", "remember_fact", "save_fact", "store_fact", "memory_save");
             AddImplied("memory", Json.O("action", "list"), "recall", "list_memory", "read_memory", "get_memory", "view_memory", "memories", "list_memories", "memory_list", "memory_read", "show_memory");
             AddImplied("memory", Json.O("action", "remove"), "forget", "remove_memory", "delete_memory", "memory_remove", "memory_delete", "forget_fact");
+            Add("analyze_audio", "audio_analysis", "analyse_audio", "analyze_sound", "analyse_sound", "audio_analyze", "audio_info", "audio_stats", "inspect_audio", "read_audio", "listen", "listen_audio", "listen_to_audio", "hear_audio", "audio_analyzer", "analyze_music", "analyze_song", "analyze_wav", "analyze_mp3", "waveform", "spectrogram", "get_audio_info", "audio_metadata", "measure_audio", "loudness");
             Add("system_info", "sysinfo", "system_information", "get_system_info", "os_info", "environment_info", "machine_info", "get_environment", "env_info", "computer_info", "hardware_info", "pc_info", "get_os_info", "system_details");
             Add("app_read", "read_app", "read_window", "window_read", "desktop_read", "ui_read", "get_window", "list_windows", "inspect_window", "app_snapshot", "window_snapshot", "get_ui", "app_inspect", "read_ui", "get_window_elements", "app_elements");
             Add("app_screenshot", "window_screenshot", "desktop_screenshot", "app_capture", "screenshot_window", "capture_window", "app_screen", "screenshot_app");
@@ -115,7 +116,7 @@ namespace MinGent
             AddImplied("app_click", Json.O("right", true), "right_click", "app_right_click", "context_click");
             AddImplied("app_click", Json.O("double", true), "double_click", "app_double_click", "dbl_click", "doubleclick");
             Add("app_type", "desktop_type", "type_in_app", "window_type", "app_input", "type_into_app", "app_type_text");
-            Add("app_key", "desktop_key", "window_key", "app_press_key", "app_hotkey", "app_shortcut", "app_keypress");
+            Add("app_key", "desktop_key", "window_key", "app_press_key", "app_hotkey", "app_shortcut", "app_keypress", "app_hold_key", "app_key_down");
             Add("app_scroll", "desktop_scroll", "window_scroll", "app_wheel", "scroll_app", "app_mouse_wheel");
             Add("app_hover", "desktop_hover", "app_mouse_move", "app_move_mouse", "window_hover");
             Add("app_drag", "desktop_drag", "app_drag_and_drop", "window_drag", "app_swipe");
@@ -509,6 +510,21 @@ namespace MinGent
             }
             else if (tool == "browser_click" || tool == "browser_hover" || tool == "browser_scroll" || tool == "app_click" || tool == "app_hover" || tool == "app_scroll")
                 PointInto(a, "x", "y", ref changed, "coordinate", "coordinates", "position", "point", "pos", "xy", "at", "location", "coords");
+            else if (tool == "analyze_audio")
+            {
+                Rename(a, "start", ref changed, "start_time", "from", "begin", "start_seconds", "start_sec", "offset", "from_seconds", "seek", "start_at", "t0");
+                Rename(a, "end", ref changed, "end_time", "to", "stop", "until", "end_seconds", "end_sec", "to_seconds", "end_at", "t1");
+                Rename(a, "pictures", ref changed, "images", "include_images", "plots", "show_images", "graphs", "charts", "visualize", "visualise", "draw", "image");
+                object span = Take(a, "duration", "length", "seconds", "span", "duration_seconds");
+                if (span != null && !a.ContainsKey("end"))
+                {
+                    object st;
+                    a.TryGetValue("start", out st);
+                    double d = AudioTime.Parse(span, -1);
+                    if (d > 0) a["end"] = Math.Max(0, AudioTime.Parse(st, 0)) + d;
+                    changed = true;
+                }
+            }
         }
 
         static string Primary(Dictionary<string, object> schema, Dictionary<string, object> props)
@@ -593,6 +609,36 @@ namespace MinGent
             double d;
             if (s != null && double.TryParse(s.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out d)) return (int)d;
             return 0;
+        }
+
+        static readonly string[] HoldNames = { "hold_ms", "holdms", "hold", "hold_time", "hold_duration", "hold_for", "duration", "duration_ms", "hold_seconds", "hold_secs", "hold_sec", "duration_seconds", "seconds", "milliseconds", "ms", "press_duration", "time" };
+
+        public static void HoldArgs(Dictionary<string, object> a, ref bool changed)
+        {
+            foreach (string name in HoldNames)
+            {
+                string found = null;
+                foreach (string have in a.Keys) if (Regex.Replace(have.ToLowerInvariant(), @"[\s\-]", "_") == name) { found = have; break; }
+                if (found == null) continue;
+                object v = a[found];
+                double n;
+                string unit = "";
+                if (!TryNum(v, out n))
+                {
+                    Match m = Regex.Match(Str(v).Trim().ToLowerInvariant(), @"^(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?)?$");
+                    if (!m.Success) continue;
+                    n = double.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+                    unit = m.Groups[2].Value;
+                }
+                if (n <= 0) continue;
+                bool secs = unit.StartsWith("s") || (unit.Length == 0 && (name.Contains("sec") || (!name.Contains("ms") && name != "milliseconds" && n <= 60)));
+                int ms = (int)Math.Round(Math.Min(600000, secs ? n * 1000 : n));
+                if (found == "hold_ms" && v is double && (double)v == ms) return;
+                a.Remove(found);
+                a["hold_ms"] = (double)ms;
+                changed = true;
+                return;
+            }
         }
 
         static bool TryNum(object o, out double d)
@@ -880,6 +926,7 @@ namespace MinGent
                             string nk = BrowserKey((string)k);
                             if (nk != (string)k) { a["key"] = nk; changed = true; }
                         }
+                        HoldArgs(a, ref changed);
                         break;
                     }
                 case "browser_scroll":
@@ -1929,7 +1976,7 @@ namespace MinGent
         {
             if (Helper) return "say in your report that web search is not working right now, and work from what you already have";
             List<string> r = new List<string>();
-            if (Tools.Contains("browser_navigate")) r.Add("search in the built-in browser with browser_navigate (for example https://duckduckgo.com/?q=your+words)");
+            if (Tools.Contains("browser_navigate")) r.Add("search with another engine in the built-in browser with browser_navigate (for example https://search.brave.com/search?q=your+words) and read the results there");
             if (Tools.Contains("web_fetch")) r.Add("read a page whose address you already know with web_fetch");
             r.Add("tell the user");
             return JoinRoutes(r);
@@ -2182,7 +2229,7 @@ namespace MinGent
         public int World;
 
         static readonly HashSet<string> Reads = new HashSet<string>(StringComparer.Ordinal) {
-            "read_file", "list_directory", "find_files", "search_text", "web_fetch", "web_search", "system_info" };
+            "read_file", "list_directory", "find_files", "search_text", "web_fetch", "web_search", "system_info", "analyze_audio" };
         static readonly HashSet<string> Live = new HashSet<string>(StringComparer.Ordinal) {
             "command_status", "browser_read", "browser_screenshot", "app_read", "app_screenshot" };
         static readonly HashSet<string> Inert = new HashSet<string>(StringComparer.Ordinal) { "todo_write", "open_in_editor" };

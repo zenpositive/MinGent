@@ -30,8 +30,13 @@ namespace MinGent
                 accent = a;
                 onAccent = on;
                 if (frame != null) frame.Redraw();
+                AgentCursor.Redraw();
             });
         }
+
+        internal static Color Accent { get { return accent; } }
+        internal static Color OnAccent { get { return onAccent; } }
+        internal static bool Usable { get { Control c = invoker; return !broken && Environment.OSVersion.Platform == PlatformID.Win32NT && c != null && !c.IsDisposed && c.IsHandleCreated; } }
 
         public static void Show(IntPtr hwnd)
         {
@@ -50,11 +55,13 @@ namespace MinGent
             Post(delegate
             {
                 if (frame != null) frame.FadeOut();
+                AgentCursor.FadeOut();
             });
         }
 
         public static void Close()
         {
+            AgentCursor.Close();
             if (frame != null) { try { frame.Dispose(); } catch { } frame = null; }
             if (watch != null) { try { watch.Stop(); watch.Dispose(); } catch { } watch = null; }
         }
@@ -214,7 +221,7 @@ namespace MinGent
             if (oldState == FormWindowState.Maximized) main.WindowState = FormWindowState.Maximized;
         }
 
-        static void Post(Action a)
+        internal static void Post(Action a)
         {
             if (broken || Environment.OSVersion.Platform != PlatformID.Win32NT) return;
             Control c = invoker;
@@ -409,10 +416,11 @@ namespace MinGent
                 }
                 Rectangle r = FrameRect(hwnd);
                 if (r.Width < 8 || r.Height < 8) return;
-                Rectangle work = Screen.FromRectangle(r).Bounds;
+                Rectangle work = Screen.FromRectangle(r).Bounds, area = Screen.FromRectangle(r).WorkingArea;
                 bool fills = r.Left <= work.Left && r.Top <= work.Top && r.Right >= work.Right && r.Bottom >= work.Bottom;
-                bool nowInside = fills || IsZoomed(hwnd);
                 int label = UI.S(24), m = UI.S(14);
+                int tight = (r.Left - area.Left < m ? 1 : 0) + (area.Right - r.Right < m ? 1 : 0) + (r.Top - area.Top < m ? 1 : 0) + (area.Bottom - r.Bottom < m ? 1 : 0);
+                bool nowInside = fills || IsZoomed(hwnd) || tight >= 2 || AppHighlight.placed.Contains(hwnd);
                 bool above = !nowInside && r.Top - label - UI.S(4) >= Screen.FromRectangle(r).WorkingArea.Top;
                 if (r != drawn || nowInside != inside || above != labelAbove || dirty)
                 {
@@ -508,6 +516,234 @@ namespace MinGent
                         DeleteDC(mem);
                         ReleaseDC(IntPtr.Zero, screen);
                     }
+                }
+            }
+
+            public void Dispose()
+            {
+                timer.Stop();
+                timer.Dispose();
+                if (Handle != IntPtr.Zero) DestroyHandle();
+            }
+        }
+    }
+
+    static class AgentCursor
+    {
+        const int GlideMs = 170, RippleMs = 460, IdleMs = 5000;
+        static Pointer pointer;
+
+        public static int PointAt(Point screen, bool click)
+        {
+            if (!AppHighlight.Usable) return 0;
+            Pointer now = pointer;
+            bool shown = now != null && now.Visible;
+            AppHighlight.Post(delegate
+            {
+                if (pointer == null) pointer = new Pointer();
+                pointer.Go(screen, click);
+            });
+            return shown ? GlideMs : 60;
+        }
+
+        public static void FadeOut() { Pointer now = pointer; if (now != null) now.FadeOut(); }
+
+        public static void Redraw() { Pointer now = pointer; if (now != null) now.Redraw(); }
+
+        public static void Close()
+        {
+            if (pointer == null) return;
+            try { pointer.Dispose(); } catch (Exception) { }
+            pointer = null;
+        }
+
+        sealed class Pointer : NativeWindow, IDisposable
+        {
+            [StructLayout(LayoutKind.Sequential)] struct POINT { public int X, Y; }
+            [StructLayout(LayoutKind.Sequential)] struct SIZE { public int W, H; }
+            [StructLayout(LayoutKind.Sequential, Pack = 1)] struct BLEND { public byte Op, Flags, Alpha, Format; }
+            [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int w, int hgt, uint flags);
+            [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
+            [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr h);
+            [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr h, IntPtr dc);
+            [DllImport("user32.dll")] static extern bool SetWindowDisplayAffinity(IntPtr h, uint affinity);
+            [DllImport("user32.dll", SetLastError = true)] static extern bool UpdateLayeredWindow(IntPtr h, IntPtr dst, ref POINT at, ref SIZE size, IntPtr src, ref POINT from, int key, ref BLEND blend, int flags);
+            [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr dc);
+            [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr dc);
+            [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
+            [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr obj);
+
+            const int WS_POPUP = unchecked((int)0x80000000), WS_EX_LAYERED = 0x80000, WS_EX_TRANSPARENT = 0x20, WS_EX_TOOLWINDOW = 0x80, WS_EX_NOACTIVATE = 0x8000000, WS_EX_TOPMOST = 0x8;
+            const uint SWP_NOSIZE = 0x1, SWP_NOACTIVATE = 0x10, SWP_NOOWNERZORDER = 0x200;
+            static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+
+            readonly Timer timer = new Timer();
+            PointF at, from, to;
+            DateTime glideStart, rippleStart = DateTime.MinValue, lastMove = DateTime.MinValue;
+            bool clickPending, shown;
+            int alpha, goal;
+            Size canvas;
+            Point hot;
+
+            public Pointer()
+            {
+                CreateParams cp = new CreateParams();
+                cp.Caption = "MinGent pointer";
+                cp.Style = WS_POPUP;
+                cp.ExStyle = WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST;
+                cp.X = -32000;
+                cp.Y = -32000;
+                cp.Width = 1;
+                cp.Height = 1;
+                CreateHandle(cp);
+                try { SetWindowDisplayAffinity(Handle, 0x11); } catch (Exception) { }
+                hot = new Point(UI.S(30), UI.S(30));
+                canvas = new Size(hot.X + UI.S(120), hot.Y + UI.S(48));
+                timer.Interval = 15;
+                timer.Tick += delegate
+                {
+                    try { Tick(); }
+                    catch (Exception) { timer.Stop(); Hide(); }
+                };
+            }
+
+            public bool Visible { get { return shown && goal > 0; } }
+
+            public void Go(Point screen, bool click)
+            {
+                bool appear = !shown || alpha == 0;
+                from = appear ? new PointF(screen.X, screen.Y) : at;
+                to = new PointF(screen.X, screen.Y);
+                at = from;
+                glideStart = DateTime.UtcNow;
+                clickPending = click;
+                lastMove = DateTime.UtcNow;
+                goal = 255;
+                if (appear) alpha = 0;
+                timer.Start();
+                Tick();
+            }
+
+            public void FadeOut()
+            {
+                goal = 0;
+                if (shown) timer.Start();
+            }
+
+            public void Redraw() { if (shown) Render(); }
+
+            static float Ease(float t) { t = Math.Max(0f, Math.Min(1f, t)); return 1f - (1f - t) * (1f - t) * (1f - t); }
+
+            void Tick()
+            {
+                DateTime now = DateTime.UtcNow;
+                float g = (float)((now - glideStart).TotalMilliseconds / GlideMs);
+                PointF next = g >= 1 ? to : new PointF(from.X + (to.X - from.X) * Ease(g), from.Y + (to.Y - from.Y) * Ease(g));
+                if (g >= 1 && clickPending) { clickPending = false; rippleStart = now; }
+                bool rippling = (now - rippleStart).TotalMilliseconds < RippleMs;
+                if (goal > 0 && (now - lastMove).TotalMilliseconds > IdleMs && !rippling) goal = 0;
+                if (alpha != goal) alpha = goal > alpha ? Math.Min(goal, alpha + 60) : Math.Max(goal, alpha - 24);
+                at = next;
+                if (alpha == 0 && goal == 0)
+                {
+                    Hide();
+                    timer.Stop();
+                    return;
+                }
+                Render();
+                if (!shown) { ShowWindow(Handle, 4); shown = true; }
+                SetWindowPos(Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | 0x2);
+                bool busy = g < 1 || clickPending || rippling || alpha != goal;
+                timer.Interval = busy ? 15 : 120;
+            }
+
+            void Hide()
+            {
+                if (shown) ShowWindow(Handle, 0);
+                shown = false;
+                alpha = 0;
+            }
+
+            void Render()
+            {
+                float ripple = (float)((DateTime.UtcNow - rippleStart).TotalMilliseconds / RippleMs);
+                using (Bitmap bm = new Bitmap(canvas.Width, canvas.Height, PixelFormat.Format32bppArgb))
+                {
+                    using (Graphics gr = Graphics.FromImage(bm))
+                    {
+                        gr.Clear(Color.Transparent);
+                        gr.SmoothingMode = SmoothingMode.AntiAlias;
+                        gr.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                        Draw(gr, hot, ripple >= 0 && ripple < 1 ? ripple : -1);
+                    }
+                    IntPtr screen = GetDC(IntPtr.Zero), mem = CreateCompatibleDC(screen), hbm = IntPtr.Zero, old = IntPtr.Zero;
+                    try
+                    {
+                        hbm = bm.GetHbitmap(Color.FromArgb(0));
+                        old = SelectObject(mem, hbm);
+                        POINT pos = new POINT { X = (int)Math.Round(at.X) - hot.X, Y = (int)Math.Round(at.Y) - hot.Y }, src = new POINT();
+                        SIZE size = new SIZE { W = canvas.Width, H = canvas.Height };
+                        BLEND bl = new BLEND { Op = 0, Flags = 0, Alpha = (byte)Math.Max(0, Math.Min(255, alpha)), Format = 1 };
+                        UpdateLayeredWindow(Handle, screen, ref pos, ref size, mem, ref src, 0, ref bl, 2);
+                    }
+                    finally
+                    {
+                        if (old != IntPtr.Zero) SelectObject(mem, old);
+                        if (hbm != IntPtr.Zero) DeleteObject(hbm);
+                        DeleteDC(mem);
+                        ReleaseDC(IntPtr.Zero, screen);
+                    }
+                }
+            }
+
+            public static void Draw(Graphics gr, Point hot, float ripple)
+            {
+                Color a = AppHighlight.Accent, on = AppHighlight.OnAccent;
+                float s = (float)UI.Scale * 1.15f;
+                if (ripple >= 0)
+                {
+                    float r = UI.S(5) + (UI.S(24) - UI.S(5)) * Ease(ripple);
+                    int al = (int)(230 * (1 - ripple));
+                    using (Pen p = new Pen(Color.FromArgb(Math.Max(0, al), a), Math.Max(2f, UI.S(3) * (1 - ripple * 0.5f))))
+                        gr.DrawEllipse(p, hot.X - r, hot.Y - r, r * 2, r * 2);
+                    using (SolidBrush b = new SolidBrush(Color.FromArgb(Math.Max(0, al / 4), a)))
+                        gr.FillEllipse(b, hot.X - r, hot.Y - r, r * 2, r * 2);
+                }
+                PointF[] arrow = {
+                    new PointF(0, 0), new PointF(0, 17), new PointF(4.2f, 13.2f), new PointF(7.2f, 20f),
+                    new PointF(10.2f, 18.7f), new PointF(7.3f, 12.1f), new PointF(12.6f, 12.1f) };
+                for (int i = 0; i < arrow.Length; i++) arrow[i] = new PointF(hot.X + arrow[i].X * s, hot.Y + arrow[i].Y * s);
+                using (GraphicsPath path = new GraphicsPath())
+                {
+                    path.AddPolygon(arrow);
+                    using (Matrix shift = new Matrix())
+                    using (GraphicsPath shadow = (GraphicsPath)path.Clone())
+                    {
+                        shift.Translate(UI.S(1), UI.S(2));
+                        shadow.Transform(shift);
+                        using (SolidBrush sb = new SolidBrush(Color.FromArgb(70, 0, 0, 0))) gr.FillPath(sb, shadow);
+                    }
+                    using (SolidBrush fill = new SolidBrush(a)) gr.FillPath(fill, path);
+                    using (Pen edge = new Pen(Color.White, Math.Max(1.5f, 1.5f * (float)UI.Scale)))
+                    {
+                        edge.LineJoin = LineJoin.Round;
+                        gr.DrawPath(edge, path);
+                    }
+                }
+                using (Font f = new Font("Segoe UI Semibold", 7.5f * (float)UI.Scale, FontStyle.Regular, GraphicsUnit.Point))
+                {
+                    gr.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+                    const string text = "MinGent";
+                    SizeF ts = gr.MeasureString(text, f, PointF.Empty, StringFormat.GenericTypographic);
+                    float h = UI.S(18), padX = UI.S(7);
+                    RectangleF pill = new RectangleF(hot.X + 12.5f * s, hot.Y + 18.5f * s, ts.Width + padX * 2, h);
+                    using (GraphicsPath gp = AppHighlight.RoundRect(pill, h / 2))
+                    {
+                        using (SolidBrush fill = new SolidBrush(a)) gr.FillPath(fill, gp);
+                        using (Pen edge = new Pen(Color.FromArgb(200, 255, 255, 255), 1f)) gr.DrawPath(edge, gp);
+                    }
+                    using (SolidBrush tb = new SolidBrush(on))
+                        gr.DrawString(text, f, tb, pill.X + padX, pill.Y + (h - ts.Height) / 2, StringFormat.GenericTypographic);
                 }
             }
 

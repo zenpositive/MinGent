@@ -530,6 +530,12 @@ namespace MinGent
                         io.Untrusted = AgentPaths.Foreign(t.Full);
                         return io;
                     }
+                    if (AudioFile.IsAudio(t.Full))
+                    {
+                        ToolOutcome ao = AnalyzeAudioTool.Analyze(ctx, t.Full, 0, -1, true);
+                        if (!ao.Error) ao.Text = note + "(This is a sound file, so here are its measurements instead of text.)\n" + ao.Text;
+                        return ao;
+                    }
                     if (DocText.IsDocument(t.Full))
                     {
                         lock (ctx.Session.DocSources)
@@ -1486,7 +1492,7 @@ namespace MinGent
                 ask = new PermissionAsk();
                 ask.Reason = "";
             }
-            else if (ps.WebGuard && ps.Tainted)
+            else if (ps.WebGuard && ps.Tainted && !CommandSafety.OnlyWaits(original, shell))
             {
                 ask = new PermissionAsk();
                 ask.Reason = "This chat has read web content (" + ps.TaintSource + "), so commands need your OK in case a page tried to slip in instructions.";
@@ -1770,12 +1776,18 @@ namespace MinGent
 
     class WebSearchTool : AgentTool
     {
+        readonly bool inBrowser;
+        public WebSearchTool() : this(false) { }
+        public WebSearchTool(bool inBrowser) { this.inBrowser = inBrowser; }
         public override string Name { get { return "web_search"; } }
         public override string Description
         {
             get
             {
-                return "Search the web (DuckDuckGo, or Bing when DuckDuckGo has nothing). Returns up to 10 results with title, address, date when known and a short snippet. " +
+                return (inBrowser
+                           ? "Search the web in the built-in browser pane (Google; Bing or DuckDuckGo when Google has nothing or asks for a check). The results page stays open there, in place of the page that was open. "
+                           : "Search the web (DuckDuckGo, or Bing when DuckDuckGo has nothing). ") +
+                       "Returns up to 10 results with title, address, date when known and a short snippet. " +
                        "For news, releases, versions, prices or anything else that changes, set recent or put the year in the query. Snippets are short and can be out of date: " +
                        "read the pages that matter with web_fetch before you rely on them.";
             }
@@ -1801,11 +1813,17 @@ namespace MinGent
             if (no != null) { ToolOutcome d = ToolOutcome.Fail(no); d.Denied = true; return d; }
             string ex = WebAccess.ExfilText(ctx, q, "Search the web with a very long query", "Sent to the search engine");
             if (ex != null) { ToolOutcome d2 = ToolOutcome.Fail(ex); d2.Denied = true; return d2; }
-            int n;
-            string state;
+            int n = 0;
+            string state = "ok";
             string recent = (S(a, "recent") ?? "").Trim().ToLowerInvariant();
             if (recent.Length > 0 && recent != "day" && recent != "week" && recent != "month" && recent != "year") return ToolOutcome.Fail("recent must be day, week, month or year");
-            string res = Web.Search(q, recent, ctx.Ct, out n, out state);
+            string res = null;
+            if (inBrowser && ctx.Browser != null && ctx.Browser.Available && (ctx.Session == null || !ctx.Session.IsHelper))
+            {
+                res = Web.BrowserSearch(ctx.Browser, q, recent, ctx.Ct, out n, out state);
+                if (n == 0 && state == "browser") res = null;
+            }
+            if (res == null) res = Web.Search(q, recent, ctx.Ct, out n, out state);
             string summary = n > 0 ? n + " results" : state == "refused" ? "Search engines refused" : state == "unrelated" ? "Only unrelated results, left out" : state == "offline" ? "Search engines unreachable" : "No results";
             ToolOutcome o = ToolOutcome.Ok(res, summary);
             o.Untrusted = true;
@@ -1917,16 +1935,30 @@ namespace MinGent
                 return c;
             }
             v = YouTube.Info(id, ctx.Ct, out err);
-            if (v != null && v.Status.Length > 0 && v.Status != "OK" && v.Tracks.Count == 0)
-                problem = "YouTube says: " + (v.Reason.Length > 0 ? v.Reason : v.Status.ToLowerInvariant().Replace('_', ' ')) + ".";
             if (v != null && v.Tracks.Count > 0)
             {
                 YouTube.Track t = YouTube.Pick(v.Tracks);
                 string cerr;
-                transcript = YouTube.Captions(t, ctx.Ct, out cerr);
-                if (transcript != null) source = (t.Name.Length > 0 ? t.Name : t.Lang) + (t.Auto && t.Name.IndexOf("auto", StringComparison.OrdinalIgnoreCase) < 0 ? ", auto-generated" : "");
+                if (!YouTube.NeedsToken(t)) transcript = YouTube.Captions(t, ctx.Ct, out cerr);
+                if (transcript != null) source = TrackName(t);
             }
-            else if (v != null && problem == null) problem = "This video has no subtitles or transcript on YouTube.";
+            if (transcript == null && !ctx.Ct.IsCancelled && (v == null || v.Tracks.Count > 0 || v.Status != "OK"))
+            {
+                string aerr;
+                YouTube.Video app = YouTube.AppPlayer(id, v != null ? v.ApiKey : null, ctx.Ct, out aerr);
+                if (app != null && app.Tracks.Count > 0)
+                {
+                    YouTube.Track t = YouTube.Pick(app.Tracks);
+                    string cerr;
+                    transcript = YouTube.Captions(t, ctx.Ct, out cerr);
+                    if (transcript != null) source = TrackName(t);
+                }
+                if (v == null && app != null && app.Title.Length > 0) { v = app; err = null; }
+                else if (v != null && app != null && v.Tracks.Count == 0 && app.Tracks.Count == 0 && app.Status == "OK" && v.Status != "OK") v.Status = "OK";
+            }
+            if (transcript == null && v != null && v.Status.Length > 0 && v.Status != "OK" && v.Tracks.Count == 0)
+                problem = "YouTube says: " + (v.Reason.Length > 0 ? v.Reason : v.Status.ToLowerInvariant().Replace('_', ' ')) + ".";
+            else if (transcript == null && v != null && v.Tracks.Count == 0 && problem == null) problem = "This video has no subtitles or transcript on YouTube.";
             bool tried = false;
             if (transcript == null && problem == null && ctx.Cfg.BrowserAllowed && ctx.Browser != null && ctx.Browser.Available && BrowserTool.LocalOnly(ctx, url) == null)
             {
@@ -1969,6 +2001,11 @@ namespace MinGent
             ok.Untrusted = true;
             return ok;
         }
+        static string TrackName(YouTube.Track t)
+        {
+            return (t.Name.Length > 0 ? t.Name : t.Lang) + (t.Auto && t.Name.IndexOf("auto", StringComparison.OrdinalIgnoreCase) < 0 ? ", auto-generated" : "");
+        }
+
         public override string Label(Dictionary<string, object> a) { return "Read " + Host(S(a, "url")); }
         public override bool Untrusted { get { return true; } }
 
@@ -2133,6 +2170,17 @@ namespace MinGent
         public static string DuckBase = "https://html.duckduckgo.com/html/?q=";
         public static string BingBase = "https://www.bing.com/search?q=";
         public static string LiteBase = "https://lite.duckduckgo.com/lite/?q=";
+        public static string GoogleBase = "https://www.google.com/search?hl=en&q=";
+        public static DateTime GoogleRest = DateTime.MinValue;
+        public delegate string LinkResolver(string url, string userAgent, CancelToken ct);
+        public static LinkResolver GoogleLinks = Landing;
+        static readonly Regex GoogleRefusal = new Regex(@"id=""captcha-form""|/sorry/index|unusual traffic from your computer|our systems have detected unusual traffic", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex GoogleConsent = new Regex(@"^https?://consent\.google\.|action=""https://consent\.google\.[a-z.]+/save""|Before you continue to Google", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex GoogleHost = new Regex(@"^(www\.)?google\.(com|[a-z]{2}|co\.[a-z]{2}|com\.[a-z]{2})$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex GoogleGate = new Regex(@"^((consent|accounts|ipv4|ipv6)\.google\.[a-z.]+|g\.co)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex GoogleInternal = new Regex(@"^/(search|url|goto|imgres|aclk|sorry|setprefs|preferences|advanced_search|webhp|gen_204|complete|async|xjs|httpservice)(/|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        const string Months = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|January|February|March|April|June|July|August|September|October|November|December";
+        static readonly Regex GoogleDate = new Regex(@"^((?:\d{1,2} (?:" + Months + @") \d{4})|(?:(?:" + Months + @") \d{1,2}, \d{4})|(?:\d+ (?:minutes?|mins?|hours?|days?|weeks?|months?|years?) ago))\s*[\u2014\u2013\u00B7:-]\s*", RegexOptions.CultureInvariant);
         static readonly Regex DuckRefusal = new Regex(@"anomaly-modal|anomaly\.js|bots use DuckDuckGo too|id=""challenge-form""|class=""anomaly", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         static readonly Regex BingRefusal = new Regex(@"id=""b_captcha""|/challenge/verify|captcha\.(js|aspx)|verify you are (a )?human|unusual traffic|solve the challenge", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
@@ -2142,7 +2190,7 @@ namespace MinGent
 
         public class Hit
         {
-            public string Title = "", Url = "", Date, Snippet = "";
+            public string Title = "", Url = "", Date, Snippet = "", Site;
         }
 
         const int MaxHits = 10;
@@ -2229,6 +2277,310 @@ namespace MinGent
             return "No results for \"" + query + "\": the search engines did not return results" + (err != null ? " (" + err + ")" : "") + ".";
         }
 
+        public delegate string PageOpener(string url, CancelToken ct, out string html, out string finalUrl);
+
+        public static string BrowserSearch(IBrowserBridge br, string query, string recent, CancelToken ct, out int count, out string state)
+        {
+            return BrowserSearch(br.OpenSearch, query, recent, ct, out count, out state);
+        }
+
+        public static string BrowserSearch(PageOpener open, string query, string recent, CancelToken ct, out int count, out string state)
+        {
+            count = 0;
+            state = "ok";
+            string df = recent == "day" ? "d" : recent == "week" ? "w" : recent == "month" ? "m" : recent == "year" ? "y" : null;
+            string when = recent == null || recent.Length == 0 ? "" : " (from the past " + recent + ")";
+            bool refused = false, normal = false, unrelated = false, opened = false;
+            string err = null, note = "";
+            List<string> engines = new List<string>();
+            if (DateTime.UtcNow >= GoogleRest) engines.Add("Google");
+            engines.Add("Bing");
+            engines.Add("DuckDuckGo");
+            foreach (string engine in engines)
+            {
+                if (ct != null && ct.IsCancelled) { state = "browser"; return "Stopped."; }
+                bool google = engine == "Google", bing = engine == "Bing";
+                string url = google ? GoogleBase + Uri.EscapeDataString(query) + GoogleFilter(recent)
+                           : bing ? BingBase + Uri.EscapeDataString(query) + "&setlang=en" + BingFilter(recent)
+                           : DuckBase + Uri.EscapeDataString(query) + "&kl=wt-wt" + (df != null ? "&df=" + df : "");
+                string html, final;
+                string e = open(url, ct, out html, out final);
+                if (e != null) { err = e; continue; }
+                opened = true;
+                string ua = null;
+                List<Hit> raw = google ? ParseGoogle(html, final ?? url, out ua) : bing ? ParseBing(html) : ParseDuck(html);
+                bool off;
+                List<Hit> hits = Related(query, raw, out off);
+                if (google && hits.Count > 0)
+                {
+                    ResolveGoogle(hits, ua, ct);
+                    hits = Distinct(hits);
+                }
+                if (hits.Count > 0)
+                {
+                    count = hits.Count;
+                    return note + "Results for \"" + query + "\"" + when + " from " + engine + ", now open in the browser pane:\n" + Format(hits);
+                }
+                if (off) unrelated = true;
+                else if (google && (GoogleConsent.IsMatch(final ?? "") || GoogleConsent.IsMatch(html ?? "")))
+                {
+                    GoogleRest = DateTime.UtcNow.AddMinutes(3);
+                    note = "(Google first wants an answer about cookies, so this comes from another engine. To let MinGent search with Google, the user can open google.com in the browser pane once and answer that question; MinGent tries Google again a few minutes later.)\n";
+                }
+                else if (google ? GoogleRefusal.IsMatch(html ?? "") || (final ?? "").IndexOf("/sorry/", StringComparison.OrdinalIgnoreCase) >= 0
+                                : bing ? BingRefusal.IsMatch(html ?? "") : DuckRefusal.IsMatch(html ?? ""))
+                {
+                    refused = true;
+                    if (google) GoogleRest = DateTime.UtcNow.AddMinutes(30);
+                }
+                else normal = true;
+            }
+            if (!opened)
+            {
+                state = "browser";
+                return "The built-in browser could not open the search" + (err != null ? " (" + err + ")" : "") + ".";
+            }
+            if (normal)
+            {
+                state = "empty";
+                return note + "No results for \"" + query + "\"" + when + "." + (when.Length > 0 ? " Try without recent, or with a longer period." : "");
+            }
+            if (unrelated)
+            {
+                state = "unrelated";
+                return note + "No results for \"" + query + "\": the search engines only showed pages that have nothing to do with it.";
+            }
+            state = "refused";
+            return note + "No results for \"" + query + "\": the search engines answered with a bot check" + (refused ? "" : " or an error") + ". The search page is open in the browser pane; if it asks the user to prove they are human, ask the user to do that, then search again.";
+        }
+
+        static List<Hit> Distinct(List<Hit> hits)
+        {
+            List<Hit> keep = new List<Hit>();
+            HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (Hit h in hits) if (seen.Add(h.Url.TrimEnd('/'))) keep.Add(h);
+            return keep;
+        }
+
+        static string GoogleFilter(string recent)
+        {
+            if (recent == "day") return "&tbs=qdr:d";
+            if (recent == "week") return "&tbs=qdr:w";
+            if (recent == "month") return "&tbs=qdr:m";
+            if (recent == "year") return "&tbs=qdr:y";
+            return "";
+        }
+
+        public static List<Hit> ParseGoogle(string html, string pageUrl, out string userAgent)
+        {
+            userAgent = null;
+            List<Hit> hits = new List<Hit>();
+            Match m = Regex.Match(html ?? "", "\\bdata-mg-hits=\"([^\"]*)\"");
+            if (!m.Success) return hits;
+            Dictionary<string, object> data = Json.TryParse(WebUtility.HtmlDecode(m.Groups[1].Value)) as Dictionary<string, object>;
+            if (data == null) return hits;
+            userAgent = Json.Str(data, "ua");
+            List<object> list = Json.List(data, "hits");
+            if (list == null) return hits;
+            Uri page;
+            if (!Uri.TryCreate(pageUrl ?? "", UriKind.Absolute, out page) || !GoogleHost.IsMatch(page.Host)) page = new Uri("https://www.google.com/");
+            HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (object o in list)
+            {
+                Dictionary<string, object> r = o as Dictionary<string, object>;
+                if (r == null) continue;
+                string url = GoogleUrl(Json.Str(r, "h"), page);
+                if (url == null || !seen.Add(url.TrimEnd('/'))) continue;
+                Hit h = new Hit();
+                h.Url = url;
+                h.Title = Regex.Replace(Json.Str(r, "t") ?? "", "\\s+", " ").Trim();
+                h.Snippet = Regex.Replace(Json.Str(r, "s") ?? "", "\\s+", " ").Trim();
+                string site = (Json.Str(r, "c") ?? "").Trim();
+                if (site.Length > 0 && site.IndexOf('.') > 0) h.Site = site;
+                Match dt = GoogleDate.Match(h.Snippet);
+                if (dt.Success)
+                {
+                    h.Date = dt.Groups[1].Value;
+                    h.Snippet = h.Snippet.Substring(dt.Length);
+                }
+                if (h.Title.Length == 0) continue;
+                hits.Add(h);
+                if (hits.Count >= MaxHits) break;
+            }
+            return hits;
+        }
+
+        static string GoogleUrl(string href, Uri page)
+        {
+            if (string.IsNullOrEmpty(href)) return null;
+            Uri u;
+            if (!Uri.TryCreate(page, href, out u) || (u.Scheme != "http" && u.Scheme != "https")) return null;
+            if (GoogleGate.IsMatch(u.Host)) return null;
+            if (!GoogleHost.IsMatch(u.Host)) return u.AbsoluteUri;
+            string path = u.AbsolutePath;
+            if (path == "/url")
+            {
+                string q = Param(u, "q") ?? Param(u, "url");
+                if (q == null) return null;
+                string real = Outside(q);
+                if (real != null) return real;
+                return q.StartsWith("http", StringComparison.OrdinalIgnoreCase) ? null : u.AbsoluteUri;
+            }
+            if (path == "/goto") return Param(u, "url") != null ? u.AbsoluteUri : null;
+            return GoogleInternal.IsMatch(path) ? null : u.AbsoluteUri;
+        }
+
+        static string Outside(string url)
+        {
+            Uri u;
+            if (!Uri.TryCreate(url ?? "", UriKind.Absolute, out u) || (u.Scheme != "http" && u.Scheme != "https")) return null;
+            if (GoogleGate.IsMatch(u.Host)) return null;
+            if (GoogleHost.IsMatch(u.Host) && GoogleInternal.IsMatch(u.AbsolutePath)) return null;
+            if (u.AbsolutePath.IndexOf("/sorry/", StringComparison.OrdinalIgnoreCase) >= 0) return null;
+            return u.AbsoluteUri;
+        }
+
+        static string Param(Uri u, string name)
+        {
+            foreach (string part in u.Query.TrimStart('?').Split('&'))
+            {
+                int eq = part.IndexOf('=');
+                if (eq <= 0 || part.Substring(0, eq) != name) continue;
+                string v;
+                try { v = Uri.UnescapeDataString(part.Substring(eq + 1).Replace('+', ' ')); } catch { return null; }
+                return v.Length > 0 ? v : null;
+            }
+            return null;
+        }
+
+        public static bool IsGoogleLink(string url)
+        {
+            Uri u;
+            return Uri.TryCreate(url ?? "", UriKind.Absolute, out u) && GoogleHost.IsMatch(u.Host) && (u.AbsolutePath == "/goto" || u.AbsolutePath == "/url");
+        }
+
+        static void ResolveGoogle(List<Hit> hits, string userAgent, CancelToken ct)
+        {
+            List<Hit> todo = hits.FindAll(delegate (Hit h) { return IsGoogleLink(h.Url); });
+            if (todo.Count == 0) return;
+            string[] found = new string[todo.Count];
+            object gate = new object();
+            int next = 0;
+            CancelToken own = new CancelToken();
+            Action stop = delegate { own.Cancel(); };
+            if (ct != null) ct.Register(stop);
+            List<Thread> workers = new List<Thread>();
+            for (int w = 0; w < Math.Min(4, todo.Count); w++)
+            {
+                Thread t = new Thread(delegate ()
+                {
+                    while (true)
+                    {
+                        int i;
+                        string link;
+                        lock (gate)
+                        {
+                            if (next >= todo.Count || own.IsCancelled) return;
+                            i = next++;
+                            link = todo[i].Url;
+                        }
+                        string real = null;
+                        try { real = GoogleLinks(link, userAgent, own); } catch { }
+                        lock (gate) found[i] = real;
+                    }
+                });
+                t.IsBackground = true;
+                t.Name = "MinGent link resolver";
+                t.Start();
+                workers.Add(t);
+            }
+            DateTime until = DateTime.UtcNow.AddSeconds(8);
+            foreach (Thread t in workers) t.Join(Math.Max(0, (int)(until - DateTime.UtcNow).TotalMilliseconds));
+            own.Cancel();
+            if (ct != null) ct.Unregister(stop);
+            lock (gate)
+                for (int i = 0; i < todo.Count; i++)
+                {
+                    string real = Outside(found[i]);
+                    if (real != null) todo[i].Url = real;
+                }
+        }
+
+        static string Landing(string url, string userAgent, CancelToken ct)
+        {
+            HttpWebRequest req;
+            Dictionary<string, string> headers = new Dictionary<string, string>();
+            headers["Cookie"] = "SOCS=CAI";
+            if (!string.IsNullOrEmpty(userAgent)) headers["User-Agent"] = userAgent;
+            try { req = Http.Create(url, "GET", 6000, headers); }
+            catch { return null; }
+            req.AllowAutoRedirect = false;
+            HttpWebRequest captured = req;
+            Action abort = delegate { try { captured.Abort(); } catch { } };
+            if (ct != null) ct.Register(abort);
+            try
+            {
+                using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse()) return LandingOf(resp);
+            }
+            catch (WebException wex)
+            {
+                HttpWebResponse r = wex.Response as HttpWebResponse;
+                if (r != null) using (r) return LandingOf(r);
+            }
+            catch { }
+            finally { if (ct != null) ct.Unregister(abort); }
+            return null;
+        }
+
+        static string LandingOf(HttpWebResponse resp)
+        {
+            int st = (int)resp.StatusCode;
+            Uri at = resp.ResponseUri;
+            if (st >= 300 && st < 400) return Destination(resp.Headers["Location"], at);
+            if (st != 200) return null;
+            string body;
+            using (Stream s = resp.GetResponseStream()) body = Http.ReadText(s, 256 * 1024, resp.CharacterSet);
+            return Destination(LandingInPage(body), at);
+        }
+
+        public static string LandingInPage(string body)
+        {
+            if (string.IsNullOrEmpty(body)) return null;
+            Match m = Regex.Match(body, "<meta[^>]+http-equiv=[\"']?refresh[^>]+content=\"[^\"]*?url=\\s*'?([^\"'>\\s]+)", RegexOptions.IgnoreCase);
+            if (!m.Success) m = Regex.Match(body, "<meta[^>]+http-equiv=[\"']?refresh[^>]+content='[^']*?url=\\s*\"?([^\"'>\\s]+)", RegexOptions.IgnoreCase);
+            if (m.Success) return Outside(WebUtility.HtmlDecode(m.Groups[1].Value));
+            if (body.IndexOf("Redirect Notice", StringComparison.OrdinalIgnoreCase) < 0 && body.IndexOf("trying to send you to", StringComparison.OrdinalIgnoreCase) < 0) return null;
+            foreach (Match a in Regex.Matches(body, "<a\\b[^>]*\\bhref=\"(https?://[^\"]+)\"", RegexOptions.IgnoreCase))
+            {
+                string href = WebUtility.HtmlDecode(a.Groups[1].Value);
+                Uri u;
+                if (Uri.TryCreate(href, UriKind.Absolute, out u) && !GoogleHost.IsMatch(u.Host) && !GoogleGate.IsMatch(u.Host) && !u.Host.EndsWith(".google.com", StringComparison.OrdinalIgnoreCase)) return Outside(href);
+            }
+            return null;
+        }
+
+        static string Destination(string location, Uri at)
+        {
+            if (string.IsNullOrEmpty(location)) return null;
+            Uri u;
+            if (!Uri.TryCreate(at, location.Trim(), out u) || (u.Scheme != "http" && u.Scheme != "https")) return null;
+            if (GoogleHost.IsMatch(u.Host) && u.AbsolutePath == "/url") return Outside(Param(u, "q") ?? Param(u, "url"));
+            return Outside(u.AbsoluteUri);
+        }
+
+        static string BingFilter(string recent)
+        {
+            if (recent == "day") return "&filters=" + Uri.EscapeDataString("ex1:\"ez1\"");
+            if (recent == "week") return "&filters=" + Uri.EscapeDataString("ex1:\"ez2\"");
+            if (recent == "month") return "&filters=" + Uri.EscapeDataString("ex1:\"ez3\"");
+            if (recent == "year")
+            {
+                int today = (int)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalDays;
+                return "&filters=" + Uri.EscapeDataString("ex1:\"ez5_" + (today - 365).ToString(CultureInfo.InvariantCulture) + "_" + today.ToString(CultureInfo.InvariantCulture) + "\"");
+            }
+            return "";
+        }
+
         public static string Format(List<Hit> hits)
         {
             StringBuilder sb = new StringBuilder();
@@ -2236,6 +2588,7 @@ namespace MinGent
             {
                 Hit h = hits[i];
                 sb.Append(i + 1).Append(". ").Append(h.Title.Length > 0 ? h.Title : h.Url).Append('\n').Append("   ").Append(h.Url).Append('\n');
+                if (h.Site != null && IsGoogleLink(h.Url)) sb.Append("   (Google's link to ").Append(h.Site).Append(")\n");
                 string snip = h.Snippet.Length > 300 ? h.Snippet.Substring(0, 300) + "..." : h.Snippet;
                 if (h.Date != null || snip.Length > 0) sb.Append("   ").Append(h.Date != null ? h.Date + (snip.Length > 0 ? " - " : "") : "").Append(snip).Append('\n');
             }
@@ -2314,16 +2667,7 @@ namespace MinGent
         static List<Hit> Bing(string query, string recent, CancelToken ct, out bool refused, out bool normal, out bool offline, out bool unrelated)
         {
             refused = normal = offline = unrelated = false;
-            string filter = "";
-            if (recent == "day") filter = "&filters=" + Uri.EscapeDataString("ex1:\"ez1\"");
-            else if (recent == "week") filter = "&filters=" + Uri.EscapeDataString("ex1:\"ez2\"");
-            else if (recent == "month") filter = "&filters=" + Uri.EscapeDataString("ex1:\"ez3\"");
-            else if (recent == "year")
-            {
-                int today = (int)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalDays;
-                filter = "&filters=" + Uri.EscapeDataString("ex1:\"ez5_" + (today - 365).ToString(CultureInfo.InvariantCulture) + "_" + today.ToString(CultureInfo.InvariantCulture) + "\"");
-            }
-            WebResult b = Get(BingBase + Uri.EscapeDataString(query) + "&setlang=en" + filter, 15000, ct);
+            WebResult b = Get(BingBase + Uri.EscapeDataString(query) + "&setlang=en" + BingFilter(recent), 15000, ct);
             if (b.Body == null || b.Error != null)
             {
                 if (b.Status >= 400 || b.Block != null) refused = true;
@@ -2490,7 +2834,7 @@ namespace MinGent
         {
             List<Hit> hits = new List<Hit>();
             HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            string[] blocks = Regex.Split(html ?? "", "<li class=\"b_algo\"");
+            string[] blocks = Regex.Split(html ?? "", "<li\\b[^>]*\\bclass=\"[^\"]*\\bb_algo\\b[^\"]*\"", RegexOptions.IgnoreCase);
             for (int i = 1; i < blocks.Length && hits.Count < MaxHits; i++)
             {
                 string block = blocks[i];
@@ -3367,17 +3711,21 @@ namespace MinGent
             get
             {
                 return "Press keys in the browser page, like a person at the keyboard. Any key works: Enter, Tab, Escape, Backspace, Delete, Insert, Space, arrows, PageUp/PageDown, Home, End, F1-F24, Numpad keys, ContextMenu or a single character, " +
-                       "with Ctrl+, Shift+ and Alt+ for shortcuts (Ctrl+A, Shift+Tab, Ctrl+Shift+ArrowRight). Several keys separated by spaces are pressed in order (\"Tab Tab Enter\"); repeat presses the whole sequence again.";
+                       "with Ctrl+, Shift+ and Alt+ for shortcuts (Ctrl+A, Shift+Tab, Ctrl+Shift+ArrowRight). Keys joined with + go down together (Shift+W, W+D). Several keys separated by spaces are pressed in order (\"Tab Tab Enter\"); repeat presses the whole sequence again. " +
+                       "hold_ms keeps the keys held down that long, for games and anything else that reacts to a held key (\"W\" with hold_ms 2000 walks forward for 2 seconds).";
             }
         }
-        public override Dictionary<string, object> Schema { get { return Obj("key", P("string", "Key, shortcut or space-separated sequence"), true, "repeat", P("integer", "How many times to press it (default 1)"), false); } }
-        public override string Label(Dictionary<string, object> a) { int n = I(a, "repeat", 1); return "Press " + S(a, "key") + (n > 1 ? " x" + n : ""); }
+        public override Dictionary<string, object> Schema { get { return Obj("key", P("string", "Key, shortcut or space-separated sequence"), true, "repeat", P("integer", "How many times to press it (default 1)"), false, "hold_ms", P("integer", "Hold the keys down this many milliseconds before letting go (at most 10000)"), false); } }
+        public override string Label(Dictionary<string, object> a) { int n = I(a, "repeat", 1), h = I(a, "hold_ms", 0); return (h > 0 ? "Hold " : "Press ") + S(a, "key") + (h > 0 ? " for " + (h % 1000 == 0 ? (h / 1000) + " s" : h + " ms") : "") + (n > 1 ? " x" + n : ""); }
 
         public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
         {
             string perr;
-            List<KeyPress> keys = KeyCombo.Sequence(S(a, "key"), I(a, "repeat", 1), out perr);
+            int hold = I(a, "hold_ms", 0);
+            List<KeyPress> keys = KeyCombo.Sequence(S(a, "key"), I(a, "repeat", 1), hold > 0, out perr);
             if (keys == null) return ToolOutcome.Fail(perr);
+            string herr = KeyCombo.HoldError(keys, hold);
+            if (herr != null) return ToolOutcome.Fail(herr);
             ToolOutcome stale = Stale(ctx);
             if (stale != null) return stale;
             string g = Gate(ctx, null);
@@ -3399,13 +3747,13 @@ namespace MinGent
             }
             string summary;
             uint before = copies ? ClipboardGuard.Now() : 0;
-            string err = ctx.Browser.PressKey(keys, ctx.Ct, out summary);
+            string err = ctx.Browser.PressKey(keys, hold, ctx.Ct, out summary);
             if (copies)
             {
                 ctx.Ct.Sleep(250);
                 ClipboardGuard.AfterCopy(before);
             }
-            return Act(ctx, err, FrameHint(ctx, summary), "Pressed " + KeyCombo.Describe(keys));
+            return Act(ctx, err, FrameHint(ctx, summary), KeyCombo.Describe(keys, hold));
         }
     }
 
@@ -3850,10 +4198,11 @@ namespace MinGent
             l.Add(new SearchTextTool());
             l.Add(new RunCommandTool());
             l.Add(new CommandStatusTool());
-            if (web && !Net.Offline) l.Add(new WebSearchTool());
+            if (web && !Net.Offline) l.Add(new WebSearchTool(browserOn));
             l.Add(new WebFetchTool(browserOn && web));
             if (browserOn) l.AddRange(BrowserTools(vision));
             if (apps && contextTokens >= 24000) l.AddRange(AppTools(vision));
+            if (contextTokens >= 16000) l.Add(new AnalyzeAudioTool());
             l.Add(new TodoTool());
             l.Add(new AskUserTool());
             l.Add(new PresentPlanTool());

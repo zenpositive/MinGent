@@ -317,6 +317,9 @@ namespace MinGent
 
     class BrowserPane : Control, IBrowserBridge
     {
+        [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(System.Drawing.Point p);
+        [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
+
         class Pending
         {
             readonly object gate = new object();
@@ -1520,11 +1523,13 @@ namespace MinGent
             if (r < 0) p.Fail(method + " failed (0x" + r.ToString("X8") + ")");
         }
 
-        string CdpCall(string method, Dictionary<string, object> args, CancelToken ct, out object result)
+        string CdpCall(string method, Dictionary<string, object> args, CancelToken ct, out object result) { return CdpCall(method, args, 20000, ct, out result); }
+
+        string CdpCall(string method, Dictionary<string, object> args, int timeoutMs, CancelToken ct, out object result)
         {
             result = null;
             string json;
-            string err = Ui(delegate (Pending p) { Cdp(method, Json.Write(args), p); }, 20000, ct, out json);
+            string err = Ui(delegate (Pending p) { Cdp(method, Json.Write(args), p); }, timeoutMs, ct, out json);
             if (err != null) return err;
             result = Json.TryParse(json ?? "{}");
             return null;
@@ -1941,6 +1946,42 @@ namespace MinGent
             }
         }
 
+        bool ScreenOf(double cssX, double cssY, CancelToken ct, out System.Drawing.Point screen)
+        {
+            screen = System.Drawing.Point.Empty;
+            if (!AppHighlight.Usable) return false;
+            try
+            {
+                object pv;
+                if (Js("(" + BrowserScripts.Probe + ")()", ct, out pv) != null) return false;
+                double cssW = Json.Num(pv, "w");
+                if (cssW <= 0) return false;
+                string at;
+                string err = Ui(delegate (Pending p)
+                {
+                    if (!host.IsHandleCreated || !host.Visible || host.ClientSize.Width <= 0) { p.Ok(""); return; }
+                    double sc = host.ClientSize.Width / cssW;
+                    System.Drawing.Point sp = host.PointToScreen(new System.Drawing.Point((int)Math.Round(cssX * sc), (int)Math.Round(cssY * sc)));
+                    IntPtr hit = WindowFromPoint(sp);
+                    if (hit == IntPtr.Zero || GetAncestor(hit, 2) != GetAncestor(host.Handle, 2)) { p.Ok(""); return; }
+                    p.Ok(sp.X.ToString(CultureInfo.InvariantCulture) + "," + sp.Y.ToString(CultureInfo.InvariantCulture));
+                }, 2000, ct, out at);
+                if (err != null || string.IsNullOrEmpty(at)) return false;
+                string[] xy = at.Split(',');
+                screen = new System.Drawing.Point(int.Parse(xy[0], CultureInfo.InvariantCulture), int.Parse(xy[1], CultureInfo.InvariantCulture));
+                return true;
+            }
+            catch (Exception) { return false; }
+        }
+
+        void PointAt(double cssX, double cssY, bool click, bool wait, CancelToken ct)
+        {
+            System.Drawing.Point sp;
+            if (!ScreenOf(cssX, cssY, ct, out sp)) return;
+            int ms = AgentCursor.PointAt(sp, click);
+            if (wait && ms > 0) ct.Sleep(ms);
+        }
+
         string MoveMouse(double x, double y, int buttons, CancelToken ct)
         {
             object res;
@@ -1957,42 +1998,80 @@ namespace MinGent
             return null;
         }
 
-        string SendKey(KeyPress k, CancelToken ct)
+        string SendKey(KeyPress k, CancelToken ct) { return SendKey(k, 0, ct); }
+
+        Dictionary<string, object> KeyEvent(KeyPress k, string type, int mask, bool typed, bool repeat)
+        {
+            string text = typed && type == "keyDown" ? k.Text : null;
+            Dictionary<string, object> e = Json.O("type", type == "keyDown" && text == null ? "rawKeyDown" : type, "key", k.Key, "code", k.Code, "windowsVirtualKeyCode", k.Vk, "nativeVirtualKeyCode", k.Vk, "modifiers", mask);
+            if (text != null) { e["text"] = text; e["unmodifiedText"] = text; }
+            if (k.Keypad) { e["isKeypad"] = true; e["location"] = 3; }
+            if (repeat) e["autoRepeat"] = true;
+            return e;
+        }
+
+        string SendKey(KeyPress k, int holdMs, CancelToken ct)
         {
             object res;
-            List<KeyPress> held = new List<KeyPress>();
+            bool chord = holdMs > 0 || k.With != null;
+            List<KeyPress> held = new List<KeyPress>(), down = new List<KeyPress>();
             int mask = 0;
             string[] order = { "Control", "Alt", "Shift" };
-            bool[] want = { k.Ctrl, k.Alt, k.Shift && !(k.Printable && k.Char != 0 && !k.Ctrl && !k.Alt) };
-            for (int i = 0; i < order.Length; i++)
+            bool[] want = { k.Ctrl, k.Alt, k.Shift && (chord || !(k.Printable && k.Char != 0 && !k.Ctrl && !k.Alt)) };
+            CancelToken release = new CancelToken();
+            string err = null;
+            try
             {
-                if (!want[i]) continue;
-                string merr;
-                KeyPress mk = KeyCombo.Parse(order[i], out merr);
-                if (mk == null) continue;
-                mask |= i == 0 ? 2 : i == 1 ? 1 : 8;
-                string e0 = CdpCall("Input.dispatchKeyEvent", Json.O("type", "rawKeyDown", "key", mk.Key, "code", mk.Code, "windowsVirtualKeyCode", mk.Vk, "nativeVirtualKeyCode", mk.Vk, "modifiers", mask, "location", 1), ct, out res);
-                if (e0 != null) return e0;
-                held.Add(mk);
+                for (int i = 0; i < order.Length; i++)
+                {
+                    if (!want[i]) continue;
+                    string merr;
+                    KeyPress mk = KeyCombo.Parse(order[i], out merr);
+                    if (mk == null) continue;
+                    mask |= i == 0 ? 2 : i == 1 ? 1 : 8;
+                    held.Add(mk);
+                    err = CdpCall("Input.dispatchKeyEvent", Json.O("type", "rawKeyDown", "key", mk.Key, "code", mk.Code, "windowsVirtualKeyCode", mk.Vk, "nativeVirtualKeyCode", mk.Vk, "modifiers", mask, "location", 1), ct, out res);
+                    if (err != null) return err;
+                }
+                if (k.Shift) mask |= 8;
+                bool plain = !k.Ctrl && !k.Alt && !k.Win;
+                if (k.With != null)
+                    foreach (KeyPress w in k.With)
+                    {
+                        down.Add(w);
+                        err = CdpCall("Input.dispatchKeyEvent", KeyEvent(w, "keyDown", mask, plain, false), ct, out res);
+                        if (err != null) return err;
+                    }
+                down.Add(k);
+                err = CdpCall("Input.dispatchKeyEvent", KeyEvent(k, "keyDown", mask, plain, false), ct, out res);
+                if (err != null) return err;
+                if (holdMs > 0)
+                {
+                    DateTime start = DateTime.UtcNow, end = start.AddMilliseconds(holdMs), next = start.AddMilliseconds(500);
+                    while (DateTime.UtcNow < end && !ct.IsCancelled && !userDialogOpen)
+                    {
+                        if (DateTime.UtcNow >= next)
+                        {
+                            CdpCall("Input.dispatchKeyEvent", KeyEvent(k, "keyDown", mask, plain, true), ct, out res);
+                            next = next.AddMilliseconds(80);
+                        }
+                        Thread.Sleep(15);
+                    }
+                }
             }
-            if (k.Shift) mask |= 8;
-            bool plain = !k.Ctrl && !k.Alt && !k.Win;
-            string text = plain ? k.Text : null;
-            Dictionary<string, object> down = Json.O("type", text != null ? "keyDown" : "rawKeyDown", "key", k.Key, "code", k.Code, "windowsVirtualKeyCode", k.Vk, "nativeVirtualKeyCode", k.Vk, "modifiers", mask);
-            if (text != null) { down["text"] = text; down["unmodifiedText"] = text; }
-            if (k.Keypad) { down["isKeypad"] = true; down["location"] = 3; }
-            string err = CdpCall("Input.dispatchKeyEvent", down, ct, out res);
-            if (err == null)
+            finally
             {
-                Dictionary<string, object> up = Json.O("type", "keyUp", "key", k.Key, "code", k.Code, "windowsVirtualKeyCode", k.Vk, "nativeVirtualKeyCode", k.Vk, "modifiers", mask);
-                if (k.Keypad) { up["isKeypad"] = true; up["location"] = 3; }
-                err = CdpCall("Input.dispatchKeyEvent", up, ct, out res);
-            }
-            for (int i = held.Count - 1; i >= 0; i--)
-            {
-                KeyPress mk = held[i];
-                mask &= ~(mk.Code == "ControlLeft" ? 2 : mk.Code == "AltLeft" ? 1 : 8);
-                CdpCall("Input.dispatchKeyEvent", Json.O("type", "keyUp", "key", mk.Key, "code", mk.Code, "windowsVirtualKeyCode", mk.Vk, "nativeVirtualKeyCode", mk.Vk, "modifiers", mask, "location", 1), ct, out res);
+                for (int i = down.Count - 1; i >= 0; i--)
+                {
+                    string uerr = CdpCall("Input.dispatchKeyEvent", KeyEvent(down[i], "keyUp", mask, false, false), 3000, release, out res);
+                    if (err == null && uerr != null && i == down.Count - 1) err = uerr;
+                }
+                for (int i = held.Count - 1; i >= 0; i--)
+                {
+                    KeyPress mk = held[i];
+                    mask &= ~(mk.Code == "ControlLeft" ? 2 : mk.Code == "AltLeft" ? 1 : 8);
+                    CdpCall("Input.dispatchKeyEvent", Json.O("type", "keyUp", "key", mk.Key, "code", mk.Code, "windowsVirtualKeyCode", mk.Vk, "nativeVirtualKeyCode", mk.Vk, "modifiers", mask, "location", 1), 3000, release, out res);
+                }
             }
             return err;
         }
@@ -2115,6 +2194,44 @@ namespace MinGent
                     long db;
                     string dl = PendingDownload(out dn, out du, out db) ? "The address started a download of " + dn + " (" + FormatBytes(db) + ").\n" : "";
                     summary = (note.Length > 0 ? note.Trim() + "\n" : "") + (happened.Length > 0 ? happened.Trim() + "\n" : "") + dl + snap;
+                    return null;
+                }
+                finally { Busy(false); }
+            }
+        }
+
+        public string OpenSearch(string url, CancelToken ct, out string html, out string finalUrl)
+        {
+            html = null;
+            finalUrl = null;
+            string err = Ensure(ct);
+            if (err != null) return err;
+            lock (opLock)
+            {
+                Reveal();
+                Busy(true);
+                try
+                {
+                    ArmEvents(ct);
+                    int start = navStarts;
+                    string ignored;
+                    err = Ui(delegate (Pending p)
+                    {
+                        int hr = wv.Navigate(url);
+                        if (hr < 0) { p.Fail("the search page could not be opened (0x" + hr.ToString("X8") + ")"); return; }
+                        p.Ok(null);
+                    }, 8000, ct, out ignored);
+                    if (err != null) return err;
+                    string note;
+                    err = WaitNavigation(start, 3000, 25000, ct, out note);
+                    TakeEvents();
+                    if (err != null) return err;
+                    if (userDialogOpen) return "the page is waiting for the user to answer a question";
+                    object v;
+                    err = Js("(" + BrowserScripts.PageHtml + ")()", ct, out v);
+                    if (err != null) return err;
+                    html = Json.Str(v, "html") ?? "";
+                    finalUrl = Json.Str(v, "url") ?? currentUrl;
                     return null;
                 }
                 finally { Busy(false); }
@@ -2434,6 +2551,7 @@ namespace MinGent
                     }
                     else
                     {
+                        PointAt(Json.Num(info, "x"), Json.Num(info, "y"), true, false, ct);
                         err = Mouse(Json.Num(info, "x"), Json.Num(info, "y"), mouse, ct);
                         if (err != null) return err;
                     }
@@ -2509,6 +2627,7 @@ namespace MinGent
                     ArmEvents(ct);
                     string before = currentUrl;
                     int start = navStarts;
+                    PointAt(x * shotScale, y * shotScale, true, false, ct);
                     err = Mouse(x * shotScale, y * shotScale, mouse, ct);
                     if (err != null) return err;
                     return AfterAction(start, before, ct, mouse.Describe() + " at " + Math.Round(x) + ", " + Math.Round(y) + " in the screenshot.", out summary);
@@ -2560,6 +2679,7 @@ namespace MinGent
                     if (err != null) return err;
                     string before = currentUrl;
                     int start = navStarts;
+                    PointAt(px, py, false, false, ct);
                     err = MoveMouse(px, py, 0, ct);
                     if (err != null) return err;
                     ct.Sleep(450);
@@ -2595,6 +2715,9 @@ namespace MinGent
                             err = Point(toRef, toX, toY, ct, out bx, out by, out to);
                             if (err != null) return err;
                             object v;
+                            PointAt(ax, ay, true, true, ct);
+                            System.Drawing.Point dropAt;
+                            if (ScreenOf(bx, by, ct, out dropAt)) AgentCursor.PointAt(dropAt, false);
                             string target = string.IsNullOrEmpty(toRef) ? "null" : Json.Quote(NormRef(toRef));
                             err = Js("(" + BrowserScripts.DragDrop + ")(" + Json.Quote(NormRef(fromRef)) + "," + target + "," + bx.ToString("0.##", CultureInfo.InvariantCulture) + "," + by.ToString("0.##", CultureInfo.InvariantCulture) + ")", ct, out v);
                             if (err != null) return err;
@@ -2608,11 +2731,15 @@ namespace MinGent
                     err = Point(toRef, toX, toY, ct, out bx, out by, out to);
                     if (err != null) return err;
                     object res;
+                    PointAt(ax, ay, true, true, ct);
+                    System.Drawing.Point endAt;
+                    bool showEnd = ScreenOf(bx, by, ct, out endAt);
                     err = MoveMouse(ax, ay, 0, ct);
                     if (err != null) return err;
                     ct.Sleep(40);
                     err = CdpCall("Input.dispatchMouseEvent", Json.O("type", "mousePressed", "x", ax, "y", ay, "button", "left", "buttons", 1, "clickCount", 1), ct, out res);
                     if (err != null) return err;
+                    if (showEnd) AgentCursor.PointAt(endAt, false);
                     ct.Sleep(120);
                     const int steps = 12;
                     for (int i = 1; i <= steps && err == null; i++)
@@ -2737,13 +2864,15 @@ namespace MinGent
             }
         }
 
-        public string PressKey(List<KeyPress> keys, CancelToken ct, out string summary)
+
+        public string PressKey(List<KeyPress> keys, int holdMs, CancelToken ct, out string summary)
         {
             summary = null;
             if (keys == null || keys.Count == 0) return "no key given";
             foreach (KeyPress k in keys)
             {
-                string why = Blocked(k);
+                string why = null;
+                foreach (KeyPress part in KeyCombo.Parts(k)) if (why == null) why = Blocked(part);
                 if (why != null) return why;
             }
             string err = Ensure(ct);
@@ -2760,11 +2889,11 @@ namespace MinGent
                     {
                         if (ct.IsCancelled) return "stopped by the user";
                         if (userDialogOpen) break;
-                        err = SendKey(keys[i], ct);
+                        err = SendKey(keys[i], holdMs, ct);
                         if (err != null) return err;
                         if (i + 1 < keys.Count) ct.Sleep(keys[i].Code == "Enter" || keys[i].Code == "Tab" ? 120 : 35);
                     }
-                    return AfterAction(start, before, ct, "Pressed " + KeyCombo.Describe(keys) + ".", out summary);
+                    return AfterAction(start, before, ct, KeyCombo.Describe(keys, holdMs) + ".", out summary);
                 }
                 finally { Busy(false); }
             }
@@ -2792,6 +2921,7 @@ namespace MinGent
                         if (err != null) return err;
                         int amount = pixels > 0 ? Math.Min(20000, pixels) : 400;
                         double dx = dir == "left" ? -amount : dir == "right" ? amount : 0, dy = dir == "up" ? -amount : dir == "down" ? amount : 0;
+                        PointAt(px, py, false, false, ct);
                         err = MoveMouse(px, py, 0, ct);
                         if (err != null) return err;
                         object res;
