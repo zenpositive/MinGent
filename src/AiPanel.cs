@@ -151,7 +151,9 @@ namespace MinGent
                 if (queued.Count > 0) EditQueued(queued[at > 0 ? at - 1 : queued.Count - 1]);
                 else if (!running) chat.BeginEdit(chat.LastUserItem());
             };
-            composer.FilesDropped += delegate (string[] files) { foreach (string f in files) AttachFile(f); composer.FocusInput(); };
+            composer.FilesDropped += delegate (string[] files) { AttachFiles(files); composer.FocusInput(); };
+            composer.Refused += delegate (string why) { Notice(why, 1); };
+            chat.AttachmentClicked += OpenAttachment;
             level = settings.AiMode == "auto" ? "auto" : "ask";
             composer.Level = level;
             session.Perms.Mode = level;
@@ -303,7 +305,7 @@ namespace MinGent
             string t = composer.Text;
             bool cmd = t.Length >= 1 && t.Length <= 24 && t[0] == '/' && t.IndexOfAny(new char[] { ' ', '\n', '\r', '\t' }) < 0;
             if (!cmd) slashOff = false;
-            if (!cmd || slashOff || !composer.Box.Focused || composer.HasImages) { HideSlash(); return; }
+            if (!cmd || slashOff || !composer.Box.Focused || composer.HasAttachments) { HideSlash(); return; }
             string keep = slash.Visible && slash.Selected >= 0 && slash.Selected < slash.Items.Count ? slash.Items[slash.Selected].Name : null;
             slash.Items.Clear();
             foreach (SlashCommand c in SlashCommands.All)
@@ -970,24 +972,69 @@ namespace MinGent
                     + "|All files|*.*";
                 d.Multiselect = true;
                 if (d.ShowDialog(FindForm()) != DialogResult.OK) return;
-                foreach (string f in d.FileNames) AttachFile(f);
+                AttachFiles(d.FileNames);
             }
         }
 
-        public void AttachFile(string path)
+        public void AttachFiles(string[] paths)
         {
-            if (ToolKit.IsImagePath(path))
+            if (paths == null) return;
+            List<string> full = new List<string>(), failed = new List<string>();
+            string why = null;
+            int asFiles = 0;
+            foreach (string p in paths)
             {
-                if (composer.ImageCount >= Composer.MaxImages) { Notice("A message can carry up to " + Composer.MaxImages + " images. " + Path.GetFileName(path) + " was not attached.", 1); return; }
                 string err;
-                ImageData img = ToolKit.LoadImage(path, out err);
-                if (img != null) composer.AddImage(img, Path.GetFileName(path));
-                else Notice("Could not attach " + Path.GetFileName(path) + (string.IsNullOrEmpty(err) ? "." : ": " + err), 1);
+                Attachment a = Attachments.FromPath(p, out err);
+                string name = a != null ? a.Name : Path.GetFileName((p ?? "").TrimEnd('\\', '/'));
+                if (a == null) { failed.Add(name); if (why == null && !string.IsNullOrEmpty(err)) why = err; continue; }
+                if (!a.Folder && ToolKit.IsImagePath(a.Path))
+                {
+                    string imgErr;
+                    if (composer.PictureCount < Attachments.MaxPictures) a.Image = ToolKit.LoadImage(a.Path, out imgErr);
+                    else asFiles++;
+                }
+                if (!a.Picture && composer.FileCount >= Attachments.MaxFiles) { full.Add(name); continue; }
+                composer.Add(a);
+            }
+            if (asFiles > 0)
+                Notice("A message can show the model up to " + Attachments.MaxPictures + " pictures, so " + (asFiles == 1 ? "one more was" : asFiles + " more were") + " attached as " + (asFiles == 1 ? "a file" : "files") + ". The agent can still open " + (asFiles == 1 ? "it." : "them."), 0);
+            if (failed.Count > 0)
+                Notice("Could not attach " + Names(failed) + (failed.Count == 1 && why != null ? ": " + why.TrimEnd('.') + "." : "."), 1);
+            if (full.Count > 0)
+                Notice("A message can carry up to " + Attachments.MaxFiles + " files besides its pictures, so " + Names(full) + (full.Count == 1 ? " was" : " were") + " not attached.", 1);
+        }
+
+        static string Names(List<string> names)
+        {
+            if (names.Count == 1) return names[0];
+            if (names.Count <= 3) return string.Join(", ", names.GetRange(0, names.Count - 1).ToArray()) + " and " + names[names.Count - 1];
+            return names[0] + ", " + names[1] + " and " + (names.Count - 2) + " more";
+        }
+
+        void OpenAttachment(ChatItem item, Attachment a)
+        {
+            if (a == null) return;
+            if (a.Picture)
+            {
+                string err;
+                ImageData full = a.Image ?? (a.Path != null && File.Exists(a.Path) ? ToolKit.LoadImage(a.Path, out err) : null);
+                ImagePreview.Show(FindForm(), th, full ?? a.Shown, a.Name);
                 return;
             }
-            string t = composer.Text;
-            composer.Text = (t.Length > 0 && !t.EndsWith(" ") && !t.EndsWith("\n") ? t + " " : t) + "\"" + path + "\" ";
-            composer.MoveCaretToEnd();
+            if (a.Path == null) return;
+            if (!(a.Folder ? Directory.Exists(a.Path) : File.Exists(a.Path)))
+            {
+                Notice(a.Name + " is no longer at " + a.Path + ".", 1);
+                return;
+            }
+            try
+            {
+                if (a.Folder) System.Diagnostics.Process.Start(Native.WindowsExe("explorer.exe"), "\"" + a.Path + "\"");
+                else if (DocExport.CanWrite(a.Path) || Attachments.Opens(a)) host.OpenLink(a.Path);
+                else System.Diagnostics.Process.Start(Native.WindowsExe("explorer.exe"), "/select,\"" + a.Path + "\"");
+            }
+            catch (Exception) { }
         }
 
         public void Ask(string text)
@@ -1008,7 +1055,7 @@ namespace MinGent
             string label;
             string ctx = host.ActiveContext(out label);
             if (ctx == null) label = null;
-            StartRun(request, new List<ImageData>(), ctx, label, null);
+            StartRun(request, null, ctx, label, null);
         }
 
         readonly List<ChatItem> queued = new List<ChatItem>();
@@ -1018,26 +1065,32 @@ namespace MinGent
             if (running)
             {
                 string q = composer.Text.Trim();
-                if (q.Length == 0)
+                if (q.Length == 0 && !composer.HasAttachments)
                 {
                     if (chat.PendingPermission() != null || chat.PendingQuestion() != null) chat.ScrollToEnd();
                     return;
                 }
-                if (!composer.HasImages && Slash(q)) return;
-                if (!composer.HasImages && AnswerFromComposer(q)) return;
-                if (composer.HasImages)
+                if (!composer.HasAttachments && Slash(q)) return;
+                if (AnswerFromComposer(q))
+                {
+                    if (!composer.HasAttachments) return;
+                    q = "";
+                }
+                if (composer.HasPictures)
                 {
                     Notice("Pictures can be sent once the agent has finished. Press Esc to stop it and send them now.", 1);
                     return;
                 }
+                List<Attachment> files = composer.TakeAttachments();
                 composer.Text = "";
                 ChatItem u = new ChatItem();
                 u.Kind = ChatKind.User;
                 u.Text = q;
+                u.Attachments = files.Count > 0 ? files : null;
                 u.MidRun = true;
                 u.Queued = true;
                 u.Turn = curTurn;
-                u.InboxId = session.PostUserMessage(q);
+                u.InboxId = session.PostUserMessage(InboxText(u));
                 queued.Add(u);
                 chat.Add(u);
                 UpdateQueueNotes();
@@ -1045,25 +1098,32 @@ namespace MinGent
                 return;
             }
             string text = composer.Text.Trim();
-            if (text.Length == 0 && !composer.HasImages) return;
-            if (!composer.HasImages && Slash(text)) return;
-            string held = TakeQueue(true);
-            if (held != null) text = text.Length > 0 ? held + "\n\n" + text : held;
+            if (text.Length == 0 && !composer.HasAttachments) return;
+            if (!composer.HasAttachments && Slash(text)) return;
+            List<Attachment> parked;
+            string held = TakeQueue(true, out parked);
+            if (held != null) text = text.Length > 0 && held.Length > 0 ? held + "\n\n" + text : held + text;
             ChatItem stale = chat.PendingQuestion();
             if (stale != null)
             {
                 UserAnswer typed = new UserAnswer();
                 typed.Text = text;
-                if (stale.Question != null && stale.Question.PlanApproval && !composer.HasImages) typed.Choice = PlanReply.Choice(stale.Question.Options, text);
+                if (stale.Question != null && stale.Question.PlanApproval && !composer.HasAttachments) typed.Choice = PlanReply.Choice(stale.Question.Options, text);
                 chat.AnswerQuestion(stale, typed);
             }
-            List<ImageData> images = composer.TakeImages();
+            List<Attachment> atts = composer.TakeAttachments();
+            if (parked != null) atts.InsertRange(0, parked);
             if (chat.Editing) chat.CancelEdit();
             composer.Text = "";
             string label = null;
             string ctxText = settings.AiSendContext && composer.ContextEnabled ? host.ActiveContext(out label) : null;
             if (ctxText == null) label = null;
-            StartRun(text, images, ctxText, label, null);
+            StartRun(text, atts, ctxText, label, null);
+        }
+
+        static string InboxText(ChatItem u)
+        {
+            return Attachments.WithBlock(u.Text, u.Attachments);
         }
 
         void CheckInbox()
@@ -1122,7 +1182,7 @@ namespace MinGent
         {
             if (!queued.Contains(u)) return true;
             u.Text = text;
-            if (u.InboxId > 0 && !session.ReplaceMessage(u.InboxId, text)) u.InboxId = running ? session.PostUserMessage(text) : 0;
+            if (u.InboxId > 0 && !session.ReplaceMessage(u.InboxId, InboxText(u))) u.InboxId = running ? session.PostUserMessage(InboxText(u)) : 0;
             chat.Changed(u);
             Later(UpdateQueueNotes);
             if (!running) Later(FlushHeld);
@@ -1186,14 +1246,16 @@ namespace MinGent
                 UpdateQueueNotes();
                 return;
             }
-            string merged = TakeQueue(false);
+            List<Attachment> atts;
+            string merged = TakeQueue(false, out atts);
             if (merged == null) return;
-            if (send) StartRun(merged, new List<ImageData>(), null, null, null);
-            else Park(merged);
+            if (send) StartRun(merged, atts, null, null, null);
+            else Park(merged, atts);
         }
 
-        string TakeQueue(bool sending)
+        string TakeQueue(bool sending, out List<Attachment> atts)
         {
+            atts = null;
             if (queued.Count == 0) return null;
             ChatItem ed = QueuedEdit();
             if (ed != null)
@@ -1205,36 +1267,42 @@ namespace MinGent
             List<ChatItem> waiting = new List<ChatItem>(queued);
             queued.Clear();
             List<string> texts = new List<string>();
+            List<Attachment> files = new List<Attachment>();
             foreach (ChatItem u in waiting)
             {
                 if (u.InboxId > 0) session.WithdrawMessage(u.InboxId);
                 u.InboxId = 0;
                 u.Queued = false;
                 if (u.Text.Trim().Length > 0) texts.Add(u.Text.Trim());
+                if (u.Attachments != null) files.AddRange(u.Attachments);
                 chat.Remove(u);
             }
-            return texts.Count > 0 ? string.Join("\n\n", texts.ToArray()) : null;
+            if (files.Count > 0) atts = files;
+            if (texts.Count == 0 && files.Count == 0) return null;
+            return string.Join("\n\n", texts.ToArray());
         }
 
         void ParkQueue()
         {
-            string merged = TakeQueue(false);
-            if (merged != null) Park(merged);
+            List<Attachment> atts;
+            string merged = TakeQueue(false, out atts);
+            if (merged != null) Park(merged, atts);
         }
 
-        void Park(string merged)
+        void Park(string merged, List<Attachment> atts)
         {
+            if (atts != null) foreach (Attachment a in atts) composer.Add(a);
             string cur = composer.Text.Trim();
-            composer.Text = cur.Length > 0 ? merged + "\n\n" + cur : merged;
+            composer.Text = cur.Length > 0 && merged.Length > 0 ? merged + "\n\n" + cur : merged + cur;
             if (ContainsFocus) composer.FocusInput();
             composer.MoveCaretToEnd();
         }
 
-        void StartRun(string text, List<ImageData> images, string ctxText, string label, ChatItem reuse)
+        void StartRun(string text, List<Attachment> atts, string ctxText, string label, ChatItem reuse)
         {
             holdNoticeShown = false;
             bool fresh = chatFile == null;
-            if (fresh && !temporary) NewChatFile(text);
+            if (fresh && !temporary) NewChatFile(text.Trim().Length > 0 || atts == null || atts.Count == 0 ? text : atts[0].Name);
             else if (fresh) chatTitle = "Temporary chat";
             ChatItem user = reuse ?? new ChatItem();
             curTurn = ++turnCounter;
@@ -1244,7 +1312,7 @@ namespace MinGent
             user.MidRun = false;
             user.Queued = false;
             user.ContextLabel = label;
-            user.Images = images.Count > 0 ? images : null;
+            user.Attachments = atts != null && atts.Count > 0 ? atts : null;
             if (reuse == null) chat.Add(user); else chat.Changed(user);
             chat.ScrollToEnd();
             StringBuilder sb = new StringBuilder();
@@ -1252,12 +1320,14 @@ namespace MinGent
             string wsNow = host.WorkspaceFolder(out wsDefault);
             sb.Append(SystemPrompt.EnvLine(host.Editor.Tabs(false), session, wsNow, wsDefault, level)).Append("\n\n");
             if (!string.IsNullOrEmpty(ctxText)) sb.Append(ctxText).Append("\n\n");
-            sb.Append(text);
+            string body = Attachments.WithBlock(text, atts);
+            sb.Append(body);
             Msg msg = new Msg("user", sb.ToString());
-            msg.Compact = text;
+            msg.Compact = body;
             msg.Turn = curTurn;
             msg.PlanApproved = approveNext;
             approveNext = false;
+            List<ImageData> images = Attachments.Images(atts);
             if (images.Count > 0) msg.Images = images;
             Begin(msg);
             SaveChat();
@@ -1301,7 +1371,7 @@ namespace MinGent
             foreach (ChatItem u in queued)
                 if (u.InboxId <= 0)
                 {
-                    u.InboxId = session.PostUserMessage(u.Text);
+                    u.InboxId = session.PostUserMessage(InboxText(u));
                     if (QueuedEdit() == u) session.HoldMessage(u.InboxId, true);
                     u.Turn = curTurn;
                     if (chat.Items.Remove(u)) chat.Items.Add(u);
@@ -1391,6 +1461,8 @@ namespace MinGent
                     string system = sess.FrozenSystem;
                     if (cfg.ContextTokens < 16000 && m.Provider == "lmstudio") ui.Notice("This model is loaded with a small context window (" + (cfg.ContextTokens / 1024) + "K tokens), so the agent can only keep a little of the conversation in mind and the browser tools are off. Load it with 32K or more for agent work (Settings > Models).", 1);
                     ui.Model(m);
+                    if (!cfg.Vision && msg.Images != null && msg.Images.Count > 0)
+                        ui.Notice(m.Display + " can't see pictures, so " + (msg.Images.Count == 1 ? "the picture" : "the pictures") + " in your message did not reach it. Pick a model that can (marked with an eye in the model list), or describe what it shows.", 1);
                     sess.Run(msg, cfg, tools, ui, host.Editor, browserOk ? browser : null, ct, log, system);
                 }
                 catch (AgentError ae) { agentError = ae; }
@@ -1453,6 +1525,7 @@ namespace MinGent
                 curActivity.Stopped = stopped;
                 chat.Changed(curActivity);
             }
+            foreach (ChatItem a in chat.Items.ToArray()) if (a.Kind == ChatKind.Activity && a.Running) StopActivity(a, stopped);
             CheckInbox();
             DetachQueue();
             if (ae != null) error = Friendly(ae.Result, ModelRef().StartsWith("lmstudio:", StringComparison.Ordinal));
@@ -1538,7 +1611,8 @@ namespace MinGent
         void Retry(Msg msg, string why)
         {
             int last = session.History.Count - 1;
-            if (!session.History.Contains(msg) || (last >= 0 && session.History[last] == msg))
+            bool summarized = session.RunMessage == msg && session.Summary != null && !session.History.Contains(msg);
+            if (!summarized && (!session.History.Contains(msg) || (last >= 0 && session.History[last] == msg)))
             {
                 if (last >= 0 && session.History[last] == msg) session.History.RemoveAt(last);
                 Begin(msg);
@@ -1860,9 +1934,7 @@ namespace MinGent
             }
             if (running && curActivity != null && curActivity.Label.Length == 0)
             {
-                curActivity.Running = false;
-                curActivity.Seconds += Math.Max(0, (DateTime.UtcNow - curActivity.Started).TotalSeconds);
-                chat.Changed(curActivity);
+                if (!StillWorking(curActivity)) StopActivity(curActivity, false);
                 ChatItem next = new ChatItem();
                 next.Kind = ChatKind.Activity;
                 next.Turn = curTurn;
@@ -1878,6 +1950,22 @@ namespace MinGent
             }
             UpdateQueueNotes();
             chat.ScrollToEnd();
+        }
+
+        static bool StillWorking(ChatItem activity)
+        {
+            if (activity.Members != null)
+                foreach (ChatItem m in activity.Members) if (m.Kind == ChatKind.Tool && m.Status == 0) return true;
+            return false;
+        }
+
+        void StopActivity(ChatItem activity, bool stopped)
+        {
+            if (!activity.Running) return;
+            activity.Running = false;
+            activity.Seconds += Math.Max(0, (DateTime.UtcNow - activity.Started).TotalSeconds);
+            if (stopped) activity.Stopped = true;
+            chat.Changed(activity);
         }
 
         static string IconFor(string tool)
@@ -1905,9 +1993,14 @@ namespace MinGent
 
         void OnToolStart(ToolCall c, string label)
         {
-            FinishStreaming();
-            curAssistant = null;
-            replyFirst = false;
+            ChatItem card = null;
+            if (c.Under != null && !toolItems.TryGetValue(c.Under, out card)) return;
+            if (card == null)
+            {
+                FinishStreaming();
+                curAssistant = null;
+                replyFirst = false;
+            }
             ChatItem it = new ChatItem();
             it.Kind = ChatKind.Tool;
             it.CallId = c.Id + "#" + c.Name;
@@ -1915,7 +2008,8 @@ namespace MinGent
             it.Icon = IconFor(c.Name);
             it.Status = 0;
             toolItems[it.CallId] = it;
-            chat.Add(it);
+            if (card != null) chat.AddUnder(card, it);
+            else chat.Add(it);
         }
 
         void OnToolOutput(ToolCall c, string text)
@@ -1935,15 +2029,20 @@ namespace MinGent
 
         void OnToolEnd(ToolCall c, ToolOutcome o)
         {
+            if (o.Background) return;
             ChatItem it;
             if (!toolItems.TryGetValue(c.Id + "#" + c.Name, out it))
             {
+                ChatItem card = null;
+                if (c.Under != null && !toolItems.TryGetValue(c.Under, out card)) return;
                 it = new ChatItem();
                 it.Kind = ChatKind.Tool;
                 it.CallId = c.Id + "#" + c.Name;
                 it.Label = AgentSession.Pretty(c.Name);
                 it.Icon = IconFor(c.Name);
-                chat.Add(it);
+                toolItems[it.CallId] = it;
+                if (card != null) chat.AddUnder(card, it);
+                else chat.Add(it);
             }
             it.Status = o.Denied ? 3 : o.Error ? 2 : 1;
             string summary = o.Summary ?? "";
@@ -1977,9 +2076,18 @@ namespace MinGent
             }
             if (it.Status == 2 && it.Detail.Length == 0) it.Detail = o.Text ?? "";
             chat.Changed(it);
+            ChatItem group = it.Group;
+            if (group != null && group != curActivity && group.Kind == ChatKind.Activity && group.Running && !StillWorking(group)) StopActivity(group, false);
         }
 
         bool planAsked, approveNext;
+
+        static Control Innermost(ContainerControl c)
+        {
+            Control a = c == null ? null : c.ActiveControl;
+            while (a is ContainerControl && ((ContainerControl)a).ActiveControl != null) a = ((ContainerControl)a).ActiveControl;
+            return a;
+        }
 
         ChatItem AddQuestion(UserQuestion q, Action<UserAnswer> answered)
         {
@@ -2007,6 +2115,8 @@ namespace MinGent
             chat.Add(it);
             chat.ScrollToEnd();
             composer.Prompt = q.Wait ? "Type a message for the agent, or press Done when you're through" : "Answer the question above";
+            Control active = Innermost(FindForm());
+            if (composer.Text.Trim().Length == 0 && !composer.HasAttachments && !chat.Editing && (active == null || Contains(active))) chat.FocusAnswerWhenShown(it);
             if (curActivity != null) chat.InvalidateItem(curActivity);
             host.RevealAssistant();
             Attention(FindForm());
@@ -2063,13 +2173,13 @@ namespace MinGent
                 if (a != null && !a.Cancelled && a.Choice < 0 && !string.IsNullOrEmpty(a.Text) && !running)
                 {
                     string said = a.Text;
-                    BeginInvoke(new Action(delegate { if (!running) StartRun(said, new List<ImageData>(), null, null, null); }));
+                    BeginInvoke(new Action(delegate { if (!running) StartRun(said, null, null, null, null); }));
                     return;
                 }
                 if (a == null || a.Cancelled || a.Choice < 0 || a.Choice >= q.Options.Count) return;
                 string c = q.Options[a.Choice];
                 if ((c == PresentPlanTool.Start || c == PresentPlanTool.StartAuto) && !running)
-                    BeginInvoke(new Action(delegate { if (!running) StartRun("Go ahead with the plan.", new List<ImageData>(), null, null, null); }));
+                    BeginInvoke(new Action(delegate { if (!running) StartRun("Go ahead with the plan.", null, null, null, null); }));
                 else if (c == PresentPlanTool.Keep) composer.FocusInput();
             };
             chat.Add(card);
@@ -2090,14 +2200,11 @@ namespace MinGent
                 chat.AnswerQuestion(pq, a);
                 return false;
             }
-            if (q.Options.Count > 0 && int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out n) && n >= 1 && n <= q.Options.Count) a.Choice = n - 1;
-            else
-            {
-                for (int i = 0; i < q.Options.Count; i++)
-                    if (string.Equals(q.Options[i].Trim(), text, StringComparison.OrdinalIgnoreCase)) a.Choice = i;
-                if (a.Choice < 0 && q.PlanApproval) a.Choice = PlanReply.Choice(q.Options, text);
-                if (a.Choice < 0) a.Text = text;
-            }
+            for (int i = 0; i < q.Options.Count && a.Choice < 0; i++)
+                if (string.Equals(q.Options[i].Trim(), text, StringComparison.OrdinalIgnoreCase)) a.Choice = i;
+            if (a.Choice < 0 && q.Options.Count > 0 && int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out n) && n >= 1 && n <= q.Options.Count) a.Choice = n - 1;
+            if (a.Choice < 0 && q.PlanApproval) a.Choice = PlanReply.Choice(q.Options, text);
+            if (a.Choice < 0) a.Text = text;
             composer.Text = "";
             chat.AnswerQuestion(pq, a);
             return true;
@@ -2195,7 +2302,7 @@ namespace MinGent
             UpdateTemporaryUi();
             curTurn = turnCounter = 0;
             composer.ClearUsage();
-            composer.ClearImages();
+            composer.ClearAttachments();
             composer.Prompt = null;
             afterRunHint = null;
             composer.Invalidate();
@@ -2468,12 +2575,13 @@ namespace MinGent
                 if ((it.Kind == ChatKind.Permission || it.Kind == ChatKind.Question) && it.Decision < 0) continue;
                 if (it.Kind == ChatKind.User && it.Queued) continue;
                 Dictionary<string, object> o = Json.O("k", (int)it.Kind, "t", Clip(it.Text, 200000));
-                if (it.Kind == ChatKind.Tool) { o["l"] = it.Label; o["s"] = it.Summary; o["d"] = Clip(it.Detail, 20000); o["st"] = it.Status; o["i"] = it.Icon; if (it.Report.Length > 0) o["rp"] = Clip(it.Report, 20000); }
+                if (it.Kind == ChatKind.Tool) { o["l"] = it.Label; o["s"] = it.Summary; o["d"] = Clip(it.Detail, it.Under != null ? 8000 : 20000); o["st"] = it.Status; o["i"] = it.Icon; if (it.Report.Length > 0) o["rp"] = Clip(it.Report, 20000); if (it.Under != null) o["up"] = true; }
                 if (it.Kind == ChatKind.Thinking) o["sec"] = it.Seconds;
                 if (it.Kind == ChatKind.Activity) { o["sec"] = it.Seconds + (it.Running ? Math.Max(0, (DateTime.UtcNow - it.Started).TotalSeconds) : 0); if (it.Stopped) o["stp"] = true; if (!string.IsNullOrEmpty(it.Label)) o["l"] = it.Label; }
                 if (it.Kind == ChatKind.Permission) { o["l"] = it.Ask.Title; o["dec"] = it.Decision; if (!string.IsNullOrEmpty(it.Ask.Summary)) o["sm"] = it.Ask.Summary; }
                 if (it.Kind == ChatKind.Question) { o["l"] = it.Question != null ? it.Question.Title : ""; o["dec"] = it.Decision; if (it.Question != null && it.Question.Wait) o["w"] = true; }
                 if (it.Kind == ChatKind.User && it.ContextLabel != null) o["c"] = it.ContextLabel;
+                if (it.Kind == ChatKind.User && it.Attachments != null && it.Attachments.Count > 0) o["at"] = Attachments.ToJson(it.Attachments);
                 if (it.Kind == ChatKind.User && it.Turn > 0) o["tn"] = it.Turn;
                 if (it.Kind == ChatKind.User && it.MidRun) o["mid"] = true;
                 if (it.Kind == ChatKind.Notice) o["lv"] = it.Level;
@@ -2510,7 +2618,7 @@ namespace MinGent
                     }
                     o["calls"] = calls;
                 }
-                if (m.Images != null && m.Images.Count > 0) o["t"] = (m.Text ?? "") + "\n(" + m.Images.Count + " image(s) were attached)";
+                if (m.Images != null && m.Images.Count > 0) o["t"] = (m.Text ?? "") + "\n(" + (m.Images.Count == 1 ? "a picture was" : m.Images.Count + " pictures were") + " attached here)";
                 hist.Add(o);
             }
             root["history"] = hist;
@@ -2610,6 +2718,7 @@ namespace MinGent
             session.Summary = string.IsNullOrEmpty(summary) ? null : summary;
             List<object> items = Json.List(root, "items");
             List<ChatItem> loaded = new List<ChatItem>();
+            ChatItem card = null;
             if (items != null)
                 foreach (object o in items)
                 {
@@ -2618,12 +2727,17 @@ namespace MinGent
                     if (k < 0 || k > (int)ChatKind.Question) continue;
                     it.Kind = (ChatKind)k;
                     it.Text = Json.Str(o, "t") ?? "";
-                    if (it.Kind == ChatKind.Tool) { it.Label = Json.Str(o, "l") ?? ""; it.Summary = Json.Str(o, "s") ?? ""; it.Detail = Json.Str(o, "d") ?? ""; it.Report = Json.Str(o, "rp") ?? ""; it.Status = Json.Int(o, "st"); it.Icon = Json.Str(o, "i") ?? "dot"; if (it.Status == 0) it.Status = 3; }
+                    if (it.Kind == ChatKind.Tool)
+                    {
+                        it.Label = Json.Str(o, "l") ?? ""; it.Summary = Json.Str(o, "s") ?? ""; it.Detail = Json.Str(o, "d") ?? ""; it.Report = Json.Str(o, "rp") ?? ""; it.Status = Json.Int(o, "st"); it.Icon = Json.Str(o, "i") ?? "dot"; if (it.Status == 0) it.Status = 3;
+                        if (Json.Bool(o, "up")) it.Under = card;
+                        else if (it.Icon == "branch") card = it;
+                    }
                     if (it.Kind == ChatKind.Thinking) it.Seconds = Json.Num(o, "sec");
                     if (it.Kind == ChatKind.Activity) { it.Seconds = Json.Num(o, "sec"); it.Stopped = Json.Bool(o, "stp"); it.Label = Json.Str(o, "l") ?? ""; }
                     if (it.Kind == ChatKind.Permission) { it.Ask = new PermissionAsk(); it.Ask.Title = Json.Str(o, "l") ?? ""; it.Ask.Summary = PermissionAsk.PlainSummary(Json.Str(o, "sm"), 160); it.Decision = Json.Int(o, "dec"); if (it.Decision < 0) continue; }
                     if (it.Kind == ChatKind.Question) { it.Question = new UserQuestion(); it.Question.Title = Json.Str(o, "l") ?? ""; it.Question.Wait = Json.Bool(o, "w"); it.Decision = Json.Int(o, "dec"); if (it.Decision < 0) continue; }
-                    if (it.Kind == ChatKind.User) { it.ContextLabel = Json.Str(o, "c"); it.MidRun = Json.Bool(o, "mid"); it.Turn = Json.Int(o, "tn"); }
+                    if (it.Kind == ChatKind.User) { it.ContextLabel = Json.Str(o, "c"); it.MidRun = Json.Bool(o, "mid"); it.Turn = Json.Int(o, "tn"); it.Attachments = Attachments.FromJson(Json.Get(o, "at")); }
                     if (it.Kind == ChatKind.Notice) it.Level = Json.Int(o, "lv");
                     if (it.Kind == ChatKind.Footer) { it.Undone = Json.Bool(o, "ud"); it.UndoneText = Json.Str(o, "ut"); it.Action = null; }
                     if (it.Kind == ChatKind.Error) continue;
@@ -2826,20 +2940,6 @@ namespace MinGent
             return s;
         }
 
-        static string ContextOf(Msg m)
-        {
-            if (m == null || m.Compact == null) return null;
-            string t = m.Text ?? "";
-            string tail = "\n\n" + m.Compact;
-            if (!t.EndsWith(tail, StringComparison.Ordinal)) return null;
-            string head = t.Substring(0, t.Length - tail.Length);
-            if (!head.StartsWith("[", StringComparison.Ordinal)) return null;
-            int env = head.IndexOf("]\n\n", StringComparison.Ordinal);
-            if (env < 0) return null;
-            string ctx = head.Substring(env + 3).Trim('\n');
-            return ctx.Length > 0 ? ctx : null;
-        }
-
         int LaterTurns(int index)
         {
             int n = 0;
@@ -2875,6 +2975,36 @@ namespace MinGent
             return l.Count > 0 ? string.Join("\n\n", l.ToArray()) : null;
         }
 
+        List<Attachment> MidRunAttachments(int start)
+        {
+            List<Attachment> l = new List<Attachment>();
+            int end = TurnEnd(start);
+            for (int k = start + 1; k < end; k++)
+            {
+                ChatItem it = chat.Items[k];
+                if (it.Kind == ChatKind.User && it.MidRun && !it.Queued && it.Attachments != null) l.AddRange(it.Attachments);
+            }
+            return l.Count > 0 ? l : null;
+        }
+
+        static List<Attachment> Revive(List<Attachment> list, ref int lost, List<string> gone)
+        {
+            List<Attachment> r = new List<Attachment>();
+            if (list == null) return r;
+            foreach (Attachment a in list)
+            {
+                if (a.Path != null && !File.Exists(a.Path) && !Directory.Exists(a.Path)) { gone.Add(a.Name); continue; }
+                if (!a.Picture || a.Image != null) { r.Add(a); continue; }
+                string err;
+                ImageData img = a.Path != null ? ToolKit.LoadImage(a.Path, out err) : null;
+                if (img == null) { if (a.Path == null) lost++; else gone.Add(a.Name); continue; }
+                Attachment c = new Attachment();
+                c.Path = a.Path; c.Name = a.Name; c.Size = a.Size; c.Folder = a.Folder; c.Preview = a.Preview; c.Image = img;
+                r.Add(c);
+            }
+            return r;
+        }
+
         bool Resend(ChatItem user, string text, bool retry)
         {
             if (running) return false;
@@ -2889,6 +3019,8 @@ namespace MinGent
             int later = LaterTurns(i);
             List<ChatItem> feet = UndoableFooters(i);
             string extra = MidRunTexts(i);
+            List<Attachment> extraFiles = MidRunAttachments(i);
+            if (extra == null && extraFiles != null) extra = "";
             bool undo = false;
             string head = retry ? "Run this message again?" : later > 0 ? "Send the edited message?" : null;
             string what = later > 0 ? "The reply and the " + (later == 1 ? "message after it are" : later + " messages after it are") + " removed from the chat." : "The reply is replaced.";
@@ -2906,12 +3038,15 @@ namespace MinGent
             }
             ParkQueue();
             if (running || chat.Items.IndexOf(user) != i) return false;
-            if (extra != null && retry) text = text + "\n\n" + extra;
+            if (!string.IsNullOrEmpty(extra) && retry) text = text.Length > 0 ? text + "\n\n" + extra : extra;
             Msg original = null;
             foreach (Msg m in session.History) if (m.Turn == turn && m.Role == "user") { original = m; break; }
-            string ctxText = ContextOf(original);
+            string ctxText = AgentSession.ContextOf(original);
             string label = ctxText != null ? user.ContextLabel : null;
-            List<ImageData> images = user.Images != null ? new List<ImageData>(user.Images) : new List<ImageData>();
+            int lost = 0;
+            List<string> gone = new List<string>();
+            List<Attachment> atts = Revive(user.Attachments, ref lost, gone);
+            if (retry && extraFiles != null) atts.AddRange(Revive(extraFiles, ref lost, gone));
             string undone = undo ? UndoFooters(feet) : null;
             bool todos = RemovesTodos(chat.Items, i, chat.Items.Count);
             if (chat.Editing) chat.CancelEdit();
@@ -2926,8 +3061,10 @@ namespace MinGent
             }
             AfterHistoryEdit(todos);
             if (undone != null) Notice(undone, 0);
-            StartRun(text, images, ctxText, label, null);
-            if (extra != null && !retry) Park(extra);
+            StartRun(text, atts, ctxText, label, null);
+            if (extra != null && !retry) Park(extra, extraFiles);
+            if (lost > 0) Notice((lost == 1 ? "A pasted picture is" : lost + " pasted pictures are") + " not kept after the chat is closed, so " + (lost == 1 ? "it was" : "they were") + " not sent again. Paste " + (lost == 1 ? "it" : "them") + " again if the agent needs " + (lost == 1 ? "it." : "them."), 1);
+            if (gone.Count > 0) Notice((gone.Count == 1 ? "\"" + gone[0] + "\" no longer exists, so it was" : gone.Count + " attached files no longer exist (" + string.Join(", ", gone.ToArray()) + "), so they were") + " not sent again.", 1);
             return true;
         }
 
@@ -3061,6 +3198,8 @@ namespace MinGent
 
         void UpdateTemporaryUi()
         {
+            if (temporary) BrowserData.Mark(BrowserData.TemporaryMarker);
+            else BrowserData.Unmark(BrowserData.TemporaryMarker);
             bTemp.Checked = temporary;
             bTemp.Visible = temporary || EmptyLayout;
             tip.SetToolTip(bTemp, temporary
@@ -3695,23 +3834,25 @@ namespace MinGent
 
     class Composer : Control
     {
-        static bool SafeContainsImage()
+        bool CanPasteAttachment()
         {
-            try { return Clipboard.ContainsImage() && !Clipboard.ContainsText(); } catch { return false; }
+            return Attachments.ClipboardFiles() != null || Attachments.ClipboardHasPicture();
         }
 
-        void PasteImage()
+        void PasteAttachment()
         {
-            try
+            string[] files = Attachments.ClipboardFiles();
+            if (files != null) { if (FilesDropped != null) FilesDropped(files); return; }
+            if (PictureCount >= Attachments.MaxPictures) { if (Refused != null) Refused("A message can carry up to " + Attachments.MaxPictures + " pictures."); return; }
+            using (Image img = Attachments.ClipboardPicture())
             {
-                if (images.Count < MaxImages)
-                    using (Image img = Clipboard.GetImage())
-                        if (img != null) AddImage(ImageTools.Encode(img, 1568), "Pasted image");
+                if (img == null) return;
+                ImageData d;
+                try { d = ImageTools.Encode(img, 1568); } catch (Exception) { d = null; }
+                if (d != null) Add(Attachments.FromImage(d, "Pasted image"));
+                else if (Refused != null) Refused("Could not read the picture on the clipboard.");
             }
-            catch { }
         }
-
-        public const int MaxImages = 6;
         public readonly CueTextBox Box = new CueTextBox();
         public readonly ModelChip Model = new ModelChip();
         readonly ToggleSwitch auto = new ToggleSwitch("Auto");
@@ -3720,11 +3861,13 @@ namespace MinGent
         Theme th = Theme.Light(Color.SteelBlue);
         bool running, hoverSend, hoverEffort, hoverAttach, hoverCtx, hoverMeter;
         int usedTok, ctxTok;
-        int hoverImageX = -1;
+        int hoverTile = -1, hiddenTiles;
+        bool hoverRemove;
         string contextLabel;
         bool contextOff;
-        readonly List<KeyValuePair<ImageData, string>> images = new List<KeyValuePair<ImageData, string>>();
-        readonly List<Rectangle> imageX = new List<Rectangle>();
+        readonly List<Attachment> attachments = new List<Attachment>();
+        readonly List<Rectangle> tiles = new List<Rectangle>();
+        readonly Dictionary<Attachment, Bitmap> thumbs = new Dictionary<Attachment, Bitmap>();
         public string EffortText = "";
 
         public void SetUsage(int used, int ctx)
@@ -3798,7 +3941,10 @@ namespace MinGent
         }
 
         public event EventHandler MeterClicked;
-        public bool HasImages { get { return images.Count > 0; } }
+        public bool HasAttachments { get { return attachments.Count > 0; } }
+        public bool HasPictures { get { return PictureCount > 0; } }
+        public int PictureCount { get { return Attachments.Pictures(attachments); } }
+        public int FileCount { get { return attachments.Count - PictureCount; } }
         public bool ShowEffort;
         const string IdleCue = "Ask anything, or describe a task";
         const string PlanCue = "Describe the task - the agent researches and shows you a plan first";
@@ -3822,6 +3968,7 @@ namespace MinGent
         public event Action<string> LevelChosen;
         public event EventHandler CustomizeAuto;
         public event Action<string[]> FilesDropped;
+        public event Action<string> Refused;
         public event EventHandler EditLastRequested;
         public Func<Keys, bool> KeyFilter;
 
@@ -3853,8 +4000,8 @@ namespace MinGent
             plan.Changed += delegate { UpdateCue(); PerformLayout(); if (PlanChanged != null) PlanChanged(plan.On); };
             Model.Click += delegate { if (ModelClicked != null) ModelClicked(this, EventArgs.Empty); };
             Box.KeyDown += OnBoxKey;
-            Box.CanPasteOther = delegate { return images.Count < MaxImages && SafeContainsImage(); };
-            Box.PasteOther = PasteImage;
+            Box.CanPasteOther = CanPasteAttachment;
+            Box.PasteOther = PasteAttachment;
             Box.TextChanged += delegate { Relayout(); };
             Box.GotFocus += delegate { Invalidate(); };
             Box.LostFocus += delegate { Invalidate(); };
@@ -3874,7 +4021,7 @@ namespace MinGent
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) tip.Dispose();
+            if (disposing) { tip.Dispose(); DropThumbs(); }
             base.Dispose(disposing);
         }
 
@@ -3938,7 +4085,6 @@ namespace MinGent
 
         public override string Text { get { return Box.Text; } set { Box.Text = value ?? ""; } }
         public bool ContextEnabled { get { return !contextOff; } }
-        public int ImageCount { get { return images.Count; } }
 
         public string ContextLabel
         {
@@ -3954,7 +4100,7 @@ namespace MinGent
             }
         }
 
-        bool ShowContextLine { get { return (!string.IsNullOrEmpty(contextLabel) && !contextOff) || images.Count > 0; } }
+        bool ShowContextLine { get { return !string.IsNullOrEmpty(contextLabel) && !contextOff; } }
 
         public void SetTheme(Theme t)
         {
@@ -3976,27 +4122,84 @@ namespace MinGent
         public void FocusInput() { Box.Focus(); }
         public void MoveCaretToEnd() { Box.SelectionStart = Box.TextLength; Box.ScrollToCaret(); }
 
-        public void AddImage(ImageData img, string name)
+        public bool Add(Attachment a)
         {
-            if (images.Count >= MaxImages) return;
-            images.Add(new KeyValuePair<ImageData, string>(img, name));
+            if (a == null) return false;
+            foreach (Attachment o in attachments) if (a.Path != null && string.Equals(o.Path, a.Path, StringComparison.OrdinalIgnoreCase)) return false;
+            attachments.Add(a);
             Relayout();
+            return true;
         }
 
-        public List<ImageData> TakeImages()
+        public List<Attachment> TakeAttachments()
         {
-            List<ImageData> l = new List<ImageData>();
-            foreach (KeyValuePair<ImageData, string> kv in images) l.Add(kv.Key);
-            images.Clear();
+            List<Attachment> l = new List<Attachment>(attachments);
+            attachments.Clear();
+            DropThumbs();
             Relayout();
             return l;
         }
 
-        public void ClearImages()
+        public void ClearAttachments()
         {
-            if (images.Count == 0) return;
-            images.Clear();
+            if (attachments.Count == 0) return;
+            attachments.Clear();
+            DropThumbs();
             Relayout();
+        }
+
+        public void RemoveAttachment(int i)
+        {
+            if (i < 0 || i >= attachments.Count) return;
+            Attachment a = attachments[i];
+            attachments.RemoveAt(i);
+            Bitmap b;
+            if (thumbs.TryGetValue(a, out b)) { thumbs.Remove(a); if (b != null) b.Dispose(); }
+            hoverTile = -1;
+            hoverRemove = false;
+            tip.Hide(this);
+            Relayout();
+        }
+
+        void DropThumbs()
+        {
+            foreach (Bitmap b in thumbs.Values) if (b != null) b.Dispose();
+            thumbs.Clear();
+            hoverTile = -1;
+            hoverRemove = false;
+        }
+
+        Bitmap Thumb(Attachment a, Size size)
+        {
+            Bitmap b;
+            if (thumbs.TryGetValue(a, out b) && (b == null || b.Size == size)) return b;
+            if (b != null) b.Dispose();
+            b = Attachments.Cover(a.Shown, size.Width, size.Height);
+            thumbs[a] = b;
+            return b;
+        }
+
+        int TileH { get { return UI.S(48); } }
+
+        int LayoutTiles(int width, List<Rectangle> into)
+        {
+            if (into != null) { into.Clear(); hiddenTiles = 0; }
+            if (attachments.Count == 0) return 0;
+            int left = UI.S(12), right = width - UI.S(12), gap = UI.S(6), top = UI.S(10) + (ShowContextLine ? UI.S(30) : 0);
+            int x = left, row = 0, shown = 0;
+            for (int i = 0; i < attachments.Count; i++)
+            {
+                Attachment a = attachments[i];
+                int w = a.Picture ? TileH : Attachments.FileWidth(null, a, Font, Fonts.Small, UI.S(22), Math.Max(UI.S(60), right - left));
+                if (x > left && x + w > right) { row++; x = left; }
+                if (row >= 2) break;
+                if (into != null) into.Add(new Rectangle(x, top + row * (TileH + gap), w, TileH));
+                x += w + gap;
+                shown++;
+            }
+            if (into != null) hiddenTiles = attachments.Count - shown;
+            int rows = Math.Min(2, row + 1);
+            return rows * TileH + (rows - 1) * gap + UI.S(8);
         }
 
         int LineH { get { return (int)Math.Ceiling(Box.Font.GetHeight()) + UI.S(1); } }
@@ -4022,7 +4225,7 @@ namespace MinGent
             int lines = Math.Min(12, TextLines(width - UI.S(32)));
             int h = UI.S(14) + Math.Max(2, lines) * LineH + UI.S(4) + BottomH;
             if (ShowContextLine) h += UI.S(28);
-            return h;
+            return h + LayoutTiles(width, null);
         }
 
         int lastH;
@@ -4040,7 +4243,7 @@ namespace MinGent
         protected override void OnLayout(LayoutEventArgs e)
         {
             base.OnLayout(e);
-            int top = UI.S(14) + (ShowContextLine ? UI.S(28) : 0);
+            int top = UI.S(14) + (ShowContextLine ? UI.S(28) : 0) + LayoutTiles(Width, tiles);
             int bottom = Height - BottomH;
             Box.SetBounds(UI.S(16), top, Width - UI.S(32), Math.Max(LineH, bottom - top));
             Rectangle ar = AttachRect;
@@ -4101,41 +4304,31 @@ namespace MinGent
             Rectangle r = new Rectangle(0, 0, Width - 1, Height - 1);
             Glyphs.FillRound(g, th.InputBack, r, UI.S(18));
             Glyphs.DrawRound(g, Box.Focused ? Theme.Blend(th.InputBorder, th.Fore, 0.35) : th.InputBorder, r, UI.S(18));
-            imageX.Clear();
             if (ShowContextLine)
             {
-                int x = UI.S(12);
                 Rectangle cr = CtxRect;
-                if (!string.IsNullOrEmpty(contextLabel) && !contextOff)
-                {
-                    int w = Math.Min(Width - UI.S(24), CtxTextW + UI.S(52));
-                    Rectangle chip = new Rectangle(x, cr.Y, w, cr.Height);
-                    Glyphs.FillRound(g, hoverCtx ? th.ButtonHover : th.Chrome, chip, UI.S(8));
-                    Glyphs.Draw("file", g, new Rectangle(chip.X + UI.S(6), chip.Y, UI.S(14), chip.Height), th.ChromeDim);
-                    TextRenderer.DrawText(g, contextLabel, Font, new Rectangle(chip.X + UI.S(24), chip.Y, w - UI.S(48), chip.Height), th.ChromeFore, TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
-                    Glyphs.X(g, CtxCloseRect, th.ChromeDim, UI.S(3));
-                    x = chip.Right + UI.S(6);
-                }
-                for (int i = 0; i < images.Count; i++)
-                {
-                    KeyValuePair<ImageData, string> kv = images[i];
-                    int w = Math.Min(UI.S(160), TextRenderer.MeasureText(kv.Value, Font).Width + UI.S(52));
-                    if (x + w > Width - UI.S(12))
-                    {
-                        string more = "+" + (images.Count - i);
-                        TextRenderer.DrawText(g, more, Font, new Rectangle(x, cr.Y, UI.S(40), cr.Height), th.ChromeDim, TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
-                        break;
-                    }
-                    Rectangle chip = new Rectangle(x, cr.Y, w, cr.Height);
-                    Glyphs.FillRound(g, th.Chrome, chip, UI.S(8));
-                    TextRenderer.DrawText(g, kv.Value, Font, new Rectangle(chip.X + UI.S(10), chip.Y, w - UI.S(36), chip.Height), th.ChromeFore, TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
-                    Rectangle xr = new Rectangle(chip.Right - UI.S(23), chip.Y + UI.S(2), UI.S(20), UI.S(20));
-                    while (imageX.Count < i) imageX.Add(Rectangle.Empty);
-                    imageX.Add(xr);
-                    if (hoverImageX == i) Glyphs.Hover(g, th, th.ButtonHover, xr, UI.S(5));
-                    Glyphs.X(g, xr, th.ChromeDim, UI.S(3));
-                    x = chip.Right + UI.S(6);
-                }
+                int w = Math.Min(Width - UI.S(24), CtxTextW + UI.S(52));
+                Rectangle chip = new Rectangle(UI.S(12), cr.Y, w, cr.Height);
+                Glyphs.FillRound(g, hoverCtx ? th.ButtonHover : th.Chrome, chip, UI.S(8));
+                Glyphs.Draw("file", g, new Rectangle(chip.X + UI.S(6), chip.Y, UI.S(14), chip.Height), th.ChromeDim);
+                TextRenderer.DrawText(g, contextLabel, Font, new Rectangle(chip.X + UI.S(24), chip.Y, w - UI.S(48), chip.Height), th.ChromeFore, TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
+                Glyphs.X(g, CtxCloseRect, th.ChromeDim, UI.S(3));
+            }
+            for (int i = 0; i < tiles.Count && i < attachments.Count; i++)
+            {
+                Attachment a = attachments[i];
+                Rectangle tr = tiles[i];
+                if (a.Picture) Attachments.DrawPicture(g, th, tr, Thumb(a, tr.Size));
+                else Attachments.DrawFile(g, th, tr, a, Font, Fonts.Small, th.Chrome, UI.S(22));
+                if (hoverTile == i) Attachments.DrawRemove(g, th, Attachments.RemoveRect(tr), hoverRemove);
+            }
+            if (hiddenTiles > 0 && tiles.Count > 0)
+            {
+                Rectangle last = tiles[tiles.Count - 1];
+                string more = "+" + hiddenTiles.ToString(CultureInfo.InvariantCulture);
+                int mw = TextRenderer.MeasureText(more, Font).Width + UI.S(8);
+                if (last.Right + UI.S(6) + mw <= Width - UI.S(12))
+                    TextRenderer.DrawText(g, more, Font, new Rectangle(last.Right + UI.S(6), last.Y, mw, last.Height), th.ChromeDim, TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
             }
             Rectangle ar = AttachRect;
             if (hoverAttach) Glyphs.Hover(g, th, th.ButtonHover, ar, ar.Height / 2);
@@ -4173,8 +4366,8 @@ namespace MinGent
                     TextRenderer.DrawText(g, PercentText, Font, new Rectangle(mr.X + UI.S(6) + ring + UI.S(5), mr.Y, mr.Width - ring - UI.S(11), mr.Height), frac >= 0.7 && !th.HighContrast ? col : th.ChromeDim,
                         TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
             }
-            bool stopMode = running && Box.TextLength == 0;
-            bool can = stopMode || Box.TextLength > 0 || images.Count > 0;
+            bool stopMode = running && Box.TextLength == 0 && attachments.Count == 0;
+            bool can = stopMode || Box.TextLength > 0 || attachments.Count > 0;
             Color fill = stopMode ? th.Fore : can ? th.Accent : th.ButtonHover;
             if (hoverSend && can) fill = Theme.Blend(fill, th.Dark ? Color.White : Color.Black, 0.12);
             Glyphs.FillRound(g, fill, sr, sr.Height / 2);
@@ -4182,9 +4375,11 @@ namespace MinGent
             Glyphs.Draw(stopMode ? "stop" : "send", g, sr, fg);
         }
 
-        int ImageXAt(Point p)
+        int TileAt(Point p, out bool remove)
         {
-            for (int i = 0; i < imageX.Count; i++) if (!imageX[i].IsEmpty && imageX[i].Contains(p)) return i;
+            remove = false;
+            for (int i = 0; i < tiles.Count; i++)
+                if (tiles[i].Contains(p)) { remove = Attachments.RemoveRect(tiles[i]).Contains(p); return i; }
             return -1;
         }
 
@@ -4193,16 +4388,17 @@ namespace MinGent
             base.OnMouseMove(e);
             bool s = SendRect.Contains(e.Location), ef = EffortRect.Contains(e.Location), at = AttachRect.Contains(e.Location);
             bool cx = ShowContextLine && CtxCloseRect.Contains(e.Location);
-            int ix = ShowContextLine ? ImageXAt(e.Location) : -1;
+            bool rm;
+            int ti = TileAt(e.Location, out rm);
             Rectangle mr;
             bool mt;
             bool me = MeterLayout(out mr, out mt) && mr.Contains(e.Location);
-            if (s != hoverSend || ef != hoverEffort || at != hoverAttach || cx != hoverCtx || ix != hoverImageX || me != hoverMeter)
+            if (s != hoverSend || ef != hoverEffort || at != hoverAttach || cx != hoverCtx || ti != hoverTile || rm != hoverRemove || me != hoverMeter)
             {
-                hoverSend = s; hoverEffort = ef; hoverAttach = at; hoverCtx = cx; hoverImageX = ix; hoverMeter = me;
-                Cursor = s || ef || at || cx || ix >= 0 || me ? Cursors.Hand : Cursors.IBeam;
+                hoverSend = s; hoverEffort = ef; hoverAttach = at; hoverCtx = cx; hoverTile = ti; hoverRemove = rm; hoverMeter = me;
+                Cursor = s || ef || at || cx || rm || me ? Cursors.Hand : ti >= 0 ? Cursors.Default : Cursors.IBeam;
                 tip.Hide(this);
-                tip.SetToolTip(this, s ? (running && Box.TextLength == 0 ? "Stop (Esc)" : running ? "Send to the agent while it works" : "Send (Enter)") : at ? "Attach files or images" : ix >= 0 ? "Remove this image" : me ? MeterTip : null);
+                tip.SetToolTip(this, s ? (running && Box.TextLength == 0 && attachments.Count == 0 ? "Stop (Esc)" : running ? "Send to the agent while it works" : "Send (Enter)") : at ? "Attach files or images" : rm ? "Remove" : ti >= 0 ? Attachments.Tip(attachments[ti]) : me ? MeterTip : null);
                 Invalidate();
             }
         }
@@ -4210,8 +4406,8 @@ namespace MinGent
         protected override void OnMouseLeave(EventArgs e)
         {
             base.OnMouseLeave(e);
-            hoverSend = hoverEffort = hoverAttach = hoverCtx = hoverMeter = false;
-            hoverImageX = -1;
+            hoverSend = hoverEffort = hoverAttach = hoverCtx = hoverMeter = hoverRemove = false;
+            hoverTile = -1;
             Invalidate();
         }
 
@@ -4221,7 +4417,7 @@ namespace MinGent
             if (e.Button != MouseButtons.Left) return;
             if (SendRect.Contains(e.Location))
             {
-                if (running && Box.TextLength == 0) { if (StopRequested != null) StopRequested(this, EventArgs.Empty); }
+                if (running && Box.TextLength == 0 && attachments.Count == 0) { if (StopRequested != null) StopRequested(this, EventArgs.Empty); }
                 else if (SendRequested != null) SendRequested(this, EventArgs.Empty);
                 return;
             }
@@ -4230,12 +4426,10 @@ namespace MinGent
             Rectangle mr;
             bool mt;
             if (MeterLayout(out mr, out mt) && mr.Contains(e.Location)) { if (MeterClicked != null) MeterClicked(this, EventArgs.Empty); return; }
-            if (ShowContextLine)
-            {
-                int ix = ImageXAt(e.Location);
-                if (ix >= 0 && ix < images.Count) { images.RemoveAt(ix); hoverImageX = -1; Relayout(); return; }
-                if (CtxCloseRect.Contains(e.Location)) { contextOff = true; Relayout(); if (ContextCleared != null) ContextCleared(this, EventArgs.Empty); return; }
-            }
+            bool rm;
+            int ti = TileAt(e.Location, out rm);
+            if (ti >= 0 && rm) { RemoveAttachment(ti); return; }
+            if (ShowContextLine && CtxCloseRect.Contains(e.Location)) { contextOff = true; Relayout(); if (ContextCleared != null) ContextCleared(this, EventArgs.Empty); return; }
             Box.Focus();
         }
 
@@ -4256,15 +4450,15 @@ namespace MinGent
                 e.Handled = e.SuppressKeyPress = true;
                 if (StopRequested != null) StopRequested(this, EventArgs.Empty);
             }
-            else if (e.KeyCode == Keys.Up && !e.Shift && !e.Control && !e.Alt && Box.TextLength == 0 && images.Count == 0 && EditLastRequested != null)
+            else if (e.KeyCode == Keys.Up && !e.Shift && !e.Control && !e.Alt && Box.TextLength == 0 && attachments.Count == 0 && EditLastRequested != null)
             {
                 e.Handled = e.SuppressKeyPress = true;
                 EditLastRequested(this, EventArgs.Empty);
             }
-            else if (e.KeyCode == Keys.V && e.Modifiers == Keys.Control && SafeContainsImage())
+            else if (((e.KeyCode == Keys.V && e.Modifiers == Keys.Control) || (e.KeyCode == Keys.Insert && e.Modifiers == Keys.Shift)) && CanPasteAttachment())
             {
                 e.Handled = e.SuppressKeyPress = true;
-                PasteImage();
+                PasteAttachment();
             }
         }
     }

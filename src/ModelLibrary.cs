@@ -1672,6 +1672,7 @@ namespace MinGent
                 }
                 catch (WebException wex)
                 {
+                    Net.Redirected(Hub.Api + "/" + repo + "/resolve/main/" + EscapePath(f.Path), wex);
                     HttpWebResponse hr = wex.Response as HttpWebResponse;
                     if (hr != null && ((int)hr.StatusCode == 401 || (int)hr.StatusCode == 403))
                         return "Hugging Face refused the download (the model may be gated and need a login on huggingface.co).";

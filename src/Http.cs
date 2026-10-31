@@ -148,6 +148,7 @@ namespace MinGent
             }
             catch (WebException wex)
             {
+                Net.Redirected(url, wex);
                 if (ct != null && ct.IsCancelled) r.Cancelled = true;
                 else ReadError(r, wex);
             }

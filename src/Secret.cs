@@ -19,7 +19,7 @@ namespace MinGent
                     byte[] enc = ProtectedData.Protect(Encoding.UTF8.GetBytes(plain), Entropy, DataProtectionScope.CurrentUser);
                     return "DPAPI:" + Convert.ToBase64String(enc);
                 }
-                catch { }
+                catch { return null; }
             }
             return "B64:" + Convert.ToBase64String(Encoding.UTF8.GetBytes(plain));
         }

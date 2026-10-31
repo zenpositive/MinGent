@@ -18,7 +18,7 @@ namespace MinGent
     class ToolCall
     {
         public string Id = "", Name = "", Arguments = "";
-        public string Signature;
+        public string Signature, Under;
         public Dictionary<string, object> Implied;
         public bool Truncated;
         Dictionary<string, object> parsed;

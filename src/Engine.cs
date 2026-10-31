@@ -469,6 +469,7 @@ namespace MinGent
                 }
                 catch (Exception ex)
                 {
+                    Net.Redirected(url, ex as WebException);
                     if (ct != null && ct.IsCancelled) return "Cancelled.";
                     if (attempt == 3) return "Download failed: " + ex.Message;
                     Thread.Sleep(2000 * (attempt + 1));

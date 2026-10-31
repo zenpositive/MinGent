@@ -12,9 +12,9 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("MinGent - an AI agent for Windows with its own notepad and browser")]
 [assembly: AssemblyProduct("MinGent")]
 [assembly: AssemblyCopyright("Built locally from source")]
-[assembly: AssemblyVersion("1.0.2.0")]
-[assembly: AssemblyFileVersion("1.0.2.0")]
-[assembly: AssemblyInformationalVersion("1.0.2 beta")]
+[assembly: AssemblyVersion("1.0.3.0")]
+[assembly: AssemblyFileVersion("1.0.3.0")]
+[assembly: AssemblyInformationalVersion("1.0.3 beta")]
 
 namespace MinGent
 {
@@ -88,6 +88,7 @@ namespace MinGent
             if (primary)
             {
                 try { BrowserData.FinishPendingWipe(); } catch { }
+                try { BrowserData.FinishTemporary(); } catch { }
                 try { Shell.SweepScripts(); } catch { }
             }
             UI.Init();

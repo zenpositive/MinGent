@@ -73,6 +73,8 @@ namespace MinGent
             if (h == "api.github.com") return "GitHub (llama.cpp releases)";
             if (h == "github.com" || h.EndsWith(".githubusercontent.com", StringComparison.Ordinal)) return "GitHub (engine download)";
             if (h == "api.anthropic.com") return "Claude";
+            if (h == "openrouter.ai" || h.EndsWith(".openrouter.ai", StringComparison.Ordinal)) return "OpenRouter";
+            if (h == "google.com" || h.EndsWith(".google.com", StringComparison.Ordinal)) return "Web search";
             if (h == "api.openai.com") return "OpenAI";
             if (h == "generativelanguage.googleapis.com") return "Gemini";
             if (h.EndsWith("duckduckgo.com", StringComparison.Ordinal) || h == "www.bing.com" || h == "bing.com") return "Web search";
@@ -88,6 +90,12 @@ namespace MinGent
             if (Offline) return Blocked(url);
             Record(url, what);
             return null;
+        }
+
+        public static void Redirected(string from, WebException failed)
+        {
+            WebResponse r = failed != null ? failed.Response : null;
+            if (r != null) Redirected(from, r.ResponseUri);
         }
 
         public static void Redirected(string from, Uri to)

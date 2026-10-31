@@ -832,7 +832,7 @@ namespace MinGent
         public int Pid;
         public string Title = "", Process = "", Class = "";
         public Rectangle Rect;
-        public bool Adopted;
+        public bool Adopted, Terminal;
     }
 
     class AppElement
@@ -1063,13 +1063,130 @@ namespace MinGent
             return inJob;
         }
 
+        static readonly object termGate = new object();
+        static readonly HashSet<IntPtr> seenTerminals = new HashSet<IntPtr>();
+        static readonly Dictionary<IntPtr, TerminalState> ownTerminals = new Dictionary<IntPtr, TerminalState>();
+        static DateTime termFrom = DateTime.MinValue, termUntil = DateTime.MinValue;
+        static int termWanted;
+
+        public static bool TerminalClass(string cls) { return cls == "CASCADIA_HOSTING_WINDOW_CLASS" || cls == "ConsoleWindowClass"; }
+
+        static List<IntPtr> TerminalWindows()
+        {
+            List<IntPtr> l = new List<IntPtr>();
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) return l;
+            StringBuilder sb = new StringBuilder(64);
+            EnumProc cb = delegate (IntPtr h, IntPtr p)
+            {
+                sb.Length = 0;
+                GetClassName(h, sb, 64);
+                if (TerminalClass(sb.ToString())) l.Add(h);
+                return true;
+            };
+            try { EnumWindows(cb, IntPtr.Zero); } catch { }
+            GC.KeepAlive(cb);
+            return l;
+        }
+
+        public static void BeforeTerminal()
+        {
+            List<IntPtr> now = TerminalWindows();
+            lock (termGate) foreach (IntPtr h in now) seenTerminals.Add(h);
+        }
+
+        public static void WatchTerminals(DateTime from, DateTime until)
+        {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) return;
+            lock (termGate)
+            {
+                bool running = termUntil > DateTime.UtcNow && termWanted > 0;
+                termFrom = from;
+                termWanted++;
+                if (until > termUntil) termUntil = until;
+                if (running) return;
+            }
+            Thread t = new Thread(delegate ()
+            {
+                while (true)
+                {
+                    try { AdoptTerminals(); } catch { }
+                    lock (termGate)
+                        if (DateTime.UtcNow > termUntil || termWanted <= 0) { termWanted = 0; break; }
+                    Thread.Sleep(250);
+                }
+            });
+            t.IsBackground = true;
+            t.Name = "MinGent terminal watch";
+            t.Start();
+        }
+
+        static void AdoptTerminals()
+        {
+            foreach (IntPtr h in TerminalWindows())
+            {
+                lock (termGate)
+                {
+                    if (termWanted <= 0) return;
+                    if (seenTerminals.Contains(h)) continue;
+                }
+                if (!IsWindowVisible(h)) continue;
+                int pid;
+                GetWindowThreadProcessId(h, out pid);
+                StringBuilder sb = new StringBuilder(64);
+                GetClassName(h, sb, 64);
+                string cls = sb.ToString();
+                lock (termGate) seenTerminals.Add(h);
+                if (cls == "ConsoleWindowClass" && !TerminalProbe.FromAgent(pid)) continue;
+                TerminalState st = new TerminalState();
+                st.Pid = pid;
+                st.Class = cls;
+                lock (termGate)
+                {
+                    st.Since = termFrom;
+                    ownTerminals[h] = st;
+                    termWanted--;
+                }
+            }
+        }
+
+        static bool OwnedTerminals()
+        {
+            lock (termGate)
+            {
+                List<IntPtr> gone = new List<IntPtr>();
+                foreach (IntPtr h in ownTerminals.Keys) if (!IsWindow(h)) gone.Add(h);
+                foreach (IntPtr h in gone) ownTerminals.Remove(h);
+                return ownTerminals.Count > 0;
+            }
+        }
+
+        static bool OwnsTerminal(IntPtr h, int pid, string cls)
+        {
+            TerminalState st;
+            lock (termGate) if (!ownTerminals.TryGetValue(h, out st)) return false;
+            return st.Pid == pid && st.Class == cls;
+        }
+
+        public static bool InAgentJob(int pid)
+        {
+            List<IntPtr> jobs = Shell.JobHandles();
+            return jobs.Count > 0 && InJob(pid, jobs, new Dictionary<int, bool>());
+        }
+
+        public static TerminalState TerminalOf(AppWindow w)
+        {
+            TerminalState st;
+            lock (termGate) return w != null && w.Terminal && ownTerminals.TryGetValue(w.Hwnd, out st) ? st : null;
+        }
+
         public static List<AppWindow> Windows()
         {
             List<AppWindow> list = new List<AppWindow>();
             List<IntPtr> jobs = Shell.JobHandles();
             bool anyLaunch;
             lock (adoptGate) anyLaunch = adopted.Count > 0 || launches.Count > 0;
-            if (jobs.Count == 0 && !anyLaunch) return list;
+            bool anyTerminal = OwnedTerminals();
+            if (jobs.Count == 0 && !anyLaunch && !anyTerminal) return list;
             Dictionary<int, bool> member = new Dictionary<int, bool>(), seen = new Dictionary<int, bool>();
             EnumProc cb = delegate (IntPtr h, IntPtr l)
             {
@@ -1084,18 +1201,21 @@ namespace MinGent
                     StringBuilder sb = new StringBuilder(512);
                     GetClassName(h, sb, 256);
                     string cls = sb.ToString();
+                    bool term = TerminalClass(cls);
+                    if (term && !OwnsTerminal(h, pid, cls)) return true;
                     if (cls == "ApplicationFrameWindow")
                     {
                         pid = HostedPid(h);
                         if (pid == 0) return true;
                     }
-                    bool inJob = InJob(pid, jobs, member), took = false;
+                    bool inJob = term || InJob(pid, jobs, member), took = term;
                     if (!inJob && anyLaunch && Adopt(pid, seen)) { inJob = true; took = true; }
                     if (!inJob) return true;
                     AppWindow w = new AppWindow();
                     w.Hwnd = h;
                     w.Pid = pid;
                     w.Adopted = took;
+                    w.Terminal = term;
                     w.Class = cls;
                     sb.Length = 0;
                     GetWindowText(h, sb, sb.Capacity);
@@ -1130,6 +1250,7 @@ namespace MinGent
 
         public static string Allowed(AppWindow w)
         {
+            if (w.Terminal) return null;
             if (Blocked.Contains(w.Process)) return "'" + w.Process + "' is a shell or system tool, which the assistant may not control (use run_command for commands)";
             if (Browsers.Contains(w.Process)) return "'" + w.Process + "' is a web browser with the user's own sign-ins, which the assistant may not control. Use MinGent's built-in browser (browser_navigate) instead";
             if (Private.Contains(w.Process)) return "'" + w.Process + "' handles the user's messages, passwords, money or remote access, so the assistant may not control it";
@@ -1841,15 +1962,22 @@ namespace MinGent
 
         static bool Refused(ToolContext ctx, AppWindow w)
         {
-            string exe = (AppControl.ExePath(w.Pid) ?? w.Process).ToLowerInvariant();
+            string exe = UseName(w);
             PermissionState ps = ctx.Session.Perms;
             lock (ps.AskLock) return ps.DeniedKeys.Contains("app:" + exe) || ps.DeniedKeys.Contains("appview:" + exe);
+        }
+
+        static string UseName(AppWindow w)
+        {
+            string exe = (AppControl.ExePath(w.Pid) ?? w.Process).ToLowerInvariant();
+            return w.Terminal ? exe + "#" + w.Hwnd.ToInt64().ToString(CultureInfo.InvariantCulture) : exe;
         }
 
         static string Check(ToolContext ctx, AppWindow w, bool acting, bool cancelOnly)
         {
             PermissionState ps = ctx.Session.Perms;
             bool tainted = ps.WebGuard && ps.Tainted;
+            if (w.Terminal && !acting && ps.Auto) return null;
             if (acting && !cancelOnly && AppControl.IsFileDialog(w))
             {
                 PermissionAsk fd = new PermissionAsk();
@@ -1865,7 +1993,7 @@ namespace MinGent
             bool trusted = !w.Adopted && AppControl.Trusted(w, ctx.Workspace);
             if (ps.Auto && !(acting && tainted) && (trusted || (!acting && !w.Adopted))) return null;
             string exe = AppControl.ExePath(w.Pid) ?? w.Process;
-            string useKey = "app:" + exe.ToLowerInvariant();
+            string useKey = "app:" + UseName(w);
             if (!acting) lock (ps.AskLock) if (ps.AllowedKeys.Contains(useKey)) return null;
             bool use = acting || w.Adopted;
             PermissionAsk a = new PermissionAsk();
@@ -1873,8 +2001,10 @@ namespace MinGent
             if (ps.Auto && !(acting && tainted)) a.Category = PermissionCategory.Launch;
             a.Title = (use ? "Click and type in " : "Look at ") + "\"" + (w.Title.Length > 0 ? w.Title : w.Process) + "\"";
             a.Detail = exe + (w.Adopted ? " (Windows opened it for a command the agent ran in this chat)" : " (started by the agent in this chat)");
-            a.Key = use ? useKey : "appview:" + exe.ToLowerInvariant();
-            a.Reason = tainted && acting ? "This chat has read web content, so controlling programs needs your OK." :
+            a.Key = use ? useKey : "appview:" + UseName(w);
+            if (w.Terminal) a.Title = (use ? "Type commands in " : "Look at ") + "the terminal \"" + (w.Title.Length > 0 ? w.Title : w.Process) + "\"";
+            a.Reason = w.Terminal ? "The agent opened this terminal in this chat, and you can watch it work there. MinGent checks each command before Enter runs it and asks before risky ones, also on servers reached with ssh." :
+                       tainted && acting ? "This chat has read web content, so controlling programs needs your OK." :
                        w.Adopted ? "Windows started this program outside the agent's own process group, so it can't be fully told apart from a program you opened yourself. The agent will look at its window, move the mouse and type in it." :
                        acting && !trusted ? "This program is not part of the project in the workspace. The agent will move the mouse and type in its window." :
                        acting ? "It will move the mouse and type into this program's window, like a person testing it." : "It will capture this program's window.";
@@ -1989,8 +2119,161 @@ namespace MinGent
             return AppControl.Pick(all, null, out e2) ?? all[0];
         }
 
+        protected static string TerminalEnter(ToolContext ctx, AppWindow w, TerminalState t, string act)
+        {
+            string line, why;
+            bool known;
+            lock (t) { line = t.Line; known = t.Known; why = t.Why; }
+            TerminalPlace place = TerminalProbe.Place(w, t);
+            string shown = line.Trim().Length > 120 ? line.Trim().Substring(0, 120) + "..." : line.Trim();
+            string what = known && shown.Length > 0 ? "\"" + shown + "\"" : "unchecked text";
+            string bad = CommandSafety.Invisible(line);
+            string refused = bad != null ? "Not run: " + bad + "." : Net.Offline && ((place.Name != null && !place.Linux) || !known || CommandSafety.NeedsInternet(line)) ? "Not run: " + Net.OfflineMessage : null;
+            if (refused == null)
+            {
+                PermissionAsk a = TerminalCheck.Ask(line, known, why, act, place, ctx.Session.Perms, ctx.Workspace, w.Title.Length > 0 ? w.Title : w.Process);
+                if (a == null || ctx.Approve(a)) return null;
+                refused = (act == null ? "The user did not allow running " + what : "The user did not allow the agent to " + act + " while " + what + " is on the command line") + (place.Name != null ? " on " + place.Name : "") + ".";
+            }
+            bool cleared = ClearLine(w, t);
+            return refused + (cleared ? " MinGent cleared the command line, so nothing runs by accident." : " It is still typed in the terminal: press Ctrl+C there to clear it.") + " Don't run it another way.";
+        }
+
+        static string OfflineRemote(AppWindow w, TerminalState t)
+        {
+            if (!Net.Offline) return null;
+            TerminalPlace place = TerminalProbe.Place(w, t);
+            if (place.Name == null || place.Linux) return null;
+            return "Not typed: this terminal is connected to " + place.Name + ", and " + Net.OfflineMessage;
+        }
+
+        static string ControlChars(string text)
+        {
+            foreach (char c in text ?? "")
+            {
+                if (c == '\t') return "the text has a Tab. In a terminal Tab completes the line, so press it with app_key instead.";
+                if ((c < ' ' && c != '\n' && c != '\r') || (c >= '\u007F' && c <= '\u009F')) return "the text has control characters, which a terminal treats as keys that can run commands. Type plain text and press keys with app_key.";
+            }
+            return null;
+        }
+
+        static bool ClearLine(AppWindow w, TerminalState t)
+        {
+            bool? selected = TerminalProbe.Selected(w.Hwnd);
+            if (AppControl.Focus(w) != null) return false;
+            AppControl.Key(0x1B, null);
+            AppControl.Key(0x43, new List<ushort> { 0x11 });
+            lock (t) { if (selected == false) t.Cleared(); else { t.Cleared(); t.Lost("clearing the line"); } }
+            return true;
+        }
+
+        protected static ToolOutcome TerminalType(ToolContext ctx, AppWindow w, string text, bool enter)
+        {
+            TerminalState t = AppControl.TerminalOf(w);
+            if (t == null) return ToolOutcome.Fail("this terminal window is no longer open");
+            string ctl = ControlChars(text);
+            if (ctl != null) return ToolOutcome.Fail(ctl);
+            string off = OfflineRemote(w, t);
+            if (off != null) return ToolOutcome.Fail(off);
+            string[] lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+            int chars = 0, ran = 0;
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string part = lines[i];
+                if (part.Length > 0)
+                {
+                    string f = AppControl.Focus(w);
+                    if (f != null) return ToolOutcome.Fail(f);
+                    string terr = AppControl.Type(w, part);
+                    lock (t) { t.Typed(part); if (terr != null) t.Lost("typing that stopped halfway"); }
+                    if (terr != null) return ToolOutcome.Fail(terr);
+                    chars += part.Length;
+                }
+                if (i == lines.Length - 1 && !enter) break;
+                string deny = TerminalEnter(ctx, w, t, null);
+                if (deny != null) return Denied(deny);
+                string f2 = AppControl.Focus(w);
+                if (f2 != null) return ToolOutcome.Fail(f2);
+                AppControl.Key(0x0D, null);
+                lock (t) t.Ran();
+                ran++;
+                if (i < lines.Length - 1) ctx.Ct.Sleep(300);
+            }
+            string how = "Typed " + chars + " characters" + (ran == 1 ? " and pressed Enter" : ran > 1 ? " and ran " + ran + " lines" : "");
+            return After(ctx, w, ran > 0 ? 1200 : 300, how);
+        }
+
+        protected static ToolOutcome TerminalKeys(ToolContext ctx, AppWindow w, List<KeyPress> keys)
+        {
+            TerminalState t = AppControl.TerminalOf(w);
+            if (t == null) return ToolOutcome.Fail("this terminal window is no longer open");
+            foreach (KeyPress k in keys)
+                if (k.With != null) return ToolOutcome.Fail("in a terminal, press keys one after another, not several at once (" + k.Label + "). Shortcuts like Ctrl+C are fine.");
+            string off = OfflineRemote(w, t);
+            if (off != null) return ToolOutcome.Fail(off);
+            List<KeyPress> chunk = new List<KeyPress>();
+            int ran = 0;
+            for (int i = 0; i <= keys.Count; i++)
+            {
+                KeyPress key = i < keys.Count ? keys[i] : null;
+                if (key != null && TerminalState.Free(key)) { chunk.Add(key); continue; }
+                if (chunk.Count > 0)
+                {
+                    bool copyKey = false;
+                    foreach (KeyPress k in chunk) if (k.Ctrl && !k.Alt && !k.Shift && k.Vk == 'C') copyKey = true;
+                    if (copyKey) { bool? sel = TerminalProbe.Selected(w.Hwnd); lock (t) t.Selection = sel != false; }
+                    string f = AppControl.Focus(w);
+                    if (f != null) return ToolOutcome.Fail(f);
+                    string kerr = AppControl.Press(w, chunk, 0, ctx.Ct);
+                    lock (t) { foreach (KeyPress k in chunk) t.Pressed(k); if (kerr != null) t.Lost("keys that stopped halfway"); }
+                    if (kerr != null) return ToolOutcome.Fail(kerr);
+                    chunk.Clear();
+                }
+                if (key == null) break;
+                bool enter = TerminalState.IsEnter(key);
+                string deny = TerminalEnter(ctx, w, t, enter ? null : "press " + key.Label);
+                if (deny != null) return Denied(deny);
+                string f2 = AppControl.Focus(w);
+                if (f2 != null) return ToolOutcome.Fail(f2);
+                string err = AppControl.Press(w, new List<KeyPress> { key }, 0, ctx.Ct);
+                lock (t)
+                {
+                    if (err != null) t.Lost("keys that stopped halfway");
+                    else if (enter) t.Ran();
+                    else t.Pressed(key);
+                }
+                if (err != null) return ToolOutcome.Fail(err);
+                if (enter) ran++;
+            }
+            return After(ctx, w, ran > 0 ? 1200 : 400, KeyCombo.Describe(keys, 0));
+        }
+
+        static string ReadTerminal(AppWindow w, string header)
+        {
+            string text = TerminalProbe.Text(w.Hwnd, 6000);
+            if (text == null) return null;
+            TerminalState t = AppControl.TerminalOf(w);
+            TerminalPlace at = t != null ? TerminalProbe.Place(w, t) : null;
+            string place = at != null ? at.Name : null;
+            bool unsure = false;
+            if (t != null) lock (t) unsure = !t.Known;
+            StringBuilder sb = new StringBuilder();
+            if (header != null) sb.Append(header).Append('\n');
+            sb.Append("Terminal \"").Append(w.Title).Append("\" (").Append(w.Process).Append("), ").Append(place != null ? (at.Sure ? "connected to " : "maybe connected to ") + place : "on this PC").Append('\n');
+            sb.Append("What it shows now, newest at the bottom:\n").Append(text.Length > 0 ? text : "(nothing yet)").Append('\n');
+            sb.Append("Type with app_type (enter=true runs the line) and press keys with app_key. MinGent checks the command line before Enter and before other special keys or clicks");
+            if (unsure) sb.Append("; the command line may hold text it hasn't checked, so the next Enter or special key asks the user (Ctrl+C clears the line)");
+            sb.Append(".\n");
+            return sb.ToString();
+        }
+
         protected static string Read(ToolContext ctx, AppWindow w, AppSession st, string header)
         {
+            if (w.Terminal)
+            {
+                string tt = ReadTerminal(w, header);
+                if (tt != null) return tt;
+            }
             List<AppElement> els = AppControl.Elements(w, 350, ctx.Ct);
             st.Refs.Clear();
             st.RefsWindow = w.Hwnd;
@@ -2142,6 +2425,15 @@ namespace MinGent
             if (waiting != null) return ToolOutcome.Fail(waiting);
             string g = Gate(ctx, w, true);
             if (g != null) return Denied(g);
+            if (w.Terminal && mouse.Button != "left") return ToolOutcome.Fail("in a terminal, right and middle clicks paste the clipboard, so the agent can't use them. Type with app_type instead.");
+            if (w.Terminal && el != null && ClipboardGuard.PasteLabel(el.Name)) return ToolOutcome.Fail("in a terminal, type the text with app_type instead of pasting it, so MinGent can check each command before it runs");
+            TerminalState term = AppControl.TerminalOf(w);
+            if (term != null)
+            {
+                string deny = TerminalEnter(ctx, w, term, "click");
+                if (deny != null) return Denied(deny);
+                lock (term) { term.Clicked = true; term.Lost("a click"); }
+            }
             if (el != null && ClipboardGuard.PasteLabel(el.Name))
             {
                 string pg = PasteGate(ctx, w);
@@ -2228,6 +2520,16 @@ namespace MinGent
                 ask.Reason = "This field is marked as a password field.";
                 if (!ctx.Approve(ask)) { ToolOutcome d = ToolOutcome.Fail("The user did not allow typing into this password field."); d.Denied = true; return d; }
             }
+            if (el != null && w.Terminal)
+            {
+                TerminalState tt = AppControl.TerminalOf(w);
+                if (tt != null)
+                {
+                    string deny = TerminalEnter(ctx, w, tt, "click");
+                    if (deny != null) return Denied(deny);
+                    lock (tt) { tt.Clicked = true; tt.Lost("a click"); }
+                }
+            }
             string f = AppControl.Focus(w);
             if (f != null) return ToolOutcome.Fail(f);
             if (el != null)
@@ -2243,6 +2545,7 @@ namespace MinGent
                     AppControl.Key(0x23, new List<ushort>(new ushort[] { 0x10 }));
                 }
             }
+            if (w.Terminal) return TerminalType(ctx, w, text, B(a, "enter", false));
             string terr = AppControl.Type(w, text);
             if (terr != null) return ToolOutcome.Fail(terr);
             if (B(a, "enter", false))
@@ -2311,10 +2614,19 @@ namespace MinGent
             if (waiting != null) return ToolOutcome.Fail(waiting);
             string g = Gate(ctx, w, true, escOnly);
             if (g != null) return Denied(g);
+            if (paste && w.Terminal) return ToolOutcome.Fail("in a terminal, type the text with app_type instead of pasting it, so MinGent can check each command before it runs");
             if (paste)
             {
                 string pg = PasteGate(ctx, w);
                 if (pg != null) return Denied(pg);
+            }
+            if (w.Terminal)
+            {
+                if (hold > 0) return ToolOutcome.Fail("hold_ms doesn't work in a terminal; press the keys without it");
+                uint was = copy ? ClipboardGuard.Now() : 0;
+                ToolOutcome to = TerminalKeys(ctx, w, keys);
+                if (copy) ClipboardGuard.AfterCopy(was);
+                return to;
             }
             string f = AppControl.Focus(w);
             if (f != null) return ToolOutcome.Fail(f);
@@ -2460,6 +2772,13 @@ namespace MinGent
             if (waiting != null) return ToolOutcome.Fail(waiting);
             string g = Gate(ctx, w, true);
             if (g != null) return Denied(g);
+            TerminalState term = AppControl.TerminalOf(w);
+            if (term != null)
+            {
+                string deny = TerminalEnter(ctx, w, term, "drag");
+                if (deny != null) return Denied(deny);
+                lock (term) { term.Clicked = true; term.Lost("dragging"); }
+            }
             string f = AppControl.Focus(w);
             if (f != null) return ToolOutcome.Fail(f);
             Point from, to;

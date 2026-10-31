@@ -149,7 +149,7 @@ namespace MinGent
             {
                 string dir = Path.Combine(Path.GetTempPath(), "MinGent");
                 Directory.CreateDirectory(dir);
-                j.ScriptFile = Path.Combine(dir, "cmd-" + Guid.NewGuid().ToString("N").Substring(0, 12) + ".ps1");
+                j.ScriptFile = Path.Combine(dir, "cmd-" + Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N").Substring(0, 12) + ".ps1");
                 StringBuilder sb = new StringBuilder();
                 sb.Append("$ProgressPreference = 'SilentlyContinue'\r\n");
                 sb.Append("try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}\r\n");
@@ -254,6 +254,22 @@ namespace MinGent
             if (j.ScriptFile != null) SecureFile.Erase(j.ScriptFile);
         }
 
+        static bool Orphan(string script)
+        {
+            Match m = Regex.Match(Path.GetFileName(script), @"^cmd-(\d+)-");
+            if (!m.Success) return false;
+            int pid = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+            Process me = Process.GetCurrentProcess();
+            if (pid == me.Id) return false;
+            try
+            {
+                using (Process p = Process.GetProcessById(pid))
+                    return !string.Equals(p.ProcessName, me.ProcessName, StringComparison.OrdinalIgnoreCase);
+            }
+            catch (ArgumentException) { return true; }
+            catch (Exception) { return false; }
+        }
+
         public static void SweepScripts()
         {
             foreach (string name in new string[] { "MinGent", "JustPad" })
@@ -262,7 +278,7 @@ namespace MinGent
                 if (!Directory.Exists(dir)) continue;
                 foreach (string f in Directory.GetFiles(dir, "cmd-*.ps1"))
                 {
-                    try { if ((DateTime.UtcNow - File.GetLastWriteTimeUtc(f)).TotalHours >= 24) SecureFile.Erase(f); } catch { }
+                    try { if (Orphan(f) || (DateTime.UtcNow - File.GetLastWriteTimeUtc(f)).TotalHours >= 24) SecureFile.Erase(f); } catch { }
                 }
                 if (name == "JustPad") { try { if (Directory.GetFileSystemEntries(dir).Length == 0) Directory.Delete(dir); } catch { } }
             }
@@ -516,6 +532,30 @@ namespace MinGent
             if (install != null) { category = PermissionCategory.Launch; return install; }
             if (opener != null) { category = PermissionCategory.Launch; return opener; }
             return null;
+        }
+
+        static readonly Regex ServerSecret = new Regex(
+            @"(^|[\s'""/=~:])\.(ssh|aws|azure|kube|gnupg|docker|git-credentials|npmrc|pypirc|netrc|pgpass|my\.cnf|env)(\b|/)|\bid_(rsa|ed25519|ecdsa|dsa)\b|/etc/g?shadow\b|/etc/ssl/private\b|\bprivkey\d*\.pem\b|\bprivate_key\.json\b|\.(key|p12|pfx|jks|keystore)\b|\b(wp-config\.php|debian\.cnf|credentials\.json)\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        public static string ServerDanger(string command, out string category)
+        {
+            category = "";
+            string c = command ?? "";
+            if (SecretWatch.Leaks(c)) { category = PermissionCategory.Never; return "sends one of your API keys from MinGent's settings to the server"; }
+            if (ServerSecret.IsMatch(c) || ServerSecret.IsMatch(Flatten(c))) { category = PermissionCategory.Credentials; return "reads or changes password, key or token files"; }
+            return null;
+        }
+
+        static readonly Regex Rebinds = new Regex(
+            @"\b(set|new)-alias\b|\bset-psreadline(keyhandler|option)\b|\$executioncontext\b|\$(function|alias):|\$env:\w+\s*\+?=(?!=)|\b(set|new|remove|rename|copy)-item\b[^\n]*\b(function|alias|env|variable):|\bprintf\s+(-\S+\s+)*-v\b" +
+            @"|(^|[;|&({]\s*)(sudo\s+)?((sal|nal|doskey|alias|unalias|hash|enable|bind|bindkey|trap|complete|compdef|zle|shopt|setopt|typeset|declare|readonly|eval|exec|source|fc|stty|import-module|ipmo)(\s|$)" +
+            @"|(function|filter)\s+[\w:.-]+|[A-Za-z_][\w-]*\s*\(\s*\)|\.\s+\S|set\s+[-+]o\b|(export\s+)?(path|pathext|prompt_command|ps[0-4]|bash_env|env|ifs|cdpath|ld_preload|ld_library_path)=|set\s+(path|pathext|comspec|prompt)=|path\s+[^\s=])",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        public static bool ChangesShell(string command)
+        {
+            return Rebinds.IsMatch(command ?? "");
         }
 
         public static bool OpensWindow(string reason)
@@ -1161,22 +1201,107 @@ namespace MinGent
             return string.Join("\\", outp.ToArray());
         }
 
-        const string Gap = @"[ \t]+";
-        const string WaitPart = @"(?:timeout(?:\.exe)?" + Gap + @"(?:/t" + Gap + @")?[0-9]{1,5}(?:" + Gap + @"/nobreak)?(?:[ \t]*>[ \t]*nul)?" +
-            @"|(?:start-sleep|sleep)(?:" + Gap + @"-(?:seconds|s|milliseconds|ms|m|duration)\b)?" + Gap + @"[0-9]{1,6}(?:\.[0-9]+)?" +
-            @"|ping(?:\.exe)?" + Gap + @"(?:(?:-n|/n)" + Gap + @"[0-9]{1,4}" + Gap + @"(?:127\.0\.0\.1|localhost|::1)|(?:127\.0\.0\.1|localhost|::1)" + Gap + @"(?:-n|/n)" + Gap + @"[0-9]{1,4})(?:[ \t]*>[ \t]*nul)?" +
-            @"|\[(?:system\.)?threading\.thread\]::sleep\([ \t]*[0-9]{1,7}[ \t]*\))";
-        static readonly Regex Waits = new Regex(@"^[ \t\r\n]*" + WaitPart + @"(?:[ \t]*(?:;|&&|\r?\n)[ \t]*" + WaitPart + @")*[ \t]*;?[ \t\r\n]*$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        const RegexOptions Ci = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+        static readonly Regex SplitPs = new Regex(@"\r?\n|;|&&", Ci), SplitCmd = new Regex(@"\r?\n|&&|&", Ci);
+        static readonly Regex Joined = new Regex(@"[ \t]*[12]?>&[12]", Ci);
+        static readonly Regex Quiet = new Regex(@"(?:[ \t]*(?:\|[ \t]*out-null|[12]?>[ \t]*(?:\$null|nul)))+[ \t]*$", Ci);
+        static readonly Regex PsSleep = new Regex(@"^(?:start-sleep|sleep)(?:[ \t]+-(seconds|s|milliseconds|ms|m)(?:[ \t]*:[ \t]*|[ \t]+)|[ \t]+)([0-9]{1,6}(?:\.[0-9]{1,3})?)$", Ci);
+        static readonly Regex ThreadSleep = new Regex(@"^\[(?:system\.)?threading\.thread\]::sleep\([ \t]*([0-9]{1,8})[ \t]*\)$", Ci);
+        static readonly Regex TimeoutCmd = new Regex(@"^timeout(?:\.exe)?((?:[ \t]+(?:[/-]t|[/-]nobreak|[0-9]{1,5}))+)$", Ci);
+        static readonly Regex PingWait = new Regex(@"^ping(?:\.exe)?[ \t]+(?:[/-]n[ \t]+([0-9]{1,4})[ \t]+(?:127\.0\.0\.1|localhost|::1)|(?:127\.0\.0\.1|localhost|::1)[ \t]+[/-]n[ \t]+([0-9]{1,4}))$", Ci);
+        static readonly Regex PsSay = new Regex(@"^(?:write-host|write-output|echo)[ \t]+(?:'((?:[^']|'')*)'|""([^""$`]*)""|([a-z0-9 .,:!?_/\-]+))$", Ci);
+        static readonly Regex CmdSay = new Regex(@"^echo(?:\.|[ \t]+([^%!^<>|]*))$", Ci);
+        static readonly Regex CmdQuiet = new Regex(@"^(?:rem(?:[ \t].*)?|::.*|echo[ \t]+(?:off|on))$", Ci);
 
-        public static bool OnlyWaits(string command, string shell)
+        public static bool PlainWait(string command, string shell, out double seconds, out string printed)
         {
-            return shell == "powershell" && !string.IsNullOrEmpty(command) && command.Length < 400 && Waits.IsMatch(command);
+            seconds = 0;
+            printed = null;
+            if (string.IsNullOrEmpty(command) || command.Length > 800) return false;
+            bool cmd = shell == "cmd";
+            List<string> said = new List<string>();
+            bool waits = false;
+            foreach (string part in (cmd ? SplitCmd : SplitPs).Split(Joined.Replace(command, " ")))
+            {
+                string s = part.Trim();
+                if (cmd && s.StartsWith("@")) s = s.Substring(1).TrimStart();
+                if (s.Length == 0 || (cmd ? CmdQuiet.IsMatch(s) : s.StartsWith("#"))) continue;
+                if (!cmd && s.IndexOf('\'') < 0 && s.IndexOf('"') < 0) s = Regex.Replace(s, @"[ \t]+#.*$", "");
+                s = Quiet.Replace(s, "").Trim();
+                Match m;
+                if (!cmd && (m = PsSleep.Match(s)).Success)
+                {
+                    double v = double.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture);
+                    string unit = m.Groups[1].Value.ToLowerInvariant();
+                    seconds += unit == "ms" || unit == "m" || unit == "milliseconds" ? v / 1000 : v;
+                    waits = true;
+                }
+                else if (!cmd && (m = ThreadSleep.Match(s)).Success) { seconds += int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture) / 1000.0; waits = true; }
+                else if ((m = TimeoutCmd.Match(s)).Success)
+                {
+                    int t = TimeoutSeconds(m.Groups[1].Value);
+                    if (t < 0) return false;
+                    seconds += t;
+                    waits = true;
+                }
+                else if ((m = PingWait.Match(s)).Success)
+                {
+                    seconds += Math.Max(0, int.Parse(m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value, CultureInfo.InvariantCulture) - 1);
+                    waits = true;
+                }
+                else if (!cmd && (m = PsSay.Match(s)).Success)
+                    said.Add(m.Groups[1].Success ? m.Groups[1].Value.Replace("''", "'") : m.Groups[2].Success ? m.Groups[2].Value : Regex.Replace(m.Groups[3].Value.Trim(), @"[ \t]+", " "));
+                else if (cmd && (m = CmdSay.Match(s)).Success) said.Add(m.Groups[1].Value.TrimEnd());
+                else return false;
+            }
+            if (!waits) return false;
+            printed = string.Join("\n", said.ToArray());
+            return true;
+        }
+
+        static int TimeoutSeconds(string args)
+        {
+            int value = -1;
+            bool wantValue = false;
+            foreach (string t in Regex.Split(args.Trim(), @"[ \t]+"))
+            {
+                string a = t.ToLowerInvariant();
+                if (a == "/t" || a == "-t") { if (wantValue || value >= 0) return -1; wantValue = true; }
+                else if (a == "/nobreak" || a == "-nobreak") { if (wantValue) return -1; }
+                else
+                {
+                    if (value >= 0) return -1;
+                    value = int.Parse(a, CultureInfo.InvariantCulture);
+                    wantValue = false;
+                }
+            }
+            return wantValue ? -1 : value;
+        }
+
+        static readonly Regex Reach = new Regex(@"(^|[\s;&|(])(mosh|tnc|test-netconnection|resolve-dnsname|nslookup|dig|tracert|traceroute|tracepath|pathping|mtr|ping|ping6|rsync)(\.exe)?\s+([^;&|\r\n]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex HostWord = new Regex(@"^(?:rsync://)?(?:[^@\s/]+@)?(\[[0-9a-f:]+\]|[0-9]{1,3}(?:\.[0-9]{1,3}){3}|[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,})(?:[:/].*)?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        static bool ReachesOut(string command)
+        {
+            foreach (Match m in Reach.Matches(command ?? ""))
+            {
+                bool rsync = m.Groups[2].Value.Equals("rsync", StringComparison.OrdinalIgnoreCase);
+                foreach (string raw in m.Groups[4].Value.Split(new char[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    string a = raw.Trim('"', '\'');
+                    if (a.StartsWith("-", StringComparison.Ordinal)) continue;
+                    if (rsync && a.IndexOf(':') < 0 && a.IndexOf('@') < 0) continue;
+                    Match h = HostWord.Match(a);
+                    if (h.Success && !Net.IsLocal("http://" + h.Groups[1].Value + "/")) return true;
+                }
+            }
+            return false;
         }
 
         public static bool NeedsInternet(string command)
         {
             string c = command ?? "";
-            if (LooksNetwork(c)) return true;
+            if (LooksNetwork(c) || ReachesOut(c)) return true;
             if (Regex.IsMatch(c, @"\b(certutil(\.exe)?\s+.*-urlcache|bitsadmin(\.exe)?\s+.*/transfer|webrequest|urllib|requests\.(get|post)|fetch\s*\(|xmlhttp|msxml2|winhttp)", RegexOptions.IgnoreCase)) return true;
             foreach (Match m in Regex.Matches(c, @"\b(https?|wss?|ftp)://[^\s'""`<>|]+", RegexOptions.IgnoreCase))
                 if (!Net.IsLocal(m.Value)) return true;
@@ -1198,7 +1323,337 @@ namespace MinGent
 
         public static bool LooksNetwork(string command)
         {
-            return Regex.IsMatch(command ?? "", @"\b(invoke-webrequest|iwr|invoke-restmethod|irm|curl|wget|ssh|scp|sftp|ftp|telnet|nc|ncat|net\.webclient|httpclient|start-bitstransfer)\b|\bgit\s+clone\b", RegexOptions.IgnoreCase);
+            return Regex.IsMatch(command ?? "", @"\b(invoke-webrequest|iwr|invoke-restmethod|irm|curl|wget|ssh|scp|sftp|ftp|telnet|nc|ncat|mosh|net\.webclient|httpclient|start-bitstransfer)\b|\bgit\s+clone\b", RegexOptions.IgnoreCase);
+        }
+    }
+
+    static class TerminalRules
+    {
+        static readonly Regex Opener = new Regex(@"(^|[\s;&|(""'])(wt|wt\.exe)(\s|$|[;&|)""'])|\bstart(-process)?\s+(-filepath\s+)?[""']?(cmd|powershell|pwsh|wsl|bash|wt)(\.exe)?\b|\bstart\s+""[^""]*""\s+(cmd|powershell|pwsh|wsl|bash)\b|\bconhost(\.exe)?\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        public static bool OpensTerminal(string command)
+        {
+            return Opener.IsMatch(command ?? "");
+        }
+
+        static readonly HashSet<string> Looking = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "ls", "ll", "la", "dir", "vdir", "pwd", "cd", "pushd", "popd", "cat", "tac", "head", "tail", "grep", "egrep", "fgrep", "zgrep",
+            "wc", "cut", "diff", "cmp", "comm", "column", "nl", "fold", "rev", "strings", "od", "hexdump", "stat", "du", "df", "free", "uptime",
+            "uname", "whoami", "id", "groups", "who", "w", "last", "cal", "echo", "printenv", "ps", "pgrep", "pidof", "top", "htop", "btop",
+            "vmstat", "iostat", "mpstat", "lsblk", "lscpu", "lsmem", "lsof", "lsmod", "lsusb", "lspci", "nproc", "arch", "which", "whereis", "type", "realpath",
+            "readlink", "basename", "dirname", "md5sum", "sha1sum", "sha256sum", "sha512sum", "cksum", "sleep", "true", "false", "clear", "ping", "ping6",
+            "traceroute", "tracepath", "mtr", "dig", "nslookup", "host", "netstat", "help", "exit", "logout", "test", "[", "jq", "locate", "getent", "lsb_release"
+        };
+
+        static readonly HashSet<string> ListVerbs = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "status", "show", "cat", "is-active", "is-enabled", "is-failed", "list-units", "list-unit-files", "list-timers", "list-sockets", "list-dependencies", "list-jobs", "get-default"
+        };
+
+        static readonly HashSet<string> DockerLooks = new HashSet<string>(StringComparer.Ordinal) { "ps", "images", "logs", "inspect", "stats", "top", "version", "info", "port", "diff", "history", "ls", "list", "df", "config" };
+
+        public static bool ReadOnly(string line)
+        {
+            string t = (line ?? "").Trim();
+            if (t.Length == 0) return true;
+            if (Expands(t)) return false;
+            List<string> parts;
+            if (!Split(t, out parts)) return false;
+            foreach (string p in parts) if (!Looks(p)) return false;
+            return true;
+        }
+
+        static bool Split(string t, out List<string> parts)
+        {
+            parts = new List<string>();
+            StringBuilder cur = new StringBuilder();
+            char q = '\0';
+            for (int i = 0; i < t.Length; i++)
+            {
+                char c = t[i];
+                if (q != '\0')
+                {
+                    if (c == q) q = '\0';
+                    else if (c == '\\' && q == '"' && i + 1 < t.Length) { cur.Append(c); cur.Append(t[++i]); continue; }
+                    else if (q == '"' && (c == '`' || (c == '$' && i + 1 < t.Length && t[i + 1] == '('))) return false;
+                    cur.Append(c);
+                    continue;
+                }
+                if (c == '\\' && i + 1 < t.Length) { cur.Append(c); cur.Append(t[++i]); continue; }
+                if (c == '\'' || c == '"') { q = c; cur.Append(c); continue; }
+                if (c == '`') return false;
+                if (c == '$' && i + 1 < t.Length && t[i + 1] == '(') return false;
+                if ((c == '<' || c == '>') && i + 1 < t.Length && t[i + 1] == '(') return false;
+                if (c == '>' || (c == '&' && i + 1 < t.Length && t[i + 1] == '>'))
+                {
+                    int j = c == '&' ? i + 2 : i + 1;
+                    if (c == '>' && j < t.Length && t[j] == '>') j++;
+                    if (c == '>' && j < t.Length && t[j] == '&') { j++; while (j < t.Length && char.IsDigit(t[j])) j++; cur.Append(t, i, j - i); i = j - 1; continue; }
+                    while (j < t.Length && (t[j] == ' ' || t[j] == '\t')) j++;
+                    if (string.CompareOrdinal(t, j, "/dev/null", 0, 9) == 0 && (j + 9 == t.Length || " \t;|&)".IndexOf(t[j + 9]) >= 0)) { i = j + 8; continue; }
+                    return false;
+                }
+                if (c == ';' || c == '|' || c == '&' || c == '\n' || c == '\r' || c == '(' || c == ')' || c == '{' || c == '}')
+                {
+                    if (cur.ToString().Trim().Length > 0) parts.Add(cur.ToString().Trim());
+                    cur.Length = 0;
+                    continue;
+                }
+                cur.Append(c);
+            }
+            if (q != '\0') return false;
+            if (cur.ToString().Trim().Length > 0) parts.Add(cur.ToString().Trim());
+            return true;
+        }
+
+        public static List<string> Words(string s)
+        {
+            return Words(s, true);
+        }
+
+        static List<string> Words(string s, bool posix)
+        {
+            List<string> w = new List<string>();
+            StringBuilder cur = new StringBuilder();
+            char q = '\0';
+            bool any = false;
+            for (int i = 0; i < s.Length; i++)
+            {
+                char c = s[i];
+                if (q != '\0') { if (c == q) q = '\0'; else cur.Append(c); continue; }
+                if (c == '\'' || c == '"') { q = c; any = true; continue; }
+                if (posix && c == '\\' && i + 1 < s.Length) { cur.Append(s[++i]); any = true; continue; }
+                if (c == ' ' || c == '\t') { if (any || cur.Length > 0) { w.Add(cur.ToString()); cur.Length = 0; any = false; } continue; }
+                cur.Append(c);
+                any = true;
+            }
+            if (any || cur.Length > 0) w.Add(cur.ToString());
+            return w;
+        }
+
+        static string Name(string word)
+        {
+            string n = word ?? "";
+            int slash = n.LastIndexOf('/');
+            if (slash >= 0) n = n.Substring(slash + 1);
+            return n;
+        }
+
+        static bool Has(List<string> w, int from, params string[] any)
+        {
+            for (int i = from; i < w.Count; i++)
+                foreach (string a in any)
+                    if (w[i] == a || (a.EndsWith("*", StringComparison.Ordinal) && w[i].StartsWith(a.Substring(0, a.Length - 1), StringComparison.Ordinal))) return true;
+            return false;
+        }
+
+        static string Verb(List<string> w, int from)
+        {
+            for (int i = from; i < w.Count; i++) if (!w[i].StartsWith("-", StringComparison.Ordinal)) return w[i];
+            return null;
+        }
+
+        static bool OnlyFlags(List<string> w, int from)
+        {
+            for (int i = from; i < w.Count; i++) if (!w[i].StartsWith("-", StringComparison.Ordinal)) return false;
+            return true;
+        }
+
+        static bool Short(List<string> w, int from, string letters)
+        {
+            for (int i = from; i < w.Count; i++)
+            {
+                string a = w[i];
+                if (a.Length < 2 || a[0] != '-' || a[1] == '-') continue;
+                for (int k = 1; k < a.Length; k++) if (letters.IndexOf(a[k]) >= 0) return true;
+            }
+            return false;
+        }
+
+        static int Operands(List<string> w, int from, string valued)
+        {
+            int n = 0;
+            bool rest = false;
+            for (int i = from; i < w.Count; i++)
+            {
+                string a = w[i];
+                if (!rest && a == "--") { rest = true; continue; }
+                if (!rest && a.Length == 2 && a[0] == '-' && valued.IndexOf(a[1]) >= 0) { i++; continue; }
+                if (rest || a == "-" || !a.StartsWith("-", StringComparison.Ordinal)) n++;
+            }
+            return n;
+        }
+
+        static bool PagerCommands(List<string> w)
+        {
+            for (int i = 1; i < w.Count; i++)
+                if (w[i].StartsWith("+", StringComparison.Ordinal) && !Regex.IsMatch(w[i], @"^\+([GgF]|\d+|/[^!|]*)$")) return true;
+            return false;
+        }
+
+        public static bool Expands(string line)
+        {
+            string t = (line ?? "").TrimStart();
+            if (t.StartsWith("^", StringComparison.Ordinal)) return true;
+            bool single = false, dbl = false;
+            for (int i = 0; i < t.Length; i++)
+            {
+                char c = t[i];
+                if (single) { if (c == '\'') single = false; continue; }
+                if (c == '\\') { i++; continue; }
+                if (c == '\'' && !dbl) { single = true; continue; }
+                if (c == '"') { dbl = !dbl; continue; }
+                if (c != '!' || i + 1 >= t.Length) continue;
+                char n = t[i + 1];
+                if (n == ' ' || n == '\t' || n == '=' || n == '(' || (n == '"' && dbl)) continue;
+                return true;
+            }
+            return false;
+        }
+
+        static bool Looks(string part)
+        {
+            List<string> w = Words(part);
+            if (w.Count == 0) return true;
+            if (Regex.IsMatch(w[0], @"^[A-Za-z_][A-Za-z0-9_]*=")) return false;
+            string cmd = Name(w[0]);
+            string v = Verb(w, 1);
+            switch (cmd)
+            {
+                case "find": return !Has(w, 1, "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls");
+                case "sort": return !Short(w, 1, "o") && !Has(w, 1, "--output*", "--compress-program*");
+                case "printf": return !Short(w, 1, "v");
+                case "man": return !Short(w, 1, "PHXC") && !Has(w, 1, "--pager*", "--html*", "--gxditview*", "--config-file*");
+                case "less": case "more": return !Short(w, 1, "oOk") && !Has(w, 1, "--log-file*", "--LOG-FILE*", "--lesskey*") && !PagerCommands(w);
+                case "rg": return !Has(w, 1, "--pre*");
+                case "tree": return !Short(w, 1, "oR");
+                case "uniq": return Operands(w, 1, "fsw") <= 1;
+                case "xxd": return Operands(w, 1, "cglnosR") <= 1;
+                case "file": return !Short(w, 1, "C") && !Has(w, 1, "--compile");
+                case "lastlog": return !Short(w, 1, "CS") && !Has(w, 1, "--clear", "--set");
+                case "date":
+                    foreach (string x in w) if (Regex.IsMatch(x, @"^-[^-I]*s")) return false;
+                    return !Has(w, 1, "--set*");
+                case "dmesg": return !Short(w, 1, "cCDEn") && !Has(w, 1, "--clear", "--read-clear", "--console-off", "--console-on", "--console-level*");
+                case "history": return w.Count == 1 || (w.Count == 2 && Regex.IsMatch(w[1], @"^\d+$"));
+                case "ss": return !Short(w, 1, "KD") && !Has(w, 1, "--kill", "--diag*");
+                case "hostname": case "env": return OnlyFlags(w, 1) && !Has(w, 1, "-F", "--file*", "-b", "--boot", "-i", "--ignore-environment", "-u", "--unset*", "-C", "--chdir*", "-S", "--split-string*");
+                case "systemctl": return v == null || ListVerbs.Contains(v) || v == "list" || v.StartsWith("list-", StringComparison.Ordinal);
+                case "service": return (w.Count == 2 && w[1] == "--status-all") || (w.Count == 3 && w[2] == "status");
+                case "journalctl": return !Has(w, 1, "--vacuum*", "--rotate", "--flush", "--sync", "--relinquish-var", "--smart-relinquish-var", "--setup-keys", "--update-catalog");
+                case "docker": case "podman":
+                    if (v == null) return true;
+                    if (DockerLooks.Contains(v) && v != "ls" && v != "list" && v != "df" && v != "config") return true;
+                    if (v == "container" || v == "image" || v == "network" || v == "volume" || v == "system" || v == "compose" || v == "context" || v == "node" || v == "service")
+                    {
+                        int at = w.IndexOf(v);
+                        string sub = Verb(w, at + 1);
+                        return sub != null && DockerLooks.Contains(sub);
+                    }
+                    return false;
+                case "kubectl":
+                    if (Has(w, 1, "--kubeconfig*", "--output-directory*", "--raw")) return false;
+                    foreach (string x in w) if (Regex.IsMatch(x, @"(^|,)secrets?(/|,|$)", RegexOptions.IgnoreCase)) return false;
+                    return v == "get" || v == "describe" || v == "logs" || v == "top" || v == "version" || v == "cluster-info" || v == "explain" || v == "api-resources" || v == "api-versions" ||
+                                       (v == "config" && (Verb(w, w.IndexOf("config") + 1) == "view" || Verb(w, w.IndexOf("config") + 1) == "get-contexts" || Verb(w, w.IndexOf("config") + 1) == "current-context"));
+                case "git":
+                    {
+                        int at = 1;
+                        for (; at < w.Count && w[at].StartsWith("-", StringComparison.Ordinal); at++)
+                        {
+                            if (w[at] == "-C") { at++; continue; }
+                            if (w[at] == "-c" || Has(w.GetRange(at, 1), 0, "--git-dir*", "--work-tree*", "--exec-path*", "--config-env*", "--namespace*", "--list-cmds*", "--super-prefix*")) return false;
+                        }
+                        v = at < w.Count ? w[at] : null;
+                    }
+                    if (v == "grep") return !Short(w, 1, "O") && !Has(w, 1, "--open-files-in-pager*");
+                    if (v == "status" || v == "log" || v == "diff" || v == "show" || v == "blame" || v == "shortlog" || v == "ls-files" || v == "rev-parse" || v == "describe") return !Has(w, 1, "--output*");
+                    if (v == "branch") return OnlyFlags(w, w.IndexOf("branch") + 1) && !Has(w, 1, "-d", "-D", "-m", "-M", "-c", "-C", "-f", "--delete", "--move", "--copy", "--force", "--set-upstream-to*", "-u", "--unset-upstream", "--edit-description");
+                    if (v == "remote") return OnlyFlags(w, w.IndexOf("remote") + 1);
+                    return false;
+                case "nginx": return OnlyFlags(w, 1) && Has(w, 1, "-t", "-T", "-v", "-V", "-h", "-?") && !Has(w, 1, "-s", "-c", "-g", "-p", "-e");
+                case "apachectl": case "apache2ctl":
+                    if (w.Count == 2 && (v == "configtest" || v == "status" || v == "fullstatus")) return true;
+                    return w.Count > 1 && OnlyFlags(w, 1) && Has(w, 1, "-t", "-S", "-M", "-v", "-V") && !Has(w, 1, "-k", "-f", "-C", "-c", "-d");
+                case "crontab": return w.Count == 2 && w[1] == "-l";
+                case "ufw": return v == "status" || (v == "app" && Verb(w, w.IndexOf("app") + 1) == "list") || v == "show";
+                case "apt":
+                    if (Short(w, 1, "oc") || Has(w, 1, "--option*", "--config-file*")) return false;
+                    return v == "list" || v == "show" || v == "search" || v == "policy" || v == "depends" || v == "rdepends";
+                case "apt-cache": return v != null && v != "gencaches" && !Short(w, 1, "oc") && !Has(w, 1, "--option*", "--config-file*");
+                case "dpkg": return w.Count > 1 && Has(w, 1, "-l", "-L", "-s", "-S", "-p", "--list", "--listfiles", "--status", "--search", "--print-avail", "--print-architecture", "--get-selections") && !Has(w, 1, "-i", "-r", "-P", "--install", "--remove", "--purge", "--configure", "--set-selections");
+                case "rpm": return w.Count > 1 && w[1].StartsWith("-q", StringComparison.Ordinal) && !Short(w, 2, "DE") && !Has(w, 1, "--define*", "--eval*", "--macros*", "--rcfile*", "--dbpath*", "--root*", "--pipe*", "--queryformat*", "--qf*");
+                case "dnf": case "yum":
+                    if (Short(w, 1, "c") || Has(w, 1, "--setopt*", "--config*", "--installroot*")) return false;
+                    return v == "list" || v == "info" || v == "search" || v == "repolist" || v == "provides" || (v == "history" && Verb(w, w.IndexOf("history") + 1) == null);
+                case "pm2": return v == "list" || v == "ls" || v == "status" || v == "show" || v == "describe" || v == "logs" || v == "monit" || v == "jlist" || v == "prettylist";
+                case "ip":
+                    if (v == null) return true;
+                    if (!Regex.IsMatch(v, "^(a|addr|address|r|route|l|link|n|neigh|neighbour|rule|maddr|maddress|mroute|netns|tunnel)$")) return false;
+                    return !Has(w, 1, "add", "del", "delete", "change", "replace", "set", "flush", "append", "prepend", "save", "restore", "exec", "attach", "up", "down");
+                case "timedatectl": case "hostnamectl": case "loginctl": case "networkctl": case "resolvectl":
+                    return v == null || v == "status" || v == "show" || v.StartsWith("list-", StringComparison.Ordinal) || v == "show-session" || v == "show-user" || v == "query" || v == "statistics";
+                case "certbot": return v == "certificates";
+                case "watch":
+                case "timeout":
+                    {
+                        int i = 1;
+                        while (i < w.Count && w[i].StartsWith("-", StringComparison.Ordinal)) { if (w[i] == "-n" || w[i] == "--interval" || w[i] == "-s" || w[i] == "--signal" || w[i] == "-k" || w[i] == "--kill-after") i++; i++; }
+                        if (cmd == "timeout" && i < w.Count) i++;
+                        if (i >= w.Count) return true;
+                        return ReadOnly(string.Join(" ", w.GetRange(i, w.Count - i).ToArray()));
+                    }
+            }
+            return Looking.Contains(cmd);
+        }
+
+        static readonly HashSet<string> SshFlagsWithValue = new HashSet<string>(StringComparer.Ordinal) { "b", "c", "D", "E", "e", "F", "I", "i", "J", "L", "l", "m", "O", "o", "p", "Q", "R", "S", "W", "w", "B" };
+
+        public static string SshTarget(string line, out string remote, out bool plain)
+        {
+            remote = null;
+            plain = true;
+            string t = (line ?? "").Trim();
+            List<string> parts;
+            if (!Split(t, out parts) || parts.Count == 0) { plain = false; parts = new List<string>(new string[] { t }); }
+            List<string> w = Words(parts[0], false);
+            if (w.Count == 0) return null;
+            string cmd = Name(w[0].Replace('\\', '/')).ToLowerInvariant();
+            if (cmd != "ssh" && cmd != "ssh.exe") return null;
+            if (parts.Count > 1) plain = false;
+            string user = null;
+            int i = 1;
+            for (; i < w.Count; i++)
+            {
+                string a = w[i];
+                if (a == "--") { i++; break; }
+                if (!a.StartsWith("-", StringComparison.Ordinal) || a.Length < 2) break;
+                string last = a.Substring(a.Length - 1);
+                bool glued = false;
+                for (int k = 1; k < a.Length; k++)
+                    if (SshFlagsWithValue.Contains(a.Substring(k, 1))) { glued = k < a.Length - 1; if (a[k] == 'l') user = glued ? a.Substring(k + 1) : (i + 1 < w.Count ? w[i + 1] : null); break; }
+                if (SshFlagsWithValue.Contains(last) && !glued) i++;
+            }
+            if (i >= w.Count) return null;
+            string dest = w[i];
+            if (user != null && dest.IndexOf('@') < 0) dest = user + "@" + dest;
+            if (dest.StartsWith("ssh://", StringComparison.OrdinalIgnoreCase)) dest = dest.Substring(6).TrimEnd('/');
+            if (i + 1 < w.Count) remote = string.Join(" ", w.GetRange(i + 1, w.Count - i - 1).ToArray());
+            return dest;
+        }
+
+        public static bool Leaves(string line)
+        {
+            string t = (line ?? "").Trim();
+            return t == "exit" || t == "logout" || Regex.IsMatch(t, @"^exit\s+\d+$");
+        }
+
+        static readonly Regex Nested = new Regex(@"^\s*((sudo\s+(-\S+\s+)*)?(bash|sh|zsh|fish|dash|ksh|tmux|screen|byobu|su|newgrp|script)\b(?!.*\s-c\s)|sudo\s+(-\S+\s+)*-[is]\b|sudo\s+(-\S+\s+)*su\b|docker\s+(exec|run)\b.*\s-\w*i\w*t|docker\s+(exec|run)\b.*\s-\w*t\w*i|python3?$|node$|mysql\b|psql\b|redis-cli\b|mongo(sh)?\b)", RegexOptions.CultureInvariant);
+
+        public static bool Nests(string line)
+        {
+            return Nested.IsMatch(line ?? "");
         }
     }
 }

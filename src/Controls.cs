@@ -1574,6 +1574,8 @@ namespace MinGent
         bool filterable;
         string query = "";
         List<int> view;
+        readonly Timer blink = new Timer();
+        bool caretOn = true;
 
         public ChoiceList(Theme t, List<Choice> list, int selected, bool notesBelow)
         {
@@ -1587,12 +1589,36 @@ namespace MinGent
             TabStop = true;
             Font = UI.Font;
             BackColor = t.MenuBack;
+            blink.Interval = Math.Max(200, SystemInformation.CaretBlinkTime);
+            blink.Tick += delegate { caretOn = !caretOn; Invalidate(SearchRect()); };
+        }
+
+        Rectangle SearchRect() { return new Rectangle(0, 0, Width, ListTop); }
+
+        int Bare(string s) { return TextRenderer.MeasureText(s, Font, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding).Width; }
+
+        void Blink()
+        {
+            caretOn = true;
+            blink.Stop();
+            if (filterable && Focused && SystemInformation.CaretBlinkTime > 0) blink.Start();
+            if (filterable) Invalidate(SearchRect());
+        }
+
+        protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Blink(); }
+
+        protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Blink(); }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) blink.Dispose();
+            base.Dispose(disposing);
         }
 
         public bool Filterable
         {
             get { return filterable; }
-            set { filterable = value; Invalidate(); }
+            set { filterable = value; Blink(); Invalidate(); }
         }
 
         static int Pad { get { return UI.S(4); } }
@@ -1716,6 +1742,7 @@ namespace MinGent
             else if (view != null) { int at = view.IndexOf(sel); if (at >= 0) hot = at; }
             scroll = 0;
             CenterHot();
+            Blink();
             Invalidate();
             AccessibilityNotifyClients(AccessibleEvents.Reorder, -1);
         }
@@ -1890,16 +1917,23 @@ namespace MinGent
             {
                 using (SolidBrush b = new SolidBrush(th.MenuBack)) g.FillRectangle(b, 0, 0, Width, ListTop);
                 Rectangle box = new Rectangle(Pad + UI.S(4), Pad + UI.S(4), Width - Pad * 2 - UI.S(8), SearchH - UI.S(8));
+                bool focused = Focused;
                 Glyphs.FillRound(g, th.Well, box, UI.S(8));
-                Glyphs.DrawRound(g, th.WellBorder, new Rectangle(box.X, box.Y, box.Width - 1, box.Height - 1), UI.S(8));
+                Glyphs.DrawRound(g, focused ? th.Accent : th.WellBorder, new Rectangle(box.X, box.Y, box.Width - 1, box.Height - 1), UI.S(8));
                 Glyphs.Draw("search", g, new Rectangle(box.X + UI.S(10), box.Y + (box.Height - UI.S(16)) / 2, UI.S(16), UI.S(16)), th.ChromeDim);
                 Rectangle tr = new Rectangle(box.X + UI.S(34), box.Y, box.Width - UI.S(44), box.Height);
-                if (query.Length == 0) TextRenderer.DrawText(g, "Type to filter " + items.Count + " models", Font, tr, th.ChromeDim, Fonts.Line);
+                int caretX = tr.X;
+                if (query.Length == 0) TextRenderer.DrawText(g, "Type to filter " + items.Count + " models", Font, new Rectangle(tr.X + UI.S(3), tr.Y, tr.Width - UI.S(3), tr.Height), th.ChromeDim, Fonts.Line);
                 else
                 {
                     TextRenderer.DrawText(g, query, Font, tr, th.Fore, Fonts.Line);
-                    int qw = Math.Min(Fonts.Width(query, Font), tr.Width - UI.S(4));
-                    using (Pen p = new Pen(th.Accent, Math.Max(1, UI.S(1)))) g.DrawLine(p, tr.X + qw + UI.S(1), tr.Y + UI.S(8), tr.X + qw + UI.S(1), tr.Bottom - UI.S(8));
+                    int pad = (Fonts.Width("x", Font) - Bare("x")) / 2;
+                    caretX = tr.X + pad + Math.Min(Bare(query + "x") - Bare("x"), tr.Width - UI.S(4) - pad);
+                }
+                if (focused && caretOn)
+                {
+                    int ch = Fonts.Height("Ag", Font, 1000);
+                    using (Pen p = new Pen(th.Fore, Math.Max(1, UI.S(1)))) g.DrawLine(p, caretX, box.Y + (box.Height - ch) / 2, caretX, box.Y + (box.Height + ch) / 2 - 1);
                 }
                 if (Count == 0) TextRenderer.DrawText(g, "No model matches “" + query.Trim() + "”. Backspace changes the filter.", Fonts.Note, new Rectangle(Pad + UI.S(14), ListTop + UI.S(8), Width - Pad * 2 - UI.S(28), UI.S(40)), th.ChromeDim, Fonts.Wrap);
             }

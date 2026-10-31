@@ -1563,8 +1563,7 @@ namespace MinGent
                 foreach (Document d in rt.Groups.Keys) if (docs.Contains(d)) files.Add(d.Path != null ? FullOrNull(d.Path) ?? d.Path : DocKey(d));
             if (log != null)
             {
-                foreach (string f in log.Originals.Keys) files.Add(f);
-                foreach (string f in log.Created) files.Add(f);
+                foreach (string f in log.Paths()) files.Add(f);
             }
             return files.Count;
         }
@@ -1599,7 +1598,7 @@ namespace MinGent
             }
             if (log != null)
             {
-                foreach (KeyValuePair<string, byte[]> kv in log.Originals)
+                foreach (KeyValuePair<string, byte[]> kv in log.KeptOriginals())
                 {
                     if (log.ChangedSince(kv.Key)) { kept++; continue; }
                     try
@@ -1613,17 +1612,16 @@ namespace MinGent
                     }
                     catch { kept++; }
                 }
-                foreach (string f in log.Created)
+                foreach (string f in log.CreatedFiles())
                 {
                     if (log.ChangedSince(f)) { kept++; continue; }
                     foreach (Document d in docs.ToArray())
                         if (d.Path != null && string.Equals(FullOrNull(d.Path), f, StringComparison.OrdinalIgnoreCase) && !d.Modified) DropDoc(d);
                     if (File.Exists(f) && (RecycleBin.Send(f) || TryDelete(f))) removed++;
                 }
-                for (int i = log.CreatedDirs.Count - 1; i >= 0; i--) RemoveEmptyDirs(log.CreatedDirs[i]);
-                log.Originals.Clear();
-                log.Created.Clear();
-                log.CreatedDirs.Clear();
+                List<string> dirs = log.CreatedFolders();
+                for (int i = dirs.Count - 1; i >= 0; i--) RemoveEmptyDirs(dirs[i]);
+                log.Clear();
             }
             editor.Invalidate();
             AfterAgentChange();
@@ -2827,33 +2825,37 @@ namespace MinGent
             sessionDirty = true;
         }
 
+        List<Document> LeaveTemporaryNotes(bool ask)
+        {
+            List<Document> carry = new List<Document>();
+            List<Document> asked = new List<Document>();
+            foreach (Document d in docs) if (Unsaved(d) && !OpenElsewhere(d, null, false)) asked.Add(d);
+            bool keep = !ask;
+            if (asked.Count > 0 && ask)
+            {
+                List<string> names = new List<string>();
+                foreach (Document d in asked) names.Add(d.DisplayName);
+                DialogResult r = Alert.Choose(this, theme, "Keep the notes from the temporary chat?\n\n" + AiPanel.NoteNames(names) + (asked.Count == 1 ? " has" : " have") + " changes that aren't saved. Keep them in your notes, or discard them with the chat.",
+                    Program.AppName, MessageBoxIcon.Question, new string[] { "Keep", "Discard" }, new DialogResult[] { DialogResult.Yes, DialogResult.No }, 0, 0);
+                keep = r != DialogResult.No;
+                editor.SyncDocState();
+            }
+            foreach (Document d in new List<Document>(docs))
+            {
+                if (OpenElsewhere(d, null, false)) continue;
+                if (Unsaved(d) && (keep || !asked.Contains(d))) { carry.Add(d); continue; }
+                ForgetDoc(d);
+                DropBackup(d);
+            }
+            parked.Remove(notesKey);
+            return carry;
+        }
+
         void SwitchNotes(string key, int conv)
         {
             editor.SyncDocState();
             List<Document> carry = new List<Document>();
-            if (notesKey.StartsWith("~temp:"))
-            {
-                List<Document> asked = new List<Document>();
-                foreach (Document d in docs) if (Unsaved(d) && !OpenElsewhere(d, null, false)) asked.Add(d);
-                bool keep = false;
-                if (asked.Count > 0)
-                {
-                    List<string> names = new List<string>();
-                    foreach (Document d in asked) names.Add(d.DisplayName);
-                    DialogResult r = Alert.Choose(this, theme, "Keep the notes from the temporary chat?\n\n" + AiPanel.NoteNames(names) + (asked.Count == 1 ? " has" : " have") + " changes that aren't saved. Keep them in your notes, or discard them with the chat.",
-                        Program.AppName, MessageBoxIcon.Question, new string[] { "Keep", "Discard" }, new DialogResult[] { DialogResult.Yes, DialogResult.No }, 0, 0);
-                    keep = r != DialogResult.No;
-                    editor.SyncDocState();
-                }
-                foreach (Document d in new List<Document>(docs))
-                {
-                    if (OpenElsewhere(d, null, false)) continue;
-                    if (Unsaved(d) && (keep || !asked.Contains(d))) { carry.Add(d); continue; }
-                    ForgetDoc(d);
-                    DropBackup(d);
-                }
-                parked.Remove(notesKey);
-            }
+            if (notesKey.StartsWith("~temp:")) carry = LeaveTemporaryNotes(true);
             else
             {
                 Document cur = CurDoc;
@@ -3311,6 +3313,18 @@ namespace MinGent
             int downloading = ModelDownloads.Active().Count;
             if (downloading > 0 && e.CloseReason == CloseReason.UserClosing &&
                 !Alert.Confirm(this, theme, (downloading == 1 ? "A model is still downloading." : downloading + " models are still downloading.") + " Close MinGent anyway?\n\nA download that stops picks up where it left off when you start it again.", Program.AppName, "Close anyway", false)) { e.Cancel = true; return; }
+            if (primary && notesStarted && notesKey.StartsWith("~temp:"))
+            {
+                editor.SyncDocState();
+                List<Document> kept = LeaveTemporaryNotes(e.CloseReason == CloseReason.UserClosing);
+                docs.Clear();
+                docs.AddRange(kept);
+                if (docs.Count == 0) docs.Add(NewUntitled());
+                active = -1;
+                SelectTab(0);
+                tabs.Invalidate();
+                sessionDirty = true;
+            }
             if (primary)
             {
                 if (!SaveSession(true) && e.CloseReason == CloseReason.UserClosing)

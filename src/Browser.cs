@@ -138,6 +138,14 @@ namespace MinGent
         public static string Folder { get { return Path.Combine(Program.DataDir ?? Path.GetTempPath(), "Browser"); } }
         public static string ClearMarker { get { return Path.Combine(Program.DataDir ?? Path.GetTempPath(), "Browser.clear"); } }
         public static string WipeMarker { get { return Path.Combine(Program.DataDir ?? Path.GetTempPath(), "Browser.wipe"); } }
+        public static string TemporaryMarker { get { return Path.Combine(Program.DataDir ?? Path.GetTempPath(), "Browser.temp"); } }
+
+        public static void FinishTemporary()
+        {
+            if (!File.Exists(TemporaryMarker)) return;
+            Mark(ClearMarker);
+            Unmark(TemporaryMarker);
+        }
 
         public static void Mark(string marker)
         {

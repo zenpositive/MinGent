@@ -658,21 +658,29 @@ namespace MinGent
                     return false;
                 }
             }
+            string pLm = Protect(lmToken.Box.Text.Trim()), pAnthropic = Protect(anthropicKey.Value), pOpenAi = Protect(openaiKey.Value), pGemini = Protect(geminiKey.Value),
+                   pOpenRouter = Protect(openrouterKey.Value), pCustom = Protect(customKey.Box.Text.Trim());
+            if (pLm == null || pAnthropic == null || pOpenAi == null || pGemini == null || pOpenRouter == null || pCustom == null)
+            {
+                Select(1);
+                Alert.Show(this, Th, "Windows could not encrypt your API keys, so MinGent did not save the settings. MinGent never stores a key unencrypted.", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
             s.ThemeName = ThemeChoice;
             s.AccentName = AccentChoice;
-            s.KeyLmStudio = lmToken.Box.Text.Trim().Length > 0 ? Secret.Protect(lmToken.Box.Text.Trim()) : "";
+            s.KeyLmStudio = pLm;
             s.LmContext = CtxValues[Math.Max(0, lmCtx.SelectedIndex)];
             s.LmUnloadOthers = lmUnload.Checked;
             s.OfferEngineUpdates = engineUpdates.Checked;
             int[] ev = (int[])engineCtx.Tag;
             s.EngineContext = ev[Math.Max(0, engineCtx.SelectedIndex)];
             s.EngineKv = engineKv.SelectedIndex == 0 ? "f16" : engineKv.SelectedIndex == 2 ? "q4_0" : "q8_0";
-            s.KeyAnthropic = Protect(anthropicKey.Value);
-            s.KeyOpenAi = Protect(openaiKey.Value);
-            s.KeyGemini = Protect(geminiKey.Value);
-            s.KeyOpenRouter = Protect(openrouterKey.Value);
+            s.KeyAnthropic = pAnthropic;
+            s.KeyOpenAi = pOpenAi;
+            s.KeyGemini = pGemini;
+            s.KeyOpenRouter = pOpenRouter;
             s.CustomUrl = customUrl.Box.Text.Trim().TrimEnd('/');
-            s.KeyCustom = customKey.Box.Text.Trim().Length > 0 ? Secret.Protect(customKey.Box.Text.Trim()) : "";
+            s.KeyCustom = pCustom;
             s.CustomModel = customModel.Box.Text.Trim();
             string ws = workspace.Box.Text.Trim();
             string def = s.AiWorkspace;

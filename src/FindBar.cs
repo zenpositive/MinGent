@@ -187,6 +187,11 @@ namespace MinGent
                 ShowEditMenu(unchecked((int)(long)m.LParam));
                 return;
             }
+            if (m.Msg == 0x0302 && !ReadOnly && CanPasteOther != null && PasteOther != null && CanPasteOther())
+            {
+                PasteOther();
+                return;
+            }
             base.WndProc(ref m);
             if (m.Msg == 0x000F && Multiline && TextLength == 0 && Cue.Length > 0)
             {
