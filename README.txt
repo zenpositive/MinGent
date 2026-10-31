@@ -19,7 +19,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.0.2 beta: it works, and it still has rough edges. Report
+This is version 1.0.3 beta: it works, and it still has rough edges. Report
 problems at https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -59,7 +59,7 @@ themselves. Each of those is a way in: a hijacked maintainer account or a
 look-alike package runs its code on your PC, next to your files, keys and
 sign-ins. MinGent has none of that.
 - No packages. It uses only the .NET Framework that comes with Windows. All
-  of it is in "src": about 60,000 lines of C# you can read.
+  of it is in "src": about 70,000 lines of C# you can read.
 - No prebuilt programs. A release is the source code and Build-MinGent.bat,
   which compiles it with csc.exe from Windows itself.
 - No updater, plugins, extensions or telemetry. A new version arrives only
@@ -76,7 +76,7 @@ sign-ins. MinGent has none of that.
   Full auto asks nothing. The check reads the command; it can't see what a
   script does once it runs.
 To check a download, compare its SHA-256 with the one on the release page.
-In PowerShell: Get-FileHash .\MinGent-1.0.2-beta.zip
+In PowerShell: Get-FileHash .\MinGent-1.0.3-beta.zip
 
 
 YOUR OWN ICON
@@ -149,6 +149,13 @@ CHATS
   as a card. "Start" goes ahead, "Start in Auto" goes ahead without asking
   about ordinary steps, and "Keep planning" lets you change the plan. Nothing
   is changed before you approve it.
+- Attach files, folders and pictures with +, by dropping them on the message
+  box, or with Ctrl+V (a screenshot, a picture copied from a browser, files
+  copied in Explorer). They show as cards above the message box, pictures as
+  small previews; the x on a card removes it. In the chat, click a picture to
+  see it larger, a text file to open it in Notes, a document to open it, and
+  anything else to show it in its folder. The agent gets the full path of
+  each one, and models that can see pictures get the pictures too.
 - Documents: attach a PDF, Word, Excel, PowerPoint, OpenDocument, RTF or EPUB
   file with + (or name it in your message) and the agent reads its text -
   PDFs page by page, spreadsheets as tables, slides with their speaker notes.
@@ -181,7 +188,10 @@ CHATS
 - The ring under the message box shows how full the model's context window is
   (amber at 70%, red at 90%). Long chats are summarized automatically when
   they get close to the limit; click the ring and "Compact now", or type
-  /compact, to do it sooner. Your latest exchange is always kept as it is.
+  /compact, to do it sooner. Your latest message is always kept as it is.
+  The summary is written from the whole chat; your messages, your answers to
+  the agent's questions, the plan you approved and what helpers found come
+  first when it doesn't all fit.
   The 200 most recent chats are kept.
 - Commands: type / in the message box and a list of them pops up - /compact,
   /new (or /clear) for a new chat, /temp for a temporary chat, /plan to switch
@@ -190,8 +200,9 @@ CHATS
 - Temporary chat: the dashed bubble at the top right of a new chat. It is not
   saved to your chats and memory stays off. It's gone as soon as you leave it
   (a new chat, another chat from the list, or closing MinGent), and the
-  built-in browser's history is cleared then; sign-ins stay. Click the bubble
-  and "Keep this chat" to save it after all.
+  built-in browser's history is cleared then (after a crash, the next time
+  MinGent starts); sign-ins stay. Click the bubble and "Keep this chat" to
+  save it after all.
 
 
 KEYBOARD
@@ -372,6 +383,10 @@ Helpers
   again before it clicks or types there.
 - After the agent changes a lot of code, a reviewer checks the work before the
   answer reaches you (Settings > Agent > Tools to switch this off).
+- Each step a helper takes shows as a row under its card, while it works and
+  later. If you send a message while a helper works, the helper keeps going
+  in the background and the agent answers you; the report is added when the
+  helper is done. Stop ends background helpers too.
 - With a local model, helpers run one after another on the same loaded model,
   so they need no extra graphics memory, only time. With Claude, OpenAI,
   Gemini or OpenRouter, explorers can run at the same time; reviewers and
@@ -423,6 +438,23 @@ Testing programs it builds
   it, also in Auto mode, unless you switched off "Starting and using other
   programs" in Settings > Safety. Programs that were already open stay off
   limits.
+- It can open its own terminal window (Windows Terminal, or a console where
+  that is missing) and type commands there while you watch, for example to
+  manage a server over ssh. Before Enter, and before any other key or click
+  that could run the line, MinGent checks the command the way it checks the
+  agent's other commands and asks before risky ones. On a server reached with
+  ssh, commands that only look around (ls, cat, logs, status) run without
+  asking in Auto mode and anything else asks, unless you switch off "Changes
+  on servers over ssh" in Settings > Safety; reading password, key or token
+  files there asks like it does on this PC. After keys MinGent can't follow
+  (history, Tab completion, clicks), the next Enter or special key asks, also
+  in Auto mode, and a line you refuse is cleared so it can't run by accident.
+  The agent can't paste into a terminal. Terminal windows that were already
+  open stay off limits. Windows Terminal runs all its windows in one
+  program, so a window you open in the moment before the agent's appears
+  could be taken for the agent's; MinGent asks before the agent types in each
+  terminal window. A Windows Terminal window the agent opened stays open
+  after MinGent closes, with whatever runs in it, so close it yourself.
 - When the agent starts working in a program window that covers MinGent,
   MinGent takes one half of the screen and the program the other, and gets its
   old size back when the program closes (unless you moved it meanwhile). For a
@@ -459,6 +491,7 @@ ASK, AUTO OR FULL AUTO
     System changes, admin rights and hidden code
     Passwords, keys, the clipboard and MinGent's own data
     Uploading, publishing and rewriting git history
+    Changes on servers over ssh
     Payments, passwords and account actions
     Downloading programs and archives in the browser
 - These rows also cover commands that hide what they do or reach outside the
@@ -583,8 +616,9 @@ chats, or for looking at the files the agent works on.
   only show in that chat, and only that chat's agent can see them. Switching
   chats switches the tabs; a new chat starts with an empty note. A file open in
   two chats is the same tab in both, so changes never split. A temporary
-  chat's notes close when you leave it (MinGent asks first if one has unsaved
-  changes), and deleting a chat closes its notes.
+  chat's notes close when you leave it or close MinGent (MinGent asks first if
+  one has unsaved changes), and deleting a chat closes its notes. Until then
+  their unsaved text is backed up like any other, so a crash doesn't lose it.
 - Settings > Agent > "Show the files the agent writes" opens the files the
   agent creates or edits in tabs. Turn it off when you only watch the result,
   like a website in the browser.
@@ -686,15 +720,17 @@ PRIVACY
   built-in browser restarts when you switch it, and while offline it only
   reaches this PC and your local network. The agent may not run commands
   that need the internet (downloads, package installs, git clone, fetch, pull
-  and push, internet addresses, file shares outside your network). These
-  checks read the command, and offline mode is not a firewall: a program or
-  script that goes online by itself still can.
+  and push, ssh, web addresses, tools like ping or nslookup aimed at the
+  internet, file shares outside your network). These checks read the
+  command, and offline mode is not a firewall: a program or script that goes
+  online by itself still can.
 - Settings > Privacy > Connections lists every internet address MinGent
   connected to since it started, and why, including where a download or page
-  was redirected. For the built-in browser these are the pages it opened, not
-  every file a page loads from other sites, and commands the agent runs make
-  their own connections. The list is kept in memory; "Keep a connection log
-  file" also writes it to connections.log.
+  ended up after a redirect. For the built-in browser these are the pages it
+  opened, not every file a page loads from other sites, and commands the
+  agent runs make their own connections. The list is kept in memory; "Keep a
+  connection log file" also writes it to connections.log, temporary chats
+  included.
 - No log files by default. "Keep an error log" writes error details to
   error.log, for a bug report.
 - Settings > Privacy > "Erase everything" overwrites MinGent's chats, memory,
@@ -738,8 +774,9 @@ SECURITY / ATTACK SURFACE
   videos it reads, the sites you or it open in the browser, huggingface.co
   and its download servers when you search or download models, github.com
   and its download server when you set up, switch or update the engine, and
-  api.github.com only with "Offer newer llama.cpp releases" on. Notes itself makes no network connections.
-  Settings > Privacy > Connections shows each one.
+  api.github.com only with "Offer newer llama.cpp releases" on. Notes itself
+  makes no network connections. Settings > Privacy > Connections shows each
+  one.
 - The built-in engine is llama.cpp's server, pinned to one release and checked
   against SHA-256 checksums built into MinGent before it is unpacked (with
   protection against malicious archive paths). A newer release you choose to
@@ -748,11 +785,12 @@ SECURITY / ATTACK SURFACE
   the engine reports it), with a random key that changes every start, runs
   without its web UI, with network downloads disabled, and is stopped when
   MinGent closes.
-- Commands the agent runs get no keyboard input and have MinGent's own rights,
-  so start MinGent normally, not as administrator (it warns you if you do).
-  Stop ends the command that is running. Commands started in the background,
-  such as a local web server, keep running until the agent stops them or you
-  close MinGent, which ends them and everything they started.
+- Commands the agent runs with run_command get no keyboard input and have
+  MinGent's own rights, so start MinGent normally, not as administrator (it
+  warns you if you do). Stop ends the command that is running. Commands
+  started in the background, such as a local web server, keep running until
+  the agent stops them or you close MinGent, which ends them and everything
+  they started, except a Windows Terminal window (see above).
 - The browser pane runs in its own profile. It cannot open local files, except
   an HTML page being previewed and the files in that page's folder. MinGent
   injects no scripts into web pages; the agent's page reading runs in an
@@ -762,7 +800,10 @@ SECURITY / ATTACK SURFACE
   own job objects, plus programs Windows started for one of its program-opening
   commands while that command ran (it asks before using those, also in Auto
   mode), and is refused outright for browsers, mail and chat apps,
-  password managers, remote-access tools, consoles and system tools.
+  password managers, remote-access tools, system tools, and consoles and
+  terminals it did not open itself. Terminal windows it opened are found by
+  their window, not their process, because Windows Terminal runs all its
+  windows in one process.
 - Other direct Windows API calls: title bar colors, rounded menu
   corners, the "Animation effects" setting, checking which characters a font
   has (so math symbols never show up as boxes), telling Explorer that file types

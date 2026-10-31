@@ -25,12 +25,14 @@ Double-click `Build-MinGent.bat`, or run `Build-MinGent.bat /quiet` in a script.
 | `Program.cs` | Start-up, data folder, single instance, Open with registration |
 | `MainForm.cs` | Main window, settings file, Notes tabs and session saving, erase flow |
 | `AiPanel.cs`, `ChatView.cs`, `Markdown.cs` | Chat pane, message box, how answers are drawn |
+| `Attachments.cs` | Files and pictures attached to a message: cards, previews, pasting, and the list the agent gets |
 | `AgentCore.cs` | Agent loop, system prompt, permission levels, protected paths |
 | `AgentTools.cs` | The tools: files, commands, web search and fetch, browser tools |
 | `AgentAssist.cs` | Repairs tool calls that local models get wrong |
 | `AgentHelpers.cs` | Helper agents (explorer, reviewer) |
 | `AgentExtras.cs` | Memory, desktop program control, secure file erase |
-| `Shell.cs` | Running commands, `CommandSafety` |
+| `Shell.cs` | Running commands, `CommandSafety`, `TerminalRules` (ssh and read-only server commands) |
+| `Terminal.cs` | The agent's own terminal windows: the command line it typed, the check before Enter, ssh detection, reading the terminal's text |
 | `Llm.cs` | Model providers: OpenAI-compatible servers, Anthropic, Gemini |
 | `Engine.cs` | Built-in llama.cpp engine: pinned release with SHA-256 checksums, opt-in newer releases |
 | `ModelLibrary.cs`, `ModelLibraryDialog.cs`, `ModelCatalog.cs` | Local models, Hugging Face search, downloads |

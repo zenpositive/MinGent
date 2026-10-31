@@ -1,6 +1,60 @@
 MinGent - what changed
 ======================
 
+Version 1.0.3 beta
+- Attachments: files you attach, drop or paste show as cards with their
+  type and size, pictures as small previews, each with a remove button.
+  Folders can be attached too. Sent messages show them above the text:
+  click a picture to see it larger, a text file to open it in Notes, a
+  document to open it, and anything else to show it in its folder.
+  Reopened chats keep the cards. The agent gets the full path of
+  everything attached, also of pictures that came from a file.
+- Ctrl+V and Shift+Insert in the message box attach a screenshot, a
+  picture copied from a browser or files copied in Explorer. Copied text
+  and spreadsheet cells still paste as text.
+- Files can be sent while the agent works, and queued, edited and resent
+  messages keep their attachments. When the model can't see pictures, a
+  notice says so instead of leaving them out silently.
+- The agent can open its own terminal window (Windows Terminal, or a
+  console where that is missing) and type commands there while you watch,
+  for example to manage your server over ssh. MinGent checks the command
+  line before Enter and before any other key or click that could run it,
+  the same way it checks the agent's other commands, and clears a line you
+  refuse. On a server, commands that only look around run in Auto mode and
+  anything else asks, unless you switch off the new "Changes on servers
+  over ssh" row in Settings > Safety. Reading password, key or token files
+  on a server asks like it does on this PC. Terminals you opened yourself
+  stay off limits.
+- run_command checks "ssh host command" the same way.
+- Helpers keep working in the background when you send a message, and the
+  agent answers you meanwhile. Their reports are added when they are done,
+  and the agent waits for them before it finishes. Each helper step is a
+  row under the helper card, live while it works and after the chat is
+  reopened. Stop ends helpers in the background too.
+- Compacting a long chat gives the summary everything you asked for, your
+  answers to the agent's questions, the plan you approved, reports from
+  helpers and the review, and the checklist. When it doesn't all fit, the
+  agent's own steps are shortened and left out first.
+- Plain waits (Start-Sleep, timeout, sleep, ping to this PC) run inside
+  MinGent instead of as programs, so they no longer ask after the chat has
+  read web content. Ask mode still asks before a wait.
+- The answer row of a question card and the search box of the long model
+  list show a blinking cursor and a highlighted border while they have the
+  focus. A number typed in the answer row picks that option, unless an
+  option's text is that number.
+- Temporary chats: closing MinGent asks about the chat's unsaved notes, as
+  leaving it does, instead of bringing them back the next time. After a
+  crash, the built-in browser's history is cleared at the next start.
+- Command scripts a crash left in %TEMP%\MinGent are erased at the next
+  start instead of a day later.
+- If Windows can't encrypt an API key, Settings doesn't save it, instead of
+  storing it unencrypted.
+- Offline mode also refuses ping, nslookup, Resolve-DnsName,
+  Test-NetConnection, tracert, mosh and rsync aimed at the internet.
+  Connections also lists where a failed request was redirected.
+- "Try again" after the chat was summarized continues the task instead of
+  sending the summarized message again.
+
 Version 1.0.2 beta
 - Web search happens in the built-in browser, where you can watch it: Google
   first, then Bing, then DuckDuckGo when Google shows a bot check or has
