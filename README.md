@@ -3,7 +3,7 @@
 An AI agent for Windows that works with models on your own PC. It has no dependency tree: you compile it from the source in this repository with the C# compiler that is part of Windows.
 
 - Works in your files, runs commands, searches the web and uses its own browser, and shows every step.
-- Runs models on your PC with its built-in llama.cpp engine. Claude, OpenAI and Gemini work with your own key.
+- Runs models on your PC with its built-in llama.cpp engine. Claude, OpenAI, Gemini and OpenRouter work with your own key.
 - Supply chain resistant: no packages, no installer, no updater, no plugins, no telemetry.
 - Asks before it installs software, also in Auto mode, unless you switch that off.
 - Offline mode, a list of the internet addresses it connects to, and one button that erases what it stored.

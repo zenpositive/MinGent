@@ -5,11 +5,11 @@ you want done and it reads and changes your files, runs commands, searches
 the web and uses its own built-in browser, showing every step as it works.
 It has its own notepad for your notes and for the files it works on.
 
-It runs models on your PC with its built-in engine, or Claude, Gemini or
-OpenAI models with your own API key. It doesn't control your other programs,
-only the ones it starts itself. While it tests one of those, it moves your
-mouse pointer and types into that window, so leave the mouse alone until it
-is done.
+It runs models on your PC with its built-in engine, or Claude, Gemini,
+OpenAI or OpenRouter models with your own API key. It doesn't control your
+other programs, only the ones it starts itself. While it tests one of those,
+it moves your mouse pointer and types into that window, so leave the mouse
+alone until it is done.
 
 No dependency tree: no installer, no packages, no plugins and no updater.
 MinGent itself has no third-party code. You compile it yourself from the
@@ -19,7 +19,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.0.1 beta: it works, and it still has rough edges. Report
+This is version 1.0.2 beta: it works, and it still has rough edges. Report
 problems at https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -76,7 +76,7 @@ sign-ins. MinGent has none of that.
   Full auto asks nothing. The check reads the command; it can't see what a
   script does once it runs.
 To check a download, compare its SHA-256 with the one on the release page.
-In PowerShell: Get-FileHash .\MinGent-1.0.1-beta.zip
+In PowerShell: Get-FileHash .\MinGent-1.0.2-beta.zip
 
 
 YOUR OWN ICON
@@ -124,17 +124,23 @@ CHATS
   to open every step: the files it read, the exact lines it changed, the
   commands it ran and their output. When it is done the line sums it up
   ("Read 2 files, edited parser.py, ran 1 command - 1m 14s").
-- You can keep typing while it works. Messages you send then are queued and
-  the agent reads them at its next step, so you can add details or change
-  direction without stopping it. Until it reads one, a queued message has a
+- You can keep typing while it works. Messages you send then wait at the
+  bottom of the chat and the agent reads them at its next step, so you can add
+  details or change direction without stopping it. When it reads one, the
+  steps it took before fold away above your message, and what it says back
+  shows under it in the open. Until it reads one, a waiting message has a
   pencil to edit it and a bin to remove it (Up in the empty message box edits
   the last one). While you edit, the agent keeps working but doesn't read that
   message, or the ones after it, until you save. If it finishes in the
   meantime, the message goes out when you save. Stop puts queued messages back
   in the message box.
+- When the agent asks you something, the question card lists its suggested
+  answers; the last row of the card takes an answer of your own. When it
+  offers a plan, type there what to change.
 - Select any text in the chat with the mouse and copy it (Ctrl+C), or use the
   Copy button under an answer or a code block. Right-click for "Copy the whole
-  conversation".
+  conversation". Error messages and notices can be selected and copied too,
+  and error dialogs have a Copy button.
 - Bigger jobs get a plan, shown as a checklist above the message box. While
   the agent works, the step it is on shows next to its status; click the
   checklist to fold it away or open it again.
@@ -147,6 +153,13 @@ CHATS
   file with + (or name it in your message) and the agent reads its text -
   PDFs page by page, spreadsheets as tables, slides with their speaker notes.
   Scanned PDFs that are only pictures can't be read.
+- Sound files: attach or name a WAV, MP3, M4A, FLAC, WMA or other sound file,
+  or a video, and the agent measures its sound: loudness, peaks and clipping,
+  silences and background noise, stereo, frequency balance, the strongest
+  tones, pitch, tempo and a rough key. Models that can see images also get a
+  waveform and a spectrogram. It can't make out words or name a song. MinGent
+  reads WAV and AIFF itself and other formats with the decoders built into
+  Windows.
 - It also makes Word, Excel, PowerPoint and PDF files: ask for "a Word report",
   "slides about ..." or "a spreadsheet of ..." and it writes the file, with
   headings, tables, pictures, formulas and links. Slides split at --- lines or
@@ -217,11 +230,13 @@ KEYBOARD
 
 MODELS
 ------
-The model menu is at the bottom right of the message box. If you have not
-picked one, MinGent uses the first that works: a model in the built-in engine,
-then LM Studio, then Claude, then OpenAI, then Gemini. When a provider has
-more models than fit on the screen, the menu shows the first few (and the one
-you use) plus "All N models..." for the full list.
+The model menu is at the bottom right of the message box; each time you open
+it, MinGent checks again which models are there and updates the list while
+it is open. If you have not picked one, MinGent uses the first that works: a
+model in the built-in engine, then LM Studio, then Claude, then OpenAI, then
+Gemini, then OpenRouter. When a provider has more models than fit on the
+screen, the menu shows the first few (and the one you use) plus "All N
+models..." for the full list.
 
 - Built-in engine: runs GGUF models on this PC with llama.cpp 0.7.0. Open
   Models in the sidebar and click "Set up the engine" once - MinGent picks the
@@ -249,23 +264,33 @@ you use) plus "All N models..." for the full list.
   model maker publishing its own model), "Trusted publisher" (well-known
   publishers and quantizers such as lmstudio-community, unsloth, bartowski),
   or "Few downloads". A name like "Qwen3.8-4B-..." from an unknown publisher
-  is not from Qwen - check the publisher before the name. Each model shows
-  when it was published and last updated, a short description from its model
-  card, its longest context, its license, and for every size how much memory
-  it needs. Several models can download at once, and downloads keep going
-  when you close the library; they show at the top of "On this PC". They
-  resume if interrupted and are checked against the SHA-256 checksum Hugging
-  Face lists for the file, when it lists one; a file that does not match is
-  deleted. Settings > Models >
-  Model folder picks where new models are saved.
+  is not from Qwen - check the publisher before the name. Icons next to the
+  name show what a model can do - a hammer for tool use, an eye for vision,
+  a bulb for thinking, and a red warning when its chat template has no tool
+  calls (the agent needs those); hover an icon to see what it means. The
+  same icons show under On this PC. Each model shows when it was published
+  and last updated, a short description from its model card, its longest
+  context, its license, and for every size how much memory it needs.
+  Several models can download at once, and downloads keep going when you
+  close the library; they show at the top of "On this PC". They resume if
+  interrupted and are checked against the SHA-256 checksum Hugging Face
+  lists for the file, when it lists one; a file that does not match is
+  deleted. Settings > Models > Model folder picks where new models are
+  saved.
 - Context length: "Auto" (the default) measures the free graphics memory when
   the model loads and picks the longest context that fits, up to the most the
   model supports. Hover the ring under the message box to see how much of it a
   chat uses. Settings > Models also has fixed sizes, and "Compact" context
   memory (the default) fits about twice as much as full precision.
-- Claude, OpenAI or Gemini: add your API key in Settings > Models and the
-  models appear in the menu (Gemini keys come from aistudio.google.com; free
-  keys work, with daily limits).
+- Claude, OpenAI, Gemini or OpenRouter: paste your API key in Settings >
+  Models. MinGent checks it right away and says whether it works, and a key
+  pasted in another provider's row is not sent anywhere. The link next to
+  each key opens the page where you make one (Gemini keys come from
+  aistudio.google.com, and free keys work, with daily limits). Change and
+  Remove replace or delete a saved key. OpenRouter gives one key for models
+  from many makers; MinGent lists those that can use tools, most popular
+  first, with their prices, and the model menu's "All N models..." list has a
+  search box.
 - Other model servers: if you already run one, Settings > Models > Other
   model servers takes any OpenAI-compatible address (Ollama, vLLM, another
   llama.cpp...). LM Studio is found by itself once its server runs (Developer
@@ -311,10 +336,17 @@ Made for local models
   another key press, always goes through. Runs that only update the
   checklist or repeat an approved plan, and research in plan mode that never
   ends, are stopped after a few rounds, and the agent says where it is.
-- Web search asks DuckDuckGo, then DuckDuckGo Lite, then Bing, and leaves out
-  results that have nothing to do with the query (search engines sometimes
-  answer automated searches with unrelated pages). When none of them gives
-  related results, the agent is told so and searches in the built-in browser.
+- Web search happens in the built-in browser, so you see it: Google first,
+  then Bing, then DuckDuckGo when Google shows a bot check or has nothing.
+  Google hides each result's address behind its own link, so MinGent looks up
+  the real address and the agent gets normal links it can read and cite.
+  Reading a page from its address stays a direct download, without the
+  browser. Searches use the built-in browser's own sign-ins: if you signed in
+  to Google there, they show up in that account's search history like your
+  own. When the browser is off, searches go to DuckDuckGo, DuckDuckGo
+  Lite and Bing directly. Results that have nothing to do with the query are
+  left out (search engines sometimes answer automated searches with
+  unrelated pages).
 - Its memory of the conversation is kept in the shape the model's cache
   expects, so long sessions don't reprocess the whole chat at every step.
 - It recovers from the ways local servers fail: a reply that runs out of room
@@ -341,20 +373,21 @@ Helpers
 - After the agent changes a lot of code, a reviewer checks the work before the
   answer reaches you (Settings > Agent > Tools to switch this off).
 - With a local model, helpers run one after another on the same loaded model,
-  so they need no extra graphics memory, only time. With Claude, OpenAI or
-  Gemini, explorers can run at the same time; reviewers and general helpers
-  run one at a time, since they share the browser and the work folder.
+  so they need no extra graphics memory, only time. With Claude, OpenAI,
+  Gemini or OpenRouter, explorers can run at the same time; reviewers and
+  general helpers run one at a time, since they share the browser and the
+  work folder.
 
 Tools
 - Every tool the agent has is part of MinGent's own C# code: there are no
   plugins, no MCP servers and nothing that is downloaded while it runs.
 - Each tool's description takes room in the model's context, which matters
   with a small local model. Settings > Agent > Tools switches whole groups on
-  or off and shows what each one costs: web search (about 150 tokens), the
-  browser (about 1,550), desktop programs (about 1,650) and helpers (about
-  250). Files, commands and planning are always on (about 2,750). The browser
-  and desktop-program tools also switch off by themselves when the model's
-  context is under 16K and 24K tokens.
+  or off and shows what each one costs: web search (about 200 tokens), the
+  browser (about 1,600), desktop programs (about 1,700) and helpers (about
+  250). Files, commands, sound files and planning are always on (about
+  2,950). The browser and desktop-program tools also switch off by
+  themselves when the model's context is under 16K and 24K tokens.
 - With web search and pages off, the agent still opens addresses on this PC
   and your local network, such as a development server.
 
@@ -369,8 +402,10 @@ Testing programs it builds
 - It can start a desktop program it wrote, read its window (buttons, fields,
   menus), click and type in it like a person, and take screenshots (with models
   that can see images). It presses any key or shortcut (matched to your keyboard
-  layout), right-, middle-, double- and triple-clicks, clicks with Ctrl or
-  Shift held, presses and holds, scrolls, hovers and drags. This moves your
+  layout), holds keys down (up to 10 seconds at a time), also several at once
+  (Shift+W, W+D), right-, middle-, double- and triple-clicks, clicks with Ctrl
+  or Shift held, presses and holds, scrolls, hovers and drags. A pointer in
+  your accent color shows where it points and clicks. This moves your
   real mouse pointer and sends real key presses to that window. It is told
   never to fake input with PowerShell SendKeys and the like, which would go to
   whatever window has focus. Keys that act on Windows itself (the Windows key,
@@ -513,6 +548,8 @@ THE BROWSER
   tries it hands the CAPTCHA to you.)
 - Give the agent a YouTube link and it reads the video's title, channel,
   date, description and transcript. Long pages and transcripts come in parts.
+- The agent's pointer, in your accent color, shows where it points, clicks,
+  drags and scrolls in the browser. It never shows up in screenshots.
 - "Sign in with..." and payment pop-ups open in their own small window with the
   address shown at the top. Links that open a new tab open in the same pane,
   the same way as a normal click. Messages, confirmations and "leave this page?"
@@ -669,9 +706,10 @@ PRIVACY
   what the agent saved in Documents\MinGent Files (erased unless you switch it
   off) and the engine and models (kept unless you switch them on; they are
   downloads, not your data). Files in your other folders stay.
-- A chat that used Claude, OpenAI or Gemini was also sent to that provider,
-  which keeps its own copy under its own rules; deleting the chat here can't
-  reach that. The same goes for a temporary chat.
+- A chat that used Claude, OpenAI, Gemini or OpenRouter was also sent to
+  that provider (through OpenRouter, also to the model's maker), which keeps
+  its own copy under its own rules; deleting the chat here can't reach that.
+  The same goes for a temporary chat.
 - The built-in browser keeps its own history and sign-ins like any browser;
   deleting a chat does not sign you out of sites ("Wipe browser data" does).
 - Like Edge, the built-in browser checks sites and downloads with Microsoft
@@ -693,13 +731,14 @@ SECURITY / ATTACK SURFACE
   and the browser is Microsoft's WebView2.
 - MinGent itself connects only to: the model you chose (the built-in engine
   or LM Studio on 127.0.0.1, or api.anthropic.com / api.openai.com /
-  generativelanguage.googleapis.com / your custom server), the providers you
-  saved an API key for (to list their models), DuckDuckGo or Bing when the
-  agent searches, the pages and YouTube videos it reads, the sites you or it
-  open in the browser, huggingface.co and its download servers when you
-  search or download models, github.com and its download server when you set
-  up, switch or update the engine, and api.github.com only with "Offer newer
-  llama.cpp releases" on. Notes itself makes no network connections.
+  generativelanguage.googleapis.com / openrouter.ai / your custom server),
+  the providers you saved an API key for (to check the key and list their
+  models), Google, Bing or DuckDuckGo when the agent searches (and Google
+  once per result, to look up its real address), the pages and YouTube
+  videos it reads, the sites you or it open in the browser, huggingface.co
+  and its download servers when you search or download models, github.com
+  and its download server when you set up, switch or update the engine, and
+  api.github.com only with "Offer newer llama.cpp releases" on. Notes itself makes no network connections.
   Settings > Privacy > Connections shows each one.
 - The built-in engine is llama.cpp's server, pinned to one release and checked
   against SHA-256 checksums built into MinGent before it is unpacked (with
@@ -740,8 +779,8 @@ Windows 10 or Windows 11 (they include .NET Framework 4.8).
 For the browser: Microsoft Edge WebView2 Runtime (included in Windows 11 and
 current Windows 10; free download from Microsoft otherwise).
 For the agent: the built-in engine (a graphics card with enough memory for the
-model helps a lot), an Anthropic / OpenAI / Gemini API key, or a model server
-you already run, such as LM Studio or Ollama.
+model helps a lot), an Anthropic / OpenAI / Gemini / OpenRouter API key, or a
+model server you already run, such as LM Studio or Ollama.
 
 
 USE AT YOUR OWN RISK

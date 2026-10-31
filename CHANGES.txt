@@ -1,6 +1,60 @@
 MinGent - what changed
 ======================
 
+Version 1.0.2 beta
+- Web search happens in the built-in browser, where you can watch it: Google
+  first, then Bing, then DuckDuckGo when Google shows a bot check or has
+  nothing. Google hides each result's address behind its own link, so
+  MinGent looks up the real address and the agent gets normal links it can
+  read and cite. Reading a page from its address stays a direct download.
+  With the browser off, searches go to DuckDuckGo and Bing directly, as
+  before.
+- Sound files: the agent can measure a WAV, MP3, M4A, FLAC, WMA or other
+  sound file, or the sound of a video: loudness (LUFS), peaks and clipping,
+  silences, background noise, stereo, frequency balance, the strongest
+  tones, pitch, tempo and a rough key, with a waveform and a spectrogram for
+  models that can see images. MinGent reads WAV and AIFF itself and other
+  formats with the decoders built into Windows; nothing is downloaded.
+- API keys are checked as soon as you paste them, and Settings says whether
+  the key works or why it was rejected. A key pasted in another provider's
+  row is not sent anywhere; Settings says which row it belongs in. Change
+  and Remove replace or delete a saved key, and each key has a link to the
+  page where you make one (Claude's now goes to platform.claude.com).
+- OpenRouter as a provider: one key for models from many makers. MinGent
+  lists the models that can use tools, most popular first, with their
+  prices, and passes the Thinking level on. When the account can't pay for
+  a long answer, MinGent asks again with the length it can pay for.
+- The model menu checks for models again each time you open it and updates
+  the list while it is open. Its "All N models..." list has a search box.
+- Model library: icons show what a model can do, also in the Download list
+  before you download it: a hammer for tool use, an eye for vision, a bulb
+  for thinking, and a red warning when its chat template has no tool calls.
+  Hover an icon to see what it means. MinGent reads this from the model's
+  chat template and files on Hugging Face.
+- Error messages and notices in the chat can be selected and copied, and
+  error dialogs have a Copy button (Ctrl+C works too).
+- Messages you send while the agent works wait at the bottom of the chat.
+  When the agent reads one, its steps so far fold away above your message
+  and what it says back shows under it in the open, instead of inside the
+  closed list of steps.
+- Questions from the agent: type your own answer in the last row of the
+  question card instead of the message box. A change you type there for an
+  offered plan goes out as a new message.
+- Keys: the agent can hold keys down (up to 10 seconds at a time) and press
+  several at once (Shift+W, W+D) in the browser and in programs it started,
+  for games and the like. Keys can be named the way Windows and browsers
+  name them (Minus, Equal, Comma, KeyW, Digit5, OemPeriod).
+- A pointer in your accent color shows where the agent points, clicks, drags
+  and scrolls, in the browser and in desktop programs. It lets clicks
+  through and never shows up in the agent's screenshots.
+- Side by side: the outline and "MinGent" tag of the program the agent uses
+  are drawn inside its window when it touches the screen edges, so they no
+  longer hide behind MinGent's own window.
+- Auto mode: plain waits (Start-Sleep, timeout, ping to this PC) no longer
+  ask after the chat has read web content.
+- YouTube transcripts load more often: when the video page's caption links
+  need a token, MinGent asks YouTube's player the way the Android app does.
+
 Version 1.0.1 beta
 - Web search leaves out results that have nothing to do with the query.
   Search engines sometimes answer automated searches with a bot check or

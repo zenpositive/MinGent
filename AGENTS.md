@@ -39,6 +39,7 @@ Double-click `Build-MinGent.bat`, or run `Build-MinGent.bat /quiet` in a script.
 | `Net.cs`, `Eraser.cs` | Offline mode, connection list, erase everything |
 | `Http.cs`, `Json.cs` | HTTP and JSON |
 | `YouTube.cs` | Video details and transcripts |
+| `Audio.cs` | Sound files for the agent: reads WAV and AIFF, decodes other formats with Windows Media Foundation, measures loudness, spectrum, pitch and tempo, draws the waveform and spectrogram |
 | `Documents.cs`, `Doc*.cs`, `Pdf*.cs`, `DocxWriter.cs`, `XlsxWriter.cs`, `PptxWriter.cs`, `Tex*.cs` | Reading and writing documents, formulas |
 | `EditorView.cs`, `Document.cs`, `TabStrip.cs`, `FindBar.cs`, `Syntax.cs` | Notes editor |
 | `SettingsDialog.cs`, `Sidebar.cs`, `Controls.cs`, `UiKit.cs`, `Theme.cs`, `AppHighlight.cs` | Settings, chat list, controls, theme |
