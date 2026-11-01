@@ -197,6 +197,7 @@ namespace MinGent
             answerBox.Visible = false;
             answerBox.Font = fonts.Body;
             answerBox.AccessibleName = "Your own answer";
+            answerBox.IdleCaret = true;
             answerBox.KeyDown += delegate (object sender, KeyEventArgs e)
             {
                 if (e.KeyCode == Keys.Enter && !e.Shift && !e.Control && !e.Alt) { e.Handled = e.SuppressKeyPress = true; SubmitAnswer(); }

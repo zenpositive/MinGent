@@ -364,11 +364,18 @@ namespace MinGent
                           : Math.Min(k.EngineContext > 0 ? k.EngineContext : 32768, lm.TrainContext > 0 ? lm.TrainContext : int.MaxValue);
                 m.Loaded = e.Running && string.Equals(e.ModelPath, lm.Path, StringComparison.OrdinalIgnoreCase);
                 m.Vision = lm.ProjectorPath != null;
-                m.ReasoningOptions = lm.NativeEffort ? new List<string>(new string[] { "low", "medium", "high" })
-                                   : lm.Thinking ? new List<string>(new string[] { "off", "low", "medium", "high", "max" }) : null;
+                m.ReasoningOptions = EngineThinkingLevels(lm);
                 m.BudgetThinking = lm.Thinking && !lm.NativeEffort;
                 list.Add(m);
             }
+        }
+
+        public static List<string> EngineThinkingLevels(LocalModel lm)
+        {
+            if (lm.NativeEffort) return new List<string>(new string[] { "low", "medium", "high" });
+            if (!lm.Thinking) return null;
+            if (lm.CanStopThinking) return new List<string>(new string[] { "off", "low", "medium", "high", "max" });
+            return new List<string>(new string[] { "low", "medium", "high", "max" });
         }
 
         static readonly string[][] AnthropicFallback = {

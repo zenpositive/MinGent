@@ -103,8 +103,70 @@ namespace MinGent
         public Theme MenuTheme;
         public Func<bool> CanPasteOther;
         public Action PasteOther;
+        bool idleCaret, idleOn = true;
+        Timer idleBlink;
 
-        protected override void OnTextChanged(EventArgs e) { base.OnTextChanged(e); if (Multiline && TextLength <= 1) Invalidate(); }
+        public bool IdleCaret
+        {
+            get { return idleCaret; }
+            set { idleCaret = value; Idle(); }
+        }
+
+        public bool IdleCaretShown { get { return IdleShown && idleOn; } }
+
+        bool IdleShown { get { return idleCaret && Multiline && Visible && !Focused && TextLength == 0 && !IsDisposed; } }
+
+        Rectangle CaretSpot
+        {
+            get
+            {
+                Point o = Native.EditTextOrigin(this);
+                return new Rectangle(o.X, o.Y, Glyphs.CaretWidth, Math.Max(1, Math.Min(ClientSize.Height - o.Y, Font.Height)));
+            }
+        }
+
+        void Idle()
+        {
+            idleOn = true;
+            int ms = SystemInformation.CaretBlinkTime;
+            if (IdleShown && ms > 0)
+            {
+                if (idleBlink == null)
+                {
+                    idleBlink = new Timer();
+                    idleBlink.Tick += delegate
+                    {
+                        if (!IdleShown) { idleBlink.Stop(); return; }
+                        idleOn = !idleOn;
+                        Invalidate(Rectangle.Inflate(CaretSpot, 1, 0));
+                    };
+                }
+                idleBlink.Interval = Math.Max(200, ms);
+                idleBlink.Stop();
+                idleBlink.Start();
+            }
+            else if (idleBlink != null) idleBlink.Stop();
+            if (idleCaret && IsHandleCreated) Invalidate(Rectangle.Inflate(CaretSpot, 1, 0));
+        }
+
+        protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Idle(); }
+
+        protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Idle(); }
+
+        protected override void OnVisibleChanged(EventArgs e) { base.OnVisibleChanged(e); Idle(); }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && idleBlink != null) { idleBlink.Dispose(); idleBlink = null; }
+            base.Dispose(disposing);
+        }
+
+        protected override void OnTextChanged(EventArgs e)
+        {
+            base.OnTextChanged(e);
+            if (Multiline && TextLength <= 1) Invalidate();
+            if (idleCaret && TextLength <= 1) Idle();
+        }
 
         protected override void OnKeyDown(KeyEventArgs e)
         {
@@ -192,16 +254,28 @@ namespace MinGent
                 PasteOther();
                 return;
             }
+            bool cue = m.Msg == 0x000F && Multiline && TextLength == 0;
+            Rectangle area = cue ? Native.UpdateArea(this) : Rectangle.Empty;
             base.WndProc(ref m);
-            if (m.Msg == 0x000F && Multiline && TextLength == 0 && Cue.Length > 0)
+            if (cue && !area.IsEmpty && (Cue.Length > 0 || IdleCaretShown))
             {
+                bool hid = Focused && Native.HideCaretIn(this);
                 try
                 {
                     using (Graphics g = CreateGraphics())
-                        TextRenderer.DrawText(g, Cue, Font, new Rectangle(UI.S(3), 1, ClientSize.Width - UI.S(4), ClientSize.Height - 1), CueColor,
-                            TextFormatFlags.NoPrefix | TextFormatFlags.WordBreak | TextFormatFlags.Left | TextFormatFlags.Top);
+                    {
+                        g.SetClip(area);
+                        Rectangle spot = CaretSpot;
+                        if (Cue.Length > 0)
+                            TextRenderer.DrawText(g, Cue, Font, new Rectangle(spot.X, spot.Y, Math.Max(1, ClientSize.Width - spot.X), Math.Max(1, ClientSize.Height - spot.Y)), CueColor,
+                                TextFormatFlags.NoPrefix | TextFormatFlags.WordBreak | TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.NoPadding | TextFormatFlags.PreserveGraphicsClipping);
+                        if (IdleCaretShown)
+                            using (SolidBrush b = new SolidBrush(ForeColor))
+                                g.FillRectangle(b, spot);
+                    }
                 }
                 catch { }
+                finally { if (hid) Native.ShowCaretIn(this); }
             }
         }
     }

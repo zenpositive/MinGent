@@ -12,9 +12,9 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("MinGent - an AI agent for Windows with its own notepad and browser")]
 [assembly: AssemblyProduct("MinGent")]
 [assembly: AssemblyCopyright("Built locally from source")]
-[assembly: AssemblyVersion("1.0.3.0")]
-[assembly: AssemblyFileVersion("1.0.3.0")]
-[assembly: AssemblyInformationalVersion("1.0.3 beta")]
+[assembly: AssemblyVersion("1.0.4.0")]
+[assembly: AssemblyFileVersion("1.0.4.0")]
+[assembly: AssemblyInformationalVersion("1.0.4 beta")]
 
 namespace MinGent
 {
@@ -233,6 +233,14 @@ namespace MinGent
         static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, string lParam);
         [DllImport("user32.dll")]
         static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+        [DllImport("user32.dll")]
+        static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref RECT lParam);
+        [DllImport("user32.dll")]
+        static extern bool GetUpdateRect(IntPtr hWnd, ref RECT rect, bool erase);
+        [DllImport("user32.dll")]
+        static extern bool HideCaret(IntPtr hWnd);
+        [DllImport("user32.dll")]
+        static extern bool ShowCaret(IntPtr hWnd);
         [DllImport("dwmapi.dll")]
         static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
         [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
@@ -363,6 +371,46 @@ namespace MinGent
         public static void SetCueBanner(TextBox tb, string text)
         {
             try { SendMessage(tb.Handle, 0x1501 , (IntPtr)1, text); } catch { }
+        }
+
+        public static Point EditTextOrigin(TextBox tb)
+        {
+            try
+            {
+                if (Environment.OSVersion.Platform == PlatformID.Win32NT && tb.IsHandleCreated)
+                {
+                    RECT r = new RECT();
+                    SendMessage(tb.Handle, 0x00B2, IntPtr.Zero, ref r);
+                    if (r.Left >= 0 && r.Top >= 0 && r.Left < tb.ClientSize.Width && r.Top < Math.Max(1, tb.ClientSize.Height)) return new Point(r.Left, r.Top);
+                }
+            }
+            catch { }
+            return new Point(1, 0);
+        }
+
+        public static bool HideCaretIn(Control c)
+        {
+            try { return Environment.OSVersion.Platform == PlatformID.Win32NT && c.IsHandleCreated && HideCaret(c.Handle); }
+            catch { return false; }
+        }
+
+        public static void ShowCaretIn(Control c)
+        {
+            try { ShowCaret(c.Handle); } catch { }
+        }
+
+        public static Rectangle UpdateArea(Control c)
+        {
+            try
+            {
+                if (Environment.OSVersion.Platform == PlatformID.Win32NT && c.IsHandleCreated)
+                {
+                    RECT r = new RECT();
+                    return GetUpdateRect(c.Handle, ref r, false) ? Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom) : Rectangle.Empty;
+                }
+            }
+            catch { }
+            return c.ClientRectangle;
         }
 
         public static void SetImePosition(Control c, int x, int y)

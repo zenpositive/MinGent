@@ -2048,6 +2048,13 @@ namespace MinGent
             return Compact(cfg, ui, ct, systemPrompt, false);
         }
 
+        static string QuickEffort(ModelEntry m)
+        {
+            List<string> o = m != null && (m.Provider == "engine" || m.Provider == "lmstudio") ? m.ReasoningOptions : null;
+            if (o == null || o.Count == 0 || o.Contains("off") || o.Contains("none")) return "off";
+            return EffortLevels.Nearest("minimal", o) ?? "off";
+        }
+
         public const string BackgroundDone = " that was working in the background is done";
         public const string ReviewIntro = "[MinGent] Before your answer reaches the user, an independent reviewer (a helper that did not see your reasoning) checked your changes. Its report:\n\n";
 
@@ -2356,7 +2363,7 @@ namespace MinGent
                 "<conversation>\n" + tx + "\n</conversation>");
             req.Messages = new List<Msg>(new Msg[] { ask });
             req.MaxTokens = Math.Min(4096, Math.Max(1024, cfg.ContextTokens / 8));
-            req.Effort = "off";
+            req.Effort = QuickEffort(cfg.Model);
             req.ShowThinking = false;
             LlmResult r = cfg.Backend.Stream(req, null, ct);
             if (manual && (r.Cancelled || ct.IsCancelled)) return false;

@@ -396,7 +396,7 @@ namespace MinGent
         public string DisplayName = "", Quant = "", ParamsText = "", Architecture = "", SourceLabel = "";
         public long Bytes, TotalBytes;
         public int TrainContext, PartIndex, PartCount;
-        public bool IsProjector, Thinking, NativeEffort, ToolTemplate, OwnDownload, Helper, Incomplete;
+        public bool IsProjector, Thinking, NativeEffort, CanStopThinking, ToolTemplate, OwnDownload, Helper, Incomplete;
         public string ProjectorPath, Error;
         public double? Temp, TopP, MinP;
         public int? TopK;
@@ -722,6 +722,7 @@ namespace MinGent
                 m.ParamsText = g.SizeLabel;
                 if (string.IsNullOrEmpty(m.ParamsText) && g.ParameterCount > 0) m.ParamsText = FormatParams(g.ParameterCount);
                 ModelTraits.FromTemplate(g.ChatTemplate, out m.ToolTemplate, out m.Thinking, out m.NativeEffort);
+                m.CanStopThinking = ModelTraits.CanStopThinking(g.ChatTemplate);
                 m.Temp = g.Temp; m.TopP = g.TopP; m.MinP = g.MinP; m.TopK = g.TopK;
                 string nm = !string.IsNullOrEmpty(g.Name) ? g.Name : null;
                 m.DisplayName = nm ?? CleanName(fi.Name);
@@ -1013,6 +1014,11 @@ namespace MinGent
             nativeEffort = t.IndexOf("reasoning_effort", StringComparison.Ordinal) >= 0;
             thinking = nativeEffort || t.IndexOf("<think>", StringComparison.Ordinal) >= 0 || t.IndexOf("enable_thinking", StringComparison.Ordinal) >= 0 || t.IndexOf("reasoning_content", StringComparison.Ordinal) >= 0;
             tools = t.IndexOf("tools", StringComparison.Ordinal) >= 0;
+        }
+
+        public static bool CanStopThinking(string template)
+        {
+            return (template ?? "").IndexOf("enable_thinking", StringComparison.Ordinal) >= 0;
         }
 
         public static bool IsProjectorName(string fileName)

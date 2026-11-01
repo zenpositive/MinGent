@@ -140,6 +140,8 @@ namespace MinGent
 
         public static float FocusWidth { get { return Math.Max(2f, 2f * UI.Scale); } }
 
+        public static int CaretWidth { get { return Math.Max(1, SystemInformation.CaretWidth); } }
+
         public static void StepMark(Graphics g, Rectangle r, int state, Theme th)
         {
             SmoothingMode old = g.SmoothingMode;
@@ -1922,18 +1924,18 @@ namespace MinGent
                 Glyphs.DrawRound(g, focused ? th.Accent : th.WellBorder, new Rectangle(box.X, box.Y, box.Width - 1, box.Height - 1), UI.S(8));
                 Glyphs.Draw("search", g, new Rectangle(box.X + UI.S(10), box.Y + (box.Height - UI.S(16)) / 2, UI.S(16), UI.S(16)), th.ChromeDim);
                 Rectangle tr = new Rectangle(box.X + UI.S(34), box.Y, box.Width - UI.S(44), box.Height);
-                int caretX = tr.X;
-                if (query.Length == 0) TextRenderer.DrawText(g, "Type to filter " + items.Count + " models", Font, new Rectangle(tr.X + UI.S(3), tr.Y, tr.Width - UI.S(3), tr.Height), th.ChromeDim, Fonts.Line);
+                Rectangle tt = new Rectangle(tr.X + UI.S(3), tr.Y, tr.Width - UI.S(3), tr.Height);
+                int caretX = tt.X;
+                if (query.Length == 0) TextRenderer.DrawText(g, "Type to filter " + items.Count + " models", Font, tt, th.ChromeDim, Fonts.Line | TextFormatFlags.NoPadding);
                 else
                 {
-                    TextRenderer.DrawText(g, query, Font, tr, th.Fore, Fonts.Line);
-                    int pad = (Fonts.Width("x", Font) - Bare("x")) / 2;
-                    caretX = tr.X + pad + Math.Min(Bare(query + "x") - Bare("x"), tr.Width - UI.S(4) - pad);
+                    TextRenderer.DrawText(g, query, Font, tt, th.Fore, Fonts.Line | TextFormatFlags.NoPadding);
+                    caretX = tt.X + Math.Min(Bare(query + "x") - Bare("x"), tt.Width - UI.S(2));
                 }
                 if (focused && caretOn)
                 {
                     int ch = Fonts.Height("Ag", Font, 1000);
-                    using (Pen p = new Pen(th.Fore, Math.Max(1, UI.S(1)))) g.DrawLine(p, caretX, box.Y + (box.Height - ch) / 2, caretX, box.Y + (box.Height + ch) / 2 - 1);
+                    using (SolidBrush cb = new SolidBrush(th.Fore)) g.FillRectangle(cb, caretX, box.Y + (box.Height - ch) / 2, Glyphs.CaretWidth, ch);
                 }
                 if (Count == 0) TextRenderer.DrawText(g, "No model matches “" + query.Trim() + "”. Backspace changes the filter.", Fonts.Note, new Rectangle(Pad + UI.S(14), ListTop + UI.S(8), Width - Pad * 2 - UI.S(28), UI.S(40)), th.ChromeDim, Fonts.Wrap);
             }
