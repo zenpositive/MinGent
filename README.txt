@@ -19,7 +19,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.0.3 beta: it works, and it still has rough edges. Report
+This is version 1.0.4 beta: it works, and it still has rough edges. Report
 problems at https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -76,7 +76,7 @@ sign-ins. MinGent has none of that.
   Full auto asks nothing. The check reads the command; it can't see what a
   script does once it runs.
 To check a download, compare its SHA-256 with the one on the release page.
-In PowerShell: Get-FileHash .\MinGent-1.0.3-beta.zip
+In PowerShell: Get-FileHash .\MinGent-1.0.4-beta.zip
 
 
 YOUR OWN ICON
@@ -309,8 +309,10 @@ models..." for the full list.
   the model you pick, and "Use the model loaded in LM Studio" follows whatever
   you load there.
 - Thinking: models that can think show a "Thinking" chip under the message box
-  to pick how much (off is fastest). The model's thinking can be shown in the
-  chat.
+  to pick how much (off is fastest). A new level counts from your next
+  message, also in the middle of a chat. Local models that always think, such
+  as DeepSeek R1 and QwQ, have no off: low is their fastest. The model's
+  thinking can be shown in the chat.
 
 Tips for local models
 - Load models with a context of at least 32K tokens (64K-128K is better for

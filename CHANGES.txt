@@ -1,6 +1,20 @@
 MinGent - what changed
 ======================
 
+Version 1.0.4 beta
+- Local models that always think, such as DeepSeek R1 and its distills,
+  QwQ and the Qwen 3 Thinking-2507 models, no longer offer Off on the
+  Thinking chip. The built-in engine can't stop their thinking, so Off let
+  them think without any limit. Low is now their fastest level, and Off
+  picked for another model counts as Low for them. Summarizing a long chat
+  uses their lowest level too, so long thinking no longer crowds out the
+  summary.
+- The answer row of a question card shows a blinking cursor before you
+  click it, so it reads as a place to type, not a button.
+- The cursor in the search box of the long model list sits where typing
+  starts, also before you type. In the message box and the answer row, the
+  grey hint text starts at the cursor.
+
 Version 1.0.3 beta
 - Attachments: files you attach, drop or paste show as cards with their
   type and size, pictures as small previews, each with a remove button.
