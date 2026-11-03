@@ -56,13 +56,14 @@ namespace MinGent
         public bool OfferEngineUpdates;
         public bool BrowserVisible;
         public int BrowserWidth = 560;
+        public int BrowserConsoleHeight;
         public string ModelsFolder = "", ModelsOldFolders = "";
         public bool Offline, KeepNetLog, KeepErrorLog;
 
         static readonly string[] KeptOnReset = {
             "KeyAnthropic", "KeyOpenAi", "KeyGemini", "KeyOpenRouter", "KeyCustom", "KeyLmStudio", "CustomUrl", "CustomModel",
             "ModelsFolder", "ModelsOldFolders", "AiModel", "AiLastLmModel", "AiLastChat",
-            "Bounds", "Maximized", "NotesVisible", "AgentVisible", "SidebarCollapsed", "NotesWidth", "BrowserWidth", "BrowserVisible",
+            "Bounds", "Maximized", "NotesVisible", "AgentVisible", "SidebarCollapsed", "NotesWidth", "BrowserWidth", "BrowserVisible", "BrowserConsoleHeight",
             "AiAutoExplained", "AiPlanExplained", "AiFullExplained", "AiInstructions", "AiMemory", "Offline" };
 
         public void ResetPreferences()
@@ -387,6 +388,9 @@ namespace MinGent
         readonly HashSet<string> ownedBackups = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         Document CurDoc { get { return active >= 0 && active < docs.Count ? docs[active] : null; } }
 
+        string updateTo;
+        bool closedForGood;
+
         public MainForm(string[] args, bool primary)
         {
             this.primary = primary;
@@ -477,6 +481,8 @@ namespace MinGent
             browser = new BrowserPane();
             browser.Visible = false;
             browser.AppShortcut = BrowserShortcut;
+            browser.ConsoleHeight = settings.BrowserConsoleHeight;
+            browser.ConsoleHeightChanged += delegate (int h) { settings.BrowserConsoleHeight = h; };
             browser.ShowRequested += delegate { ShowBrowser(true, false); };
             browser.CloseRequested += delegate { ShowBrowser(false, false); };
             aiPanel = new AiPanel(settings, this);
@@ -1738,6 +1744,7 @@ namespace MinGent
             bool saved;
             int erase = -1;
             bool reset = false;
+            string updateVersion = null;
             try
             {
                 using (SettingsDialog dlg = new SettingsDialog(settings, theme))
@@ -1760,6 +1767,7 @@ namespace MinGent
                     };
                     dlg.WipeBrowser = WipeBrowserData;
                     dlg.ResetAll = delegate { reset = true; };
+                    dlg.UpdateReady = delegate (string version) { updateVersion = version; };
                     SettingsDialog shown = dlg;
                     dlg.PreviewLook = delegate (string th, string ac)
                     {
@@ -1795,6 +1803,17 @@ namespace MinGent
             }
             if (erase >= 0) { StartErase((erase & 1) != 0, (erase & 2) != 0); return; }
             if (reset) { ResetSettings(); return; }
+            if (updateVersion != null)
+            {
+                updateTo = updateVersion;
+                Close();
+                if (!closedForGood)
+                {
+                    updateTo = null;
+                    Alert.Show(this, theme, "MinGent stayed open, so MinGent " + updateVersion + " was not installed. Check for updates again when you want it.", Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                return;
+            }
             if (!saved) return;
             bool wasOffline = Net.Offline;
             settings.Save();
@@ -3139,6 +3158,23 @@ namespace MinGent
             if ((openedFiles || !shell.AgentOn) && NotesShown) editor.Focus();
             else aiPanel.FocusInput();
             EngineUpdates.CheckSoon();
+            if (primary)
+            {
+                string[] update = Updater.TakeResult();
+                Updater.CleanUp(update);
+                System.Windows.Forms.Timer healthy = new System.Windows.Forms.Timer();
+                healthy.Interval = 30000;
+                healthy.Tick += delegate { healthy.Stop(); healthy.Dispose(); Updater.MarkHealthy(); };
+                healthy.Start();
+                if (update != null && (update[0] != "updated" || ReleaseVersion.Compare(update[2], Updater.Current) == 0))
+                    BeginInvoke(new Action(delegate
+                    {
+                        if (update[0] == "updated")
+                            Alert.Show(this, theme, "MinGent is updated to " + ReleaseVersion.Display(Updater.Current) + ". CHANGES.txt in " + Updater.AppDir + " lists what changed.", Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        else
+                            Alert.Show(this, theme, "MinGent " + ReleaseVersion.Display(update[1]) + " was not installed: " + update[2] + ".", Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }));
+            }
             if (Program.Elevated && primary)
                 BeginInvoke(new Action(delegate
                 {
@@ -3374,6 +3410,13 @@ namespace MinGent
             if (browser != null) browser.Shutdown();
             try { ModelCatalog.UnloadOurLmStudioModels(3000); } catch { }
             if (ipc != null) { try { ipc.DestroyHandle(); } catch { } ipc = null; }
+            closedForGood = true;
+            if (primary) Updater.MarkHealthy();
+            if (updateTo != null && !Program.Erased)
+            {
+                string err = Updater.StartFinish(updateTo);
+                if (err != null) MessageBox.Show("MinGent could not start the update: " + err + "\n\nNothing was changed.", Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
         }
     }
 }

@@ -101,6 +101,10 @@ namespace MinGent
         bool CheckCleared(CancelToken ct);
         void ShowToUser();
         string CloseForAgent(bool userAsked);
+        string ConsoleRead(CancelToken ct, out string text);
+        string ConsoleRun(string code, string checkedUrl, CancelToken ct, out string result);
+        void ConsoleRefused(string code, string why);
+        string ConsoleNews();
     }
 
     class TodoItem
@@ -111,9 +115,9 @@ namespace MinGent
     static class PermissionCategory
     {
         public const string Install = "install", Launch = "launch", Delete = "delete", System = "system", Credentials = "credentials",
-                            Publish = "publish", Remote = "remote", BrowserSensitive = "sensitive", Downloads = "downloads", Never = "never";
+                            Publish = "publish", Remote = "remote", BrowserSensitive = "sensitive", Downloads = "downloads", Console = "console", Never = "never";
 
-        public static readonly string[] All = { Install, Launch, Delete, System, Credentials, Publish, Remote, BrowserSensitive, Downloads };
+        public static readonly string[] All = { Install, Launch, Delete, System, Credentials, Publish, Remote, BrowserSensitive, Downloads, Console };
 
         public static string Title(string c)
         {
@@ -128,6 +132,7 @@ namespace MinGent
                 case Remote: return "Changes on servers over ssh";
                 case BrowserSensitive: return "Payments, passwords and account actions";
                 case Downloads: return "Downloading programs and archives in the browser";
+                case Console: return "Running code in the browser console";
             }
             return c;
         }
@@ -145,6 +150,7 @@ namespace MinGent
                 case Remote: return "Commands that may change a server the agent reached with ssh, or Linux in WSL. Commands that only look around (ls, cat, logs, status) don't ask.";
                 case BrowserSensitive: return "Buy, pay and delete-account buttons, and password or payment fields, in the browser and in programs.";
                 case Downloads: return "Files the browser would save that can run code: programs, scripts and archives.";
+                case Console: return "JavaScript the agent runs in a page to look into it or debug it, like code typed into the developer tools. On a website that code can do anything you can do there.";
             }
             return "";
         }
@@ -527,12 +533,13 @@ namespace MinGent
 
         public static bool Visible(string name)
         {
-            return Array.IndexOf(ReadOnly, name) >= 0 || name == "memory" || name == "delegate";
+            return Array.IndexOf(ReadOnly, name) >= 0 || name == "memory" || name == "delegate" || name == "browser_console";
         }
 
         public static bool Allows(string name, Dictionary<string, object> args)
         {
             if (Array.IndexOf(ReadOnly, name) >= 0) return true;
+            if (name == "browser_console") return (Json.Str(args, "code") ?? "").Trim().Length == 0;
             if (name == "memory") return (Json.Str(args, "action") ?? "list").Trim().ToLowerInvariant() == "list";
             if (name == "delegate") return DelegateTool.KindArg(args) == "explore";
             return false;
@@ -873,7 +880,7 @@ namespace MinGent
         public List<Msg> History = new List<Msg>();
         public List<TodoItem> Todos = new List<TodoItem>();
         public readonly PermissionState Perms;
-        public bool IsHelper, AutoReview;
+        public bool IsHelper, AutoReview, DocToolNudged;
         public string HelperKind = "", BrowserMovedTo;
         public int StepLimit = 200;
         public readonly SyncSet ReadFiles = new SyncSet();
@@ -2463,6 +2470,15 @@ namespace MinGent
             sb.Append("- edit_file: copy old_string exactly from the current file, with the same indentation, and include enough lines to make it unique. For several changes in one file, make one edit_file call per change.\n");
             sb.Append("- write_file with append=true adds to the end of a file. Write a long file in parts: the first part normally, then the rest with append=true.\n");
             sb.Append("- run_command: commands cannot read keyboard input, so use non-interactive flags (-y, --yes, /quiet). Start servers, watchers and GUI programs with background=true, then use command_status.\n");
+            sb.Append("- Documents: for a PDF, Word document or PowerPoint, write Markdown with write_file to a path ending in .pdf, .docx or .pptx; for Excel, write CSV, a Markdown table or JSON rows to .xlsx. MinGent builds the real file, with headings, lists, tables, pictures, math and page breaks. Don't install libraries or programs for documents. Only when the user wants something this can't do (custom fonts, colors or an exact layout), say so and ask before using another tool, and use a tool the user names.\n");
+            string csc = Native.CSharpCompiler();
+            if (SystemInfoTool.HasPython()) sb.Append("- Scripts: Python is installed; use it with its standard library, or PowerShell for simple jobs. Never install a language or runtime for one task.\n");
+            else
+            {
+                sb.Append("- Scripts: Python is not installed, so don't use or install it. Use PowerShell for simple jobs");
+                if (csc != null) sb.Append(", and C# for heavy number crunching such as generating audio: compile with & \"").Append(csc).Append("\" /nologo /out:name.exe name.cs, then run the exe. That compiler knows only C# 5: no $\"...\" strings, ?., nameof, => on methods or properties, out var, tuples or local functions");
+                sb.Append(".\n");
+            }
             if (Net.Offline) sb.Append("- Offline mode is on (the user turned it on in Settings): MinGent makes no internet connections. There is no web search and no downloading, and web_fetch").Append(browser ? " and the browser" : "").Append(" only open addresses on this PC or the local network (files, localhost, LAN). Work with what is on this PC, and don't run commands that need the internet.\n");
             else if (!cfg.WebAllowed) sb.Append("- Web access is switched off in Settings: there is no web search, and web_fetch").Append(browser ? " and the browser" : "").Append(" only open addresses on this PC or the local network.\n");
             else sb.Append("- web_fetch reads a YouTube video too: its title, description and transcript. Use it when the user wants to know what a video says.\n");
@@ -2470,7 +2486,9 @@ namespace MinGent
             if (!small)
             {
                 sb.Append("- Unsaved tabs have no file on disk: use the tab name as the path. Edits to open tabs show up at once, and the user can undo them.\n");
+                sb.Append("- After you make a sound file, check it with analyze_audio focus=listen before you call it done: it tells you the clicks, fades, pitch and tone you can't hear.\n");
                 if (browser) sb.Append("- Browser: browser_read lists links, buttons and fields with refs like e12. Use browser_click and browser_type with those refs, and read the page again after it changes. browser_click also does right, middle and double clicks and clicks with Ctrl or Shift held; browser_hover, browser_drag and browser_scroll (also inside lists and maps, and sideways) cover the rest of the mouse, and browser_press_key presses any key or shortcut. For just reading documentation, web_fetch is faster.\n");
+                if (browser) sb.Append("- browser_console reads the page's console and runs JavaScript in the page, only to look into it and debug it. Never use it for what the other browser_ tools do: clicking, typing, keys, scrolling, submitting or navigating.\n");
                 sb.Append("- close_pane closes the browser or notes pane: when the user asks (set user_asked), or when you are done with a pane and it shows nothing the user needs.\n");
                 if (apps) sb.Append("- Desktop programs: app_read lists a window's controls with refs like a5 for app_click and app_type. It works for programs you started in this chat, including ones Windows opened for your command (Store apps such as Calculator). app_click also does right, middle and double clicks and clicks with Ctrl or Shift held; app_scroll, app_hover and app_drag cover the rest of the mouse, and app_key presses any key or shortcut.\n");
                 if (apps) sb.Append("- Terminals: use run_command for commands. Only when the user wants to watch, or for an interactive ssh session, open your own terminal window with run_command (Start-Process wt -ArgumentList '-w','new', or Start-Process powershell where Windows Terminal is missing) and work in it with app_read, app_type (enter=true) and app_key. MinGent checks each command before Enter runs it.\n");

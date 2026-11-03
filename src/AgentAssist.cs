@@ -105,10 +105,14 @@ namespace MinGent
             AddImplied("browser_scroll", Json.O("direction", "right"), "scroll_right", "browser_scroll_right");
             AddMany(new string[] { "browser_screenshot", "app_screenshot" }, null, "screenshot", "take_screenshot", "capture_screenshot", "capture_screen", "screen_capture", "screen_shot");
             Add("browser_screenshot", "browser_take_screenshot", "capture_page", "page_screenshot", "browser_capture");
+            Add("browser_console", "console", "read_console", "browser_read_console", "console_messages", "browser_console_messages", "console_logs", "browser_console_logs", "get_console_logs", "get_console_messages",
+                "read_console_messages", "browser_logs", "page_console", "devtools_console", "browser_devtools", "devtools", "browser_evaluate", "evaluate", "browser_eval", "eval", "evaluate_script", "execute_script",
+                "browser_execute_script", "execute_javascript", "run_javascript", "javascript", "js", "run_js", "eval_js", "evaluate_js", "browser_javascript", "browser_js", "page_evaluate", "javascript_tool",
+                "browser_run_javascript", "execute_js", "browser_run_js");
             AddImplied("memory", Json.O("action", "add"), "remember", "save_memory", "add_memory", "memorize", "store_memory", "save_note", "update_memory", "write_memory", "memory_add", "remember_fact", "save_fact", "store_fact", "memory_save");
             AddImplied("memory", Json.O("action", "list"), "recall", "list_memory", "read_memory", "get_memory", "view_memory", "memories", "list_memories", "memory_list", "memory_read", "show_memory");
             AddImplied("memory", Json.O("action", "remove"), "forget", "remove_memory", "delete_memory", "memory_remove", "memory_delete", "forget_fact");
-            Add("analyze_audio", "audio_analysis", "analyse_audio", "analyze_sound", "analyse_sound", "audio_analyze", "audio_info", "audio_stats", "inspect_audio", "read_audio", "listen", "listen_audio", "listen_to_audio", "hear_audio", "audio_analyzer", "analyze_music", "analyze_song", "analyze_wav", "analyze_mp3", "waveform", "spectrogram", "get_audio_info", "audio_metadata", "measure_audio", "loudness");
+            Add("analyze_audio", "audio_analysis", "analyse_audio", "analyze_sound", "analyse_sound", "audio_analyze", "audio_info", "audio_stats", "inspect_audio", "read_audio", "listen", "listen_audio", "listen_to_audio", "hear_audio", "audio_analyzer", "analyze_music", "analyze_song", "analyze_wav", "analyze_mp3", "waveform", "spectrogram", "get_audio_info", "audio_metadata", "measure_audio", "loudness", "detect_beats", "find_beats", "beat_track", "beat_tracking", "detect_tempo", "detect_onsets", "align_audio", "sync_audio", "compare_audio");
             Add("system_info", "sysinfo", "system_information", "get_system_info", "os_info", "environment_info", "machine_info", "get_environment", "env_info", "computer_info", "hardware_info", "pc_info", "get_os_info", "system_details");
             Add("app_read", "read_app", "read_window", "window_read", "desktop_read", "ui_read", "get_window", "list_windows", "inspect_window", "app_snapshot", "window_snapshot", "get_ui", "app_inspect", "read_ui", "get_window_elements", "app_elements");
             Add("app_screenshot", "window_screenshot", "desktop_screenshot", "app_capture", "screenshot_window", "capture_window", "app_screen", "screenshot_app");
@@ -358,6 +362,7 @@ namespace MinGent
             A("options", "choices", "answers", "suggestions", "buttons", "option_list", "possible_answers", "answer_options", "items", "alternatives", "selections");
             A("details", "context", "description", "explanation", "info", "detail", "body", "note", "reason");
             A("description", "summary", "explanation", "purpose", "desc", "what", "what_it_does", "intent", "comment");
+            A("code", "script", "expression", "js", "javascript", "js_code", "javascript_code", "source", "source_code", "snippet", "function", "func", "eval", "expr", "statement", "statements", "command", "program", "input", "text", "body");
         }
 
         static void A(string param, params string[] list)
@@ -515,6 +520,8 @@ namespace MinGent
                 Rename(a, "start", ref changed, "start_time", "from", "begin", "start_seconds", "start_sec", "offset", "from_seconds", "seek", "start_at", "t0");
                 Rename(a, "end", ref changed, "end_time", "to", "stop", "until", "end_seconds", "end_sec", "to_seconds", "end_at", "t1");
                 Rename(a, "pictures", ref changed, "images", "include_images", "plots", "show_images", "graphs", "charts", "visualize", "visualise", "draw", "image");
+                Rename(a, "focus", ref changed, "mode", "analysis", "analysis_type", "type", "kind", "detail", "report", "view", "focus_on");
+                Rename(a, "compare_with", ref changed, "compare", "compare_to", "other", "other_path", "other_file", "second", "second_path", "second_file", "reference", "reference_path", "align_with", "align_to", "sync_with", "sync_to", "against", "path2", "file2");
                 object span = Take(a, "duration", "length", "seconds", "span", "duration_seconds");
                 if (span != null && !a.ContainsKey("end"))
                 {
@@ -1571,6 +1578,28 @@ namespace MinGent
 
     static class CommandHelp
     {
+        public const string BuiltInDocuments = "MinGent writes PDF, Word, PowerPoint and Excel files itself: write Markdown with write_file to a path ending in .pdf, .docx or .pptx, or CSV, a Markdown table or JSON rows to .xlsx.";
+
+        static readonly HashSet<string> DocumentModules = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+            "reportlab", "fpdf", "fpdf2", "docx", "docxtpl", "openpyxl", "xlsxwriter", "pptx", "weasyprint", "pdfkit", "xhtml2pdf", "md2pdf", "pypandoc", "docx2pdf" };
+
+        static readonly Regex DocumentInstall = new Regex(@"\b(pip3?|uv|poetry|conda|npm|pnpm|yarn|bun)(\.exe|\.cmd)?\b[^;&|\r\n]*?\b(install|add|i)\b[^;&|\r\n]*?(?<![\w.-])(reportlab|fpdf2?|python-docx|docxtpl|openpyxl|xlsxwriter|python-pptx|pdfkit|weasyprint|xhtml2pdf|md2pdf|markdown-pdf|docx2pdf|pypandoc|jspdf|pdfmake|pptxgenjs|exceljs|docx|xlsx)(?![\w.-])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        static readonly Regex DocumentConvert = new Regex(@"\bpandoc(\.exe)?\b[^;&|\r\n]*?(-o|--output)[\s=]+[""']?[^\s""';&|]+\.(pdf|docx|pptx)\b|\b(soffice|libreoffice)(\.exe|\.com)?\b[^;&|\r\n]*?--convert-to\s+[""']?(pdf|docx|pptx|xlsx)\b|\bwkhtmltopdf(\.exe)?\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        public static string DocumentTool(string cmd)
+        {
+            if (string.IsNullOrEmpty(cmd)) return null;
+            Match m = DocumentInstall.Match(cmd);
+            if (m.Success) return m.Groups[4].Value;
+            m = DocumentConvert.Match(cmd);
+            if (!m.Success) return null;
+            string v = m.Value.TrimStart().ToLowerInvariant();
+            return v.StartsWith("pandoc") ? "pandoc" : v.StartsWith("wkhtmltopdf") ? "wkhtmltopdf" : "LibreOffice";
+        }
+
+        public static bool DocumentModule(string module) { return module != null && DocumentModules.Contains(module); }
+
         public static string TranslateChain(string cmd)
         {
             if (string.IsNullOrEmpty(cmd) || cmd.IndexOf("&&", StringComparison.Ordinal) < 0 && cmd.IndexOf("||", StringComparison.Ordinal) < 0) return null;
@@ -1728,10 +1757,13 @@ namespace MinGent
             {
                 string mod = m.Groups[1].Value.Split('.')[0], pkg;
                 if (!PipNames.TryGetValue(mod, out pkg)) pkg = mod;
-                hints.Add("The Python package " + pkg + " is not installed. Installing packages always needs the user's OK, also in Auto mode: if the task really needs it, run python -m pip install " + pkg + " with a description saying why (MinGent asks the user); otherwise solve it without the package.");
+                if (DocumentModule(mod)) hints.Add("The Python package " + pkg + " is not installed, and it isn't needed: " + BuiltInDocuments + " Use another tool only if the user asked for it or wants something that can't do, such as custom fonts, colors or an exact layout.");
+                else hints.Add("The Python package " + pkg + " is not installed. Installing packages always needs the user's OK, also in Auto mode: if the task really needs it, run python -m pip install " + pkg + " with a description saying why (MinGent asks the user); otherwise solve it without the package.");
             }
             m = NpmScript.Match(o);
             if (m.Success) hints.Add("package.json has no \"" + m.Groups[1].Value + "\" script. Read package.json to see which scripts it has.");
+            if (Regex.IsMatch(cmd ?? "", @"\\Microsoft\.NET\\Framework(64)?\\v4\.0\.30319\\csc(\.exe)?\b", RegexOptions.IgnoreCase) && Regex.IsMatch(o, @"\berror CS\d{4}\b"))
+                hints.Add("This csc.exe knows only C# 5. If an error points at newer syntax, rewrite it in C# 5: string.Format or + instead of $\"...\", explicit null checks instead of ?. and ??=, \"Name\" instead of nameof, full bodies instead of => on methods and properties, a declared variable before out instead of out var, a small class instead of a tuple, and a separate method instead of a local function.");
             if (exitCode == -1073741515) hints.Add("The program could not start because a DLL it needs is missing (0xC0000135).");
             if (exitCode == 9009 && missing == null) hints.Add("cmd.exe could not find the program (exit code 9009). It is not installed or not on PATH.");
             if (timedOut)
@@ -1896,7 +1928,7 @@ namespace MinGent
             ".xaml", ".fs", ".vb", ".r", ".jl", ".zig", ".nim", ".ex", ".exs", ".erl", ".hs", ".clj", ".groovy", ".pl" };
 
         static readonly HashSet<string> Checks = new HashSet<string>(StringComparer.Ordinal) {
-            "run_command", "command_status", "browser_navigate", "browser_read", "browser_screenshot", "browser_click", "browser_type",
+            "run_command", "command_status", "browser_navigate", "browser_read", "browser_screenshot", "browser_click", "browser_type", "browser_console",
             "app_read", "app_screenshot", "app_click", "app_type", "app_key", "app_scroll", "app_hover", "app_drag" };
 
         static readonly Regex Refusal = new Regex(
@@ -2231,12 +2263,13 @@ namespace MinGent
         static readonly HashSet<string> Reads = new HashSet<string>(StringComparer.Ordinal) {
             "read_file", "list_directory", "find_files", "search_text", "web_fetch", "web_search", "system_info", "analyze_audio" };
         static readonly HashSet<string> Live = new HashSet<string>(StringComparer.Ordinal) {
-            "command_status", "browser_read", "browser_screenshot", "app_read", "app_screenshot" };
+            "command_status", "browser_read", "browser_screenshot", "browser_console", "app_read", "app_screenshot" };
         static readonly HashSet<string> Inert = new HashSet<string>(StringComparer.Ordinal) { "todo_write", "open_in_editor" };
         static readonly Regex ScriptName = new Regex(@"cmd-[0-9a-f]{12}\.ps1", RegexOptions.CultureInvariant);
 
         public static bool Changes(string name, Dictionary<string, object> args)
         {
+            if (name == "browser_console") return (Json.Str(args, "code") ?? "").Trim().Length > 0;
             if (Reads.Contains(name) || Live.Contains(name) || Inert.Contains(name)) return false;
             if (name == "memory") { string a = (Json.Str(args, "action") ?? "").ToLowerInvariant(); return a != "list" && a != "read"; }
             return true;

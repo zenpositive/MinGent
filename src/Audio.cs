@@ -280,6 +280,23 @@ namespace MinGent
         readonly long fluxLimit;
         public readonly List<float> Flux = new List<float>();
         readonly double[] fre = new double[512], fim = new double[512], prevMag = new double[256], fwin = AudioMath.Hann(512);
+        public List<float> Kept, KeptFull;
+        long keepMax, fullMax;
+
+        public void Keep(AudioKeep k, long expected)
+        {
+            if (k == null) return;
+            if (k.Seconds > 0)
+            {
+                keepMax = (long)Math.Ceiling(k.Seconds * DecRate);
+                Kept = new List<float>((int)Math.Min(keepMax, expected > 0 ? expected / dec + 16 : (long)(DecRate * 60)));
+            }
+            if (k.FullSeconds > 0)
+            {
+                fullMax = (long)Math.Ceiling(k.FullSeconds * Rate);
+                KeptFull = new List<float>((int)Math.Min(fullMax, expected > 0 ? expected + 16 : (long)Rate * 10));
+            }
+        }
 
         public MixAnalyzer(int rate, long expected)
         {
@@ -330,6 +347,7 @@ namespace MinGent
 
         public void Add(float v)
         {
+            if (KeptFull != null && KeptFull.Count < fullMax) KeptFull.Add(v);
             Env.Add(v);
             r50 += (double)v * v;
             if (++r50n == Rms50Len) { Rms50.Add((float)Math.Sqrt(r50 / r50n)); r50 = 0; r50n = 0; }
@@ -356,6 +374,7 @@ namespace MinGent
             dring[dpos] = (float)x;
             dpos = (dpos + 1) & DMask;
             dcount++;
+            if (Kept != null && Kept.Count < keepMax) Kept.Add((float)x);
             if (++sincePitch >= pitchHop && dcount > YinW + maxLag + 1) { sincePitch = 0; Pitch(); }
             if (dcount <= fluxLimit && ++sinceFlux >= 128 && dcount >= 512) { sinceFlux = 0; FluxFrame(); }
         }
@@ -545,6 +564,9 @@ namespace MinGent
         bool finished;
 
         public AudioCollector(int channels, int rate, double maxSeconds, double expectedSeconds, double fullScale, double step, bool side)
+            : this(channels, rate, maxSeconds, expectedSeconds, fullScale, step, side, null) { }
+
+        public AudioCollector(int channels, int rate, double maxSeconds, double expectedSeconds, double fullScale, double step, bool side, AudioKeep keep)
         {
             Channels = Math.Max(1, channels);
             Rate = Math.Max(1, rate);
@@ -553,6 +575,7 @@ namespace MinGent
             double exp = expectedSeconds;
             if (maxSeconds > 0 && exp > maxSeconds) exp = maxSeconds;
             Mix = new MixAnalyzer(Rate, exp > 0 && exp < 1e7 ? (long)(exp * Rate) : -1);
+            Mix.Keep(keep, exp > 0 && exp < 1e7 ? (long)(exp * Rate) : -1);
             Peak = new double[Channels];
             SumSq = new double[Channels];
             Sum = new double[Channels];
@@ -703,6 +726,11 @@ namespace MinGent
         }
     }
 
+    class AudioKeep
+    {
+        public double Seconds, FullSeconds;
+    }
+
     class AudioInfo
     {
         public string Codec = "", Error, Note;
@@ -749,20 +777,22 @@ namespace MinGent
             return Array.IndexOf(SoundExtensions, e) >= 0;
         }
 
-        public static AudioInfo Load(string path, double start, double length, CancelToken ct, bool side)
+        public static AudioInfo Load(string path, double start, double length, CancelToken ct, bool side) { return Load(path, start, length, ct, side, null); }
+
+        public static AudioInfo Load(string path, double start, double length, CancelToken ct, bool side, AudioKeep keep)
         {
             string why = null;
             PcmLayout f = null;
             try { f = Probe(path, out why); }
             catch (Exception ex) { why = ex.Message; }
-            if (f != null) return Pcm(path, f, start, length, ct, side);
+            if (f != null) return Pcm(path, f, start, length, ct, side, keep);
             if (Path.DirectorySeparatorChar != '\\')
             {
                 AudioInfo none = new AudioInfo();
                 none.Error = why != null && why != "unsupported" ? why : "only WAV and AIFF files can be read on this system";
                 return none;
             }
-            AudioInfo info = MediaFoundationReader.Read(path, start, length, ct, side);
+            AudioInfo info = MediaFoundationReader.Read(path, start, length, ct, side, keep);
             if (info.Error != null && info.Error != "stopped" && why != null && why != "unsupported") info.Error = why;
             return info;
         }
@@ -926,7 +956,7 @@ namespace MinGent
             return ((a & 0x80) != 0 ? t : -t) / 32768f;
         }
 
-        static AudioInfo Pcm(string path, PcmLayout f, double start, double length, CancelToken ct, bool side)
+        static AudioInfo Pcm(string path, PcmLayout f, double start, double length, CancelToken ct, bool side, AudioKeep keep)
         {
             AudioInfo info = new AudioInfo();
             info.Rate = f.Rate;
@@ -939,7 +969,7 @@ namespace MinGent
             long first = at >= f.Frames ? f.Frames : (long)Math.Round(at);
             info.Start = first / (double)f.Rate;
             long left = f.Frames - first;
-            info.Data = new AudioCollector(f.Channels, f.Rate, length, left / (double)f.Rate, f.FullScale, f.Step, side);
+            info.Data = new AudioCollector(f.Channels, f.Rate, length, left / (double)f.Rate, f.FullScale, f.Step, side, keep);
             try
             {
                 using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
@@ -1177,7 +1207,7 @@ namespace MinGent
             return 1 - step;
         }
 
-        public static AudioInfo Read(string path, double start, double length, CancelToken ct, bool side)
+        public static AudioInfo Read(string path, double start, double length, CancelToken ct, bool side, AudioKeep keep)
         {
             AudioInfo info = new AudioInfo();
             int co = -1;
@@ -1242,7 +1272,7 @@ namespace MinGent
                 info.Start = start;
                 double expected = info.FileSeconds > 0 ? Math.Max(0, info.FileSeconds - start) : -1, step;
                 double scale = Scale(isFloat, bits, out step);
-                info.Data = new AudioCollector(ch, rate, length, expected, scale, step, side);
+                info.Data = new AudioCollector(ch, rate, length, expected, scale, step, side, keep);
                 long skip = -1;
                 float[] f = new float[0];
                 byte[] raw = new byte[0];
@@ -1281,7 +1311,7 @@ namespace MinGent
                             info.Channels = ch;
                             info.Rate = rate;
                             scale = Scale(isFloat, bits, out step);
-                            info.Data = new AudioCollector(ch, rate, length, expected, scale, step, side);
+                            info.Data = new AudioCollector(ch, rate, length, expected, scale, step, side, keep);
                             skip = -1;
                         }
                         bytes = bits / 8;
@@ -1843,6 +1873,11 @@ namespace MinGent
                 int pc = ((int)near % 12 + 12) % 12;
                 chroma[pc] += Math.Log(1 + 1000 * Math.Sqrt(p[k] / peak));
             }
+            return KeyFrom(chroma, 0.6);
+        }
+
+        public static string KeyFrom(double[] chroma, double least)
+        {
             double cmax = 0, cmin = double.MaxValue;
             foreach (double v in chroma) { cmax = Math.Max(cmax, v); cmin = Math.Min(cmin, v); }
             if (cmax <= 0 || cmax - cmin < 0.15 * cmax) return null;
@@ -1855,7 +1890,7 @@ namespace MinGent
                     if (r > best) { second = best; secondRoot = bestRoot; secondMode = bestMode; best = r; bestRoot = root; bestMode = mode; }
                     else if (r > second) { second = r; secondRoot = root; secondMode = mode; }
                 }
-            if (best < 0.6) return null;
+            if (best < least) return null;
             string name = KeyNames[bestRoot] + (bestMode == 0 ? " major" : " minor");
             bool relative = bestMode != secondMode && (bestMode == 0 ? (bestRoot + 9) % 12 == secondRoot : (bestRoot + 3) % 12 == secondRoot);
             if (relative && best - second < 0.04) name += " or " + KeyNames[secondRoot] + (secondMode == 0 ? " major" : " minor");
@@ -2080,40 +2115,82 @@ namespace MinGent
             get
             {
                 return "Measure the sound of an audio or video file: loudness (LUFS, peak, RMS), clipping, silences, background noise, stereo, frequency balance, strongest tones, pitch, tempo and a rough key, " +
-                       "plus a waveform and a spectrogram for models that see images. It can't make out words or name a song. WAV, AIFF, MP3, M4A, FLAC, WMA and more. Covers the first hour unless you set start and end.";
+                       "plus a waveform and a spectrogram for models that see images. It can't make out words or name a song. WAV, AIFF, MP3, M4A, FLAC, WMA and more. Covers the first hour unless you set start and end. " +
+                       "Set focus for beat and bar times, hits, notes, song sections, or listen (how a sound you made comes out: start and end, clicks, pitch, tone), and compare_with to find where another file lines up with this one.";
             }
         }
         public override Dictionary<string, object> Schema
         {
             get
             {
+                Dictionary<string, object> focus = P("string", "overview (default), beats, hits, notes, sections or listen; long lists are saved to a .csv file");
+                focus["enum"] = Json.A("overview", "beats", "hits", "notes", "sections", "listen");
                 return Obj("path", P("string", "Sound or video file"), true,
                            "start", P("number", "Seconds (default 0)"), false,
                            "end", P("number", "Seconds (default: one hour after start)"), false,
-                           "pictures", P("boolean", "Default true; false when checking many files"), false);
+                           "focus", focus, false,
+                           "compare_with", P("string", "Another sound file: where it lines up with this one, and its tempo, key and loudness"), false,
+                           "pictures", P("boolean", "Waveform and spectrogram; default true for the overview, false for a focus. False when checking many files"), false);
             }
         }
-        public override string Label(Dictionary<string, object> a) { return "Analyze " + ReadFileTool.Short(S(a, "path") ?? "the sound"); }
-
-        public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
+        public override string Label(Dictionary<string, object> a)
         {
-            string p = S(a, "path");
-            if (string.IsNullOrEmpty(p)) return ToolOutcome.Fail("path is required");
+            string n = ReadFileTool.Short(S(a, "path") ?? "the sound"), other = S(a, "compare_with");
+            if (!string.IsNullOrEmpty(other)) return "Line up " + ReadFileTool.Short(other) + " with " + n;
+            switch (AudioFocus.Name(S(a, "focus")))
+            {
+                case "beats": return "Find the beats in " + n;
+                case "hits": return "Find the hits in " + n;
+                case "notes": return "Find the notes in " + n;
+                case "sections": return "Find the sections of " + n;
+                case "listen": return "Listen to " + n;
+            }
+            return "Analyze " + n;
+        }
+
+        static string Target(ToolContext ctx, string p, out ToolOutcome fail)
+        {
+            fail = null;
+            if (string.IsNullOrEmpty(p)) { fail = ToolOutcome.Fail("path is required"); return null; }
             string err;
             string full = AgentPaths.Resolve(p, ctx.Workspace, out err);
-            if (full == null) return ToolOutcome.Fail(err ?? "invalid path");
-            if (Directory.Exists(full)) return ToolOutcome.Fail(full + " is a folder. Give one sound file; list_directory or find_files shows what is in it.");
+            if (full == null) { fail = ToolOutcome.Fail(err ?? "invalid path"); return null; }
+            if (Directory.Exists(full)) { fail = ToolOutcome.Fail(full + " is a folder. Give one sound file; list_directory or find_files shows what is in it."); return null; }
             if (!File.Exists(full))
             {
                 List<string> sim = PathHelp.Similar(full, ctx.Workspace, ctx.Ct, false);
-                return ToolOutcome.Fail("file not found: " + full + "." + (sim.Count > 0 ? PathHelp.Describe(sim, ctx.Workspace) : " Use find_files or list_directory to find the right path."));
+                fail = ToolOutcome.Fail("file not found: " + full + "." + (sim.Count > 0 ? PathHelp.Describe(sim, ctx.Workspace) : " Use find_files or list_directory to find the right path."));
+                return null;
             }
             string deny = ctx.CheckRead(full);
-            if (deny != null) { ToolOutcome dn = ToolOutcome.Fail(deny); dn.Denied = true; return dn; }
+            if (deny != null) { fail = ToolOutcome.Fail(deny); fail.Denied = true; return null; }
+            return full;
+        }
+
+        public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
+        {
+            ToolOutcome fail;
+            string full = Target(ctx, S(a, "path"), out fail);
+            if (full == null) return fail;
             object sv, ev;
             a.TryGetValue("start", out sv);
             a.TryGetValue("end", out ev);
-            return Analyze(ctx, full, AudioTime.Parse(sv, 0), AudioTime.Parse(ev, -1), B(a, "pictures", true));
+            double start = Math.Min(Math.Max(0, AudioTime.Parse(sv, 0)), Latest), end = Math.Min(AudioTime.Parse(ev, -1), Latest);
+            string focus = AudioFocus.Name(S(a, "focus"));
+            if (focus == null) return ToolOutcome.Fail("focus must be overview, beats, hits, notes, sections or listen");
+            string other = S(a, "compare_with");
+            if (!string.IsNullOrEmpty(other))
+            {
+                string second = Target(ctx, other, out fail);
+                if (second == null) return fail;
+                ToolOutcome c = AudioFocus.Compare(ctx, full, second, start, end);
+                c.Untrusted = AgentPaths.Foreign(full) || AgentPaths.Foreign(second);
+                return c;
+            }
+            if (focus == "overview") return Analyze(ctx, full, start, end, B(a, "pictures", true));
+            ToolOutcome o = AudioFocus.Run(ctx, full, start, end, focus, B(a, "pictures", false));
+            o.Untrusted = AgentPaths.Foreign(full);
+            return o;
         }
 
         public static ToolOutcome Analyze(ToolContext ctx, string full, double start, double end, bool pictures)
@@ -2125,34 +2202,45 @@ namespace MinGent
 
         const double Latest = 1e7;
 
-        static ToolOutcome Measure(ToolContext ctx, string full, double start, double end, bool pictures)
+        public static AudioInfo Open(ToolContext ctx, string full, double start, double end, double cap, AudioKeep keep, out string error)
         {
-            if (end >= 0 && end <= start) return ToolOutcome.Fail("end (" + AudioTime.Clock(end) + ") must come after start (" + AudioTime.Clock(start) + ")");
-            double length = end > start ? Math.Min(end - start, MaxSeconds) : DefaultSeconds;
+            error = null;
             string name = Path.GetFileName(full);
+            if (end >= 0 && end <= start) { error = "end (" + AudioTime.Clock(end) + ") must come after start (" + AudioTime.Clock(start) + ")"; return null; }
+            double length = end > start ? Math.Min(end - start, MaxSeconds) : DefaultSeconds;
+            if (cap > 0) length = Math.Min(length, cap);
             CancelToken ct = ctx.Ct;
             AudioInfo info;
             try
             {
-                info = AudioFile.Load(full, start, length, ct, false);
+                info = AudioFile.Load(full, start, length, ct, false, keep);
                 if (info.Error == null && info.Data != null && info.Data.Cancels && !(ct != null && ct.IsCancelled))
                 {
-                    AudioInfo side = AudioFile.Load(full, start, length, ct, true);
+                    AudioInfo side = AudioFile.Load(full, start, length, ct, true, keep);
                     if (side.Error == null && side.Data != null && side.Data.Frames > 0) info = side;
                     else if (side.Error == "stopped") info.Error = "stopped";
                 }
             }
-            catch (Exception ex) { return ToolOutcome.Fail("could not read " + name + ": " + ex.Message); }
-            if ((ct != null && ct.IsCancelled) || info.Error == "stopped") return ToolOutcome.Fail("stopped by the user");
+            catch (Exception ex) { error = "could not read " + name + ": " + ex.Message; return null; }
+            if ((ct != null && ct.IsCancelled) || info.Error == "stopped") { error = "stopped by the user"; return null; }
             if (info.Error == "unsupported") info.Error = "this WAV file uses an encoding MinGent can't read";
             if (info.Data == null || info.Data.Frames == 0)
             {
-                if (info.Error != null) return ToolOutcome.Fail("could not read " + name + ": " + info.Error + ".");
-                if (info.FileSeconds > 0 && start >= info.FileSeconds - 0.01) return ToolOutcome.Fail(name + " is only " + AudioTime.Clock(info.FileSeconds) + " long, so there is nothing after " + AudioTime.Clock(start) + ".");
-                if (start > 0) return ToolOutcome.Fail("there is no sound after " + AudioTime.Clock(start) + " in " + name + "; the file is probably shorter than that.");
-                if (info.Data == null) return ToolOutcome.Fail("could not read " + name + ".");
+                if (info.Error != null) { error = "could not read " + name + ": " + info.Error + "."; return null; }
+                if (info.FileSeconds > 0 && start >= info.FileSeconds - 0.01) { error = name + " is only " + AudioTime.Clock(info.FileSeconds) + " long, so there is nothing after " + AudioTime.Clock(start) + "."; return null; }
+                if (start > 0) { error = "there is no sound after " + AudioTime.Clock(start) + " in " + name + "; the file is probably shorter than that."; return null; }
+                if (info.Data == null) { error = "could not read " + name + "."; return null; }
             }
             info.Data.Finish();
+            return info;
+        }
+
+        static ToolOutcome Measure(ToolContext ctx, string full, double start, double end, bool pictures)
+        {
+            string error;
+            AudioInfo info = Open(ctx, full, start, end, 0, null, out error);
+            if (info == null) return ToolOutcome.Fail(error);
+            string name = Path.GetFileName(full);
             AudioReport.Loudness loud = AudioReport.Measure(info.Data);
             string report = AudioReport.Build(name, info, loud);
             double covered = info.Start + info.Data.Seconds;
@@ -2162,18 +2250,7 @@ namespace MinGent
                 report += "This covers " + AudioTime.Clock(info.Start) + " to " + AudioTime.Clock(covered) + "; the file may go on, so set start and end to analyze another part.\n";
             string summary = AudioTime.Clock(info.Data.Seconds) + (double.IsNaN(loud.Integrated) ? "" : ", " + loud.Integrated.ToString("0.0", CultureInfo.InvariantCulture) + " LUFS");
             ToolOutcome o = ToolOutcome.Ok(report, summary);
-            if (ctx.Cfg != null && ctx.Cfg.Vision && pictures && info.Data.Mix.Count >= info.Data.Rate / 20)
-            {
-                try
-                {
-                    List<ImageData> imgs = new List<ImageData>();
-                    using (Bitmap wf = AudioPictures.Waveform(info, name)) imgs.Add(ImageTools.Encode(wf, 1200));
-                    using (Bitmap sp = AudioPictures.Spectrogram(info, name)) imgs.Add(ImageTools.Encode(sp, 1200));
-                    o.Images = imgs;
-                    o.Text += "The waveform and the spectrogram are below.\n";
-                }
-                catch (Exception ex) { o.Text += "(The pictures could not be drawn: " + ex.Message + ")\n"; }
-            }
+            if (pictures) AudioFocus.AddPictures(ctx, o, info, name);
             return o;
         }
     }

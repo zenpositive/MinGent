@@ -102,7 +102,7 @@ namespace MinGent
     }
 
     [ComVisible(true)]
-    class WvSimple : ICoreWebView2DocumentTitleChangedEventHandler, ICoreWebView2HistoryChangedEventHandler
+    class WvSimple : ICoreWebView2DocumentTitleChangedEventHandler, ICoreWebView2HistoryChangedEventHandler, ICoreWebView2ContentLoadingEventHandler
     {
         readonly Action cb;
         public WvSimple(Action cb) { this.cb = cb; }
@@ -352,6 +352,7 @@ namespace MinGent
         readonly FlatButton bFwd = new FlatButton("", "right", false);
         readonly FlatButton bReload = new FlatButton("", "reload", false);
         readonly FlatButton bExternal = new FlatButton("", "external", false);
+        readonly FlatButton bMore = new FlatButton("", "more", false);
         readonly FlatButton bClose = new FlatButton("", "x", false);
         readonly FlatButton bNoticeOpen = new FlatButton("Open in your browser", null, false);
         readonly FlatButton bNoticeClose = new FlatButton("", "x", false);
@@ -368,7 +369,7 @@ namespace MinGent
         bool missing, pageBase;
         readonly List<object> keep = new List<object>();
 
-        volatile string currentUrl = "", currentTitle = "";
+        volatile string currentUrl = "", currentTitle = "", goingUrl = "";
         volatile bool loading, lastNavOk = true;
         volatile int lastNavError;
         ulong navId;
@@ -395,7 +396,8 @@ namespace MinGent
         readonly List<DateTime> dialogTimes = new List<DateTime>();
         DateTime dialogsMutedUntil = DateTime.MinValue;
         double shotScale;
-        int shotNav = -1, shotW, shotH;
+        int shotNav = -1, shotW, shotH, viewW, viewH;
+        bool shotResized;
         string notice;
         public volatile bool CaptchaMode, AgentCanSee;
         ICoreWebView2Settings mainSettings;
@@ -413,14 +415,29 @@ namespace MinGent
             host.BackColor = Color.White;
             host.Paint += PaintHost;
             host.Resize += delegate { ResizeView(); };
-            Controls.AddRange(new Control[] { bBack, bFwd, bReload, address, bExternal, bClose, bNoticeOpen, bNoticeClose, host });
+            Controls.AddRange(new Control[] { bBack, bFwd, bReload, address, bExternal, bMore, bClose, bNoticeOpen, bNoticeClose, host, drawer });
             bNoticeOpen.Visible = bNoticeClose.Visible = false;
+            drawer.Visible = false;
+            drawer.View.Log = consoleLog;
             bBack.Enabled = bFwd.Enabled = false;
             tip.SetToolTip(bBack, "Back");
             tip.SetToolTip(bFwd, "Forward");
             tip.SetToolTip(bReload, "Reload");
             tip.SetToolTip(bExternal, "Open this page in your own browser");
+            tip.SetToolTip(bMore, "Console and developer tools");
             tip.SetToolTip(bClose, "Close the browser");
+            bMore.Click += delegate { ShowMoreMenu(); };
+            drawer.RunRequested += UserRun;
+            drawer.CloseRequested += delegate { ShowConsole(false, true); };
+            drawer.ClearRequested += delegate { consoleLog.Clear(); };
+            drawer.NoticeClicked += delegate { userSite = HostOf(currentUrl); UpdateCapture(); };
+            drawer.HeightDragged += delegate (int h)
+            {
+                drawerHeight = ClampDrawer(h);
+                PerformLayout();
+                if (ConsoleHeightChanged != null) ConsoleHeightChanged(drawerHeight);
+            };
+            consoleLog.Changed += OnConsoleChanged;
             tip.SetToolTip(bNoticeClose, "Hide this message");
             bBack.Click += delegate { userTouched = true; if (wv != null) wv.GoBack(); };
             bFwd.Click += delegate { userTouched = true; if (wv != null) wv.GoForward(); };
@@ -459,6 +476,7 @@ namespace MinGent
             address.Pill = true;
             address.SetTheme(t);
             foreach (Control c in Controls) { FlatButton fb = c as FlatButton; if (fb != null) fb.SetTheme(t); }
+            drawer.SetTheme(t);
             host.BackColor = t.Back;
             ApplyBase();
             Invalidate(true);
@@ -484,6 +502,7 @@ namespace MinGent
             bReload.SetBounds(x, y, bw, bh); x += bw + UI.S(6);
             int right = Width - pad;
             bClose.SetBounds(right - bw, y, bw, bh); right -= bw + UI.S(2);
+            bMore.SetBounds(right - bw, y, bw, bh); right -= bw + UI.S(2);
             bExternal.SetBounds(right - bw, y, bw, bh); right -= bw + UI.S(6);
             address.SetBounds(x, y, Math.Max(UI.S(60), right - x), bh);
             int top = ToolbarH;
@@ -495,7 +514,20 @@ namespace MinGent
                 bNoticeOpen.SetBounds(bNoticeClose.Left - UI.S(6) - ow, ny, ow, UI.S(26));
                 top += nh;
             }
-            host.SetBounds(0, top, Width, Math.Max(0, Height - top));
+            int bottom = Height;
+            if (drawerOpen)
+            {
+                int dh = ClampDrawer(drawerHeight > 0 ? drawerHeight : Height * 32 / 100);
+                drawer.SetBounds(0, Height - dh, Width, dh);
+                bottom -= dh;
+            }
+            host.SetBounds(0, top, Width, Math.Max(0, bottom - top));
+        }
+
+        int ClampDrawer(int h)
+        {
+            int min = UI.S(120), max = Math.Max(min, Height - ToolbarH - UI.S(140));
+            return Math.Max(min, Math.Min(max, h));
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -566,6 +598,7 @@ namespace MinGent
             {
                 WvRect r = new WvRect();
                 r.Left = 0; r.Top = 0; r.Right = host.ClientSize.Width; r.Bottom = host.ClientSize.Height;
+                if (r.Right != viewW || r.Bottom != viewH) { viewW = r.Right; viewH = r.Bottom; shotResized = true; }
                 ctl.SetBounds(r);
             }
             catch { }
@@ -685,22 +718,25 @@ namespace MinGent
             if (c.CoreWebView2(out view) < 0 || view == null) { Fail("the browser view is not available"); return; }
             wv = view;
             Configure(wv, null);
+            HookConsole();
             long tok;
             WvNavStarting ns = new WvNavStarting(OnNavStarting);
             WvNavCompleted nc = new WvNavCompleted(OnNavCompleted);
             WvSourceChanged sc = new WvSourceChanged(OnSourceChanged);
             WvSimple hc = new WvSimple(UpdateButtons);
             WvSimple tc = new WvSimple(OnTitle);
+            WvSimple cl = new WvSimple(OnContentLoading);
             WvProcessFailed pf = new WvProcessFailed(OnProcessFailed);
             WvAccel ak = new WvAccel(OnAccelerator);
             WvFocus gf = new WvFocus(delegate { userTouched = true; });
-            keep.AddRange(new object[] { ns, nc, sc, hc, tc, pf, ak, gf });
+            keep.AddRange(new object[] { ns, nc, sc, hc, tc, cl, pf, ak, gf });
             try { ctl.add_AcceleratorKeyPressed(ak, out tok); } catch { }
             try { ctl.add_GotFocus(gf, out tok); } catch { }
             wv.add_NavigationStarting(ns, out tok);
             wv.add_NavigationCompleted(nc, out tok);
             wv.add_SourceChanged(sc, out tok);
             wv.add_HistoryChanged(hc, out tok);
+            try { commitEvents = wv.add_ContentLoading(cl, out tok) >= 0; } catch { commitEvents = false; }
             wv.add_DocumentTitleChanged(tc, out tok);
             wv.add_ProcessFailed(pf, out tok);
             ApplyBase();
@@ -728,6 +764,12 @@ namespace MinGent
             {
                 a.SetHandled(1);
                 BeginInvoke(new Action(delegate { address.Box.Focus(); address.Box.SelectAll(); }));
+                return;
+            }
+            if (key == (Keys.Control | Keys.Shift | Keys.J))
+            {
+                a.SetHandled(1);
+                BeginInvoke(new Action(delegate { ShowConsole(!drawerOpen, true); }));
                 return;
             }
             Func<Keys, bool> f = AppShortcut;
@@ -762,6 +804,11 @@ namespace MinGent
             }
             Net.Record(uri, "Built-in browser");
             if (!pageBase && !uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) { pageBase = true; ApplyBase(); }
+            int redirected = 0;
+            try { a.IsRedirected(out redirected); } catch { }
+            if (!commitEvents && !uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase) && redirected == 0) consoleLog.NewPage(uri);
+            goingUrl = uri;
+            SetCapture(WantConsole(uri));
             ulong id;
             a.NavigationId(out id);
             navId = id;
@@ -817,6 +864,8 @@ namespace MinGent
                 loading = false;
                 lastNavOk = ok != 0;
                 lastNavError = status;
+                goingUrl = "";
+                UpdateCapture();
             }
             if (resetHistory && resetNavId != 0 && id == resetNavId)
             {
@@ -854,6 +903,15 @@ namespace MinGent
             }
             CheckNotice();
             UpdateButtons();
+            UpdateDrawerNotice();
+        }
+
+        void OnContentLoading()
+        {
+            IntPtr p;
+            string s = wv != null && wv.Source(out p) >= 0 ? WebView2Runtime.Str(p) : currentUrl;
+            if (!s.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) consoleLog.NewPage(s);
+            SetCapture(WantConsole(s.StartsWith("data:", StringComparison.OrdinalIgnoreCase) ? "" : s));
         }
 
         void OnTitle()
@@ -1290,6 +1348,7 @@ namespace MinGent
 
         void OnProcessFailed(int kind)
         {
+            consoleOn = false;
             if (kind == 0)
             {
                 try { if (ctl != null) ctl.Close(); } catch { }
@@ -1428,6 +1487,8 @@ namespace MinGent
             pageNeedsUser = false;
             lastSiteUrl = "";
             pendingUrl = null;
+            agentSite = userSite = "";
+            consoleLog.Clear();
             if (wv == null) return;
             resetHistory = true;
             resetNavId = 0;
@@ -2001,7 +2062,7 @@ namespace MinGent
         static string Blocked(KeyPress k)
         {
             if (k.Ctrl && !k.Alt && (k.Code == "KeyP" || k.Code == "KeyS" || k.Code == "KeyO")) return k.Label + " opens a Windows " + (k.Code == "KeyP" ? "print" : k.Code == "KeyS" ? "save" : "open") + " dialog that the agent can't see or use, so it was not pressed. Use the page's own buttons, or ask the user.";
-            if (k.Code == "F12" || (k.Ctrl && k.Shift && (k.Code == "KeyI" || k.Code == "KeyJ" || k.Code == "KeyC"))) return k.Label + " opens the developer tools in a separate window, so it was not pressed. Read the page with browser_read instead.";
+            if (k.Code == "F12" || (k.Ctrl && k.Shift && (k.Code == "KeyI" || k.Code == "KeyJ" || k.Code == "KeyC"))) return k.Label + " opens the developer tools, which the agent can't use, so it was not pressed. browser_console reads the page's console and runs code in it.";
             if (k.Win) return "the Windows key acts on Windows itself rather than the page, so it can't be pressed in the browser";
             return null;
         }
@@ -2573,6 +2634,7 @@ namespace MinGent
         {
             if (shotScale <= 0) return "take a browser_screenshot first: x and y are pixel positions in that screenshot";
             if (shotNav != navStarts) return "the page changed since the last screenshot. Take a new browser_screenshot, then use positions from it";
+            if (shotResized) return "the browser view changed size since the last screenshot (the console under the page opened or closed, or the window was resized). Take a new browser_screenshot, then use positions from it";
             if (x < 0 || y < 0 || x > shotW || y > shotH) return "that position is outside the screenshot, which is " + shotW + " x " + shotH + " pixels";
             return null;
         }
@@ -2989,12 +3051,422 @@ namespace MinGent
                     catch (Exception ex) { return "could not read the screenshot: " + ex.Message; }
                     shotScale = cssW > 0 ? cssW / width : 0;
                     shotNav = navStarts;
+                    shotResized = false;
                     shotW = width;
                     shotH = height;
                     return null;
                 }
                 finally { Busy(false); }
             }
+        }
+
+        readonly ConsoleLog consoleLog = new ConsoleLog();
+        readonly ConsoleDrawer drawer = new ConsoleDrawer();
+        readonly List<object> consoleHold = new List<object>();
+        bool drawerOpen, drawerUser;
+        int drawerHeight;
+        volatile bool consoleOn, countsQueued, commitEvents;
+        int userRuns;
+        volatile bool agentRunning;
+        volatile string agentSite = "", userSite = "";
+        public event Action<int> ConsoleHeightChanged;
+
+        public int ConsoleHeight
+        {
+            get { return drawerHeight; }
+            set { drawerHeight = Math.Max(0, value); if (drawerOpen) PerformLayout(); }
+        }
+
+        public bool ConsoleOpen { get { return drawerOpen; } }
+
+        public static bool ThisPc(string url)
+        {
+            if (string.IsNullOrEmpty(url)) return true;
+            string low = url.ToLowerInvariant();
+            if (low.StartsWith("about:") || low.StartsWith("data:") || low.StartsWith("file:")) return true;
+            Uri u;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out u)) return false;
+            string h = u.Host.ToLowerInvariant().Trim('[', ']');
+            if (h == "localhost" || h.EndsWith(".localhost", StringComparison.Ordinal) || h == "::1") return true;
+            string[] parts = h.Split('.');
+            int a;
+            return parts.Length == 4 && int.TryParse(parts[0], out a) && a == 127;
+        }
+
+        static bool SameHost(string a, string b)
+        {
+            return !string.IsNullOrEmpty(a) && string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static string PlaceName(string url)
+        {
+            Uri u;
+            if (Uri.TryCreate(url ?? "", UriKind.Absolute, out u))
+            {
+                if (u.IsFile) return u.Segments.Length > 0 ? Uri.UnescapeDataString(u.Segments[u.Segments.Length - 1]) : "this page";
+                if (u.Scheme == "http" || u.Scheme == "https") return u.IsDefaultPort ? u.Host : u.Host + ":" + u.Port.ToString(CultureInfo.InvariantCulture);
+            }
+            return "this page";
+        }
+
+        void HookConsole()
+        {
+            consoleHold.Clear();
+            foreach (string ev in new string[] { "Runtime.consoleAPICalled", "Runtime.exceptionThrown", "Log.entryAdded", "Runtime.inspectRequested" })
+            {
+                string name = ev;
+                try
+                {
+                    IntPtr p;
+                    if (wv.GetDevToolsProtocolEventReceiver(name, out p) < 0 || p == IntPtr.Zero) continue;
+                    ICoreWebView2DevToolsProtocolEventReceiver r;
+                    try { r = (ICoreWebView2DevToolsProtocolEventReceiver)Marshal.GetObjectForIUnknown(p); }
+                    finally { Marshal.Release(p); }
+                    WvCdpEvent h = new WvCdpEvent(delegate (string json) { OnConsoleEvent(name, json); });
+                    long tok;
+                    if (r.add_DevToolsProtocolEventReceived(h, out tok) >= 0) consoleHold.AddRange(new object[] { r, h });
+                }
+                catch { }
+            }
+            consoleOn = false;
+            UpdateCapture();
+        }
+
+        void OnConsoleEvent(string method, string json)
+        {
+            object p = Json.TryParse(json ?? "");
+            if (p == null) return;
+            if (method == "Runtime.inspectRequested") { CopyRequested(p); return; }
+            ConsoleEntry e = method == "Runtime.consoleAPICalled" ? ConsoleFormat.FromApiCall(p) : method == "Runtime.exceptionThrown" ? ConsoleFormat.FromException(p) : ConsoleFormat.FromLog(p);
+            if (e == null) return;
+            double stamp = method == "Log.entryAdded" ? Json.Num(p, "entry", "timestamp") : Json.Num(p, "timestamp");
+            consoleLog.Add(e, method + "|" + stamp.ToString("R", CultureInfo.InvariantCulture) + "|" + e.Kind + "|" + e.Where + "|" + e.Text);
+        }
+
+        bool WantConsole(string url)
+        {
+            if (ThisPc(url)) return true;
+            if (drawerOpen && drawerUser) return true;
+            string h = HostOf(url);
+            return SameHost(h, agentSite) || SameHost(h, userSite);
+        }
+
+        void UpdateCapture() { SetCapture(WantConsole(currentUrl)); }
+
+        void SetCapture(bool on)
+        {
+            if (wv != null && on != consoleOn)
+            {
+                consoleOn = on;
+                Fire(on ? "Runtime.enable" : "Runtime.disable", "{}");
+                Fire(on ? "Log.enable" : "Log.disable", "{}");
+            }
+            UpdateDrawerNotice();
+        }
+
+        void UpdateDrawerNotice()
+        {
+            bool off = !consoleOn && !ThisPc(currentUrl);
+            drawer.Notice = drawerOpen && off ? "Not reading this site's console." : null;
+            drawer.View.EmptyText = off ? "MinGent reads the console of websites only when you or the agent ask, since some sites turn away browsers that do. Pages on this PC are always read."
+                                        : "Nothing logged yet.";
+            drawer.View.Invalidate();
+        }
+
+        void OnConsoleChanged()
+        {
+            if (countsQueued || IsDisposed || !IsHandleCreated) return;
+            countsQueued = true;
+            try { BeginInvoke(new Action(delegate { countsQueued = false; UpdateCounts(); })); }
+            catch { countsQueued = false; }
+        }
+
+        void UpdateCounts()
+        {
+            int errors, warnings;
+            consoleLog.Counts(out errors, out warnings);
+            drawer.SetCounts(errors, warnings);
+        }
+
+        public void ShowConsole(bool open, bool byUser)
+        {
+            if (open == drawerOpen)
+            {
+                if (open && byUser)
+                {
+                    drawerUser = true;
+                    UpdateCapture();
+                    drawer.FocusInput();
+                }
+                return;
+            }
+            drawerOpen = open;
+            drawerUser = open && byUser;
+            bool focused = drawer.ContainsFocus;
+            drawer.Visible = open;
+            PerformLayout();
+            UpdateCapture();
+            if (open)
+            {
+                UpdateCounts();
+                drawer.View.ScrollToEnd();
+                if (byUser) drawer.FocusInput();
+            }
+            else if (focused && ctl != null) { try { ctl.MoveFocus(0); } catch { } }
+        }
+
+        void ShowMoreMenu()
+        {
+            ContextMenuStrip m = Menus.Create(th);
+            m.ShowCheckMargin = true;
+            m.Items.Add(Menus.Detail("Console", "Ctrl+Shift+J", drawerOpen, delegate { ShowConsole(!drawerOpen, true); }));
+            ToolStripMenuItem dev = Menus.Detail("Developer tools", "F12", false, delegate { OpenDevTools(); });
+            dev.Enabled = wv != null;
+            m.Items.Add(dev);
+            m.Closed += delegate { BeginInvoke(new Action(delegate { m.Dispose(); })); };
+            m.Show(bMore, new Point(bMore.Width, bMore.Height + UI.S(2)), ToolStripDropDownDirection.BelowLeft);
+        }
+
+        public void OpenDevTools()
+        {
+            if (wv == null) return;
+            try { wv.OpenDevToolsWindow(); } catch { }
+        }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (keyData == (Keys.Control | Keys.Shift | Keys.J)) { ShowConsole(!drawerOpen, true); return true; }
+            if (keyData == Keys.F12 || keyData == (Keys.Control | Keys.Shift | Keys.I)) { OpenDevTools(); return true; }
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        static Dictionary<string, object> EvalArgs(string code, bool user)
+        {
+            return Json.O("expression", code, "replMode", true, "awaitPromise", true, "returnByValue", false, "generatePreview", true, "userGesture", user,
+                          "includeCommandLineAPI", true, "objectGroup", user ? "mingent-user" : "mingent", "silent", true, "timeout", 20000.0);
+        }
+
+        void CopyRequested(object p)
+        {
+            if (userRuns <= 0 || agentRunning || !Json.Bool(p, "hints", "copyToClipboard")) return;
+            Dictionary<string, object> o = Json.Get(p, "object") as Dictionary<string, object>;
+            if (o == null) return;
+            string type = Json.Str(o, "type") ?? "", id = Json.Str(o, "objectId");
+            object v;
+            if (type == "string" || (o.TryGetValue("value", out v) && id == null)) { PutOnClipboard(type == "string" ? Json.Str(o, "value") : Json.Write(Json.Get(o, "value"))); return; }
+            if (string.IsNullOrEmpty(id) || wv == null) { PutOnClipboard(Json.Str(o, "description") ?? type); return; }
+            WvScriptDone d = new WvScriptDone(delegate (int hr, string res)
+            {
+                object r = Json.TryParse(res ?? "");
+                PutOnClipboard(hr >= 0 ? Json.Str(r, "result", "value") ?? Json.Str(o, "description") : Json.Str(o, "description"));
+            });
+            keep.Add(d);
+            try
+            {
+                wv.CallDevToolsProtocolMethod("Runtime.callFunctionOn", Json.Write(Json.O("objectId", id, "returnByValue", true, "silent", true,
+                    "functionDeclaration", "function () { try { return typeof this === 'object' ? JSON.stringify(this, null, 2) : String(this); } catch (e) { return String(this); } }")), d);
+            }
+            catch { }
+        }
+
+        void PutOnClipboard(string text)
+        {
+            if (text == null) return;
+            try
+            {
+                Clipboard.SetText(text.Length == 0 ? " " : text);
+                consoleLog.Add("note", "Copied to the clipboard.", false);
+            }
+            catch (Exception ex) { consoleLog.Add("fault", "Could not copy to the clipboard: " + ex.Message, false); }
+        }
+
+        void UserRun(string code)
+        {
+            consoleLog.Add("input", code, false);
+            if (wv == null) { consoleLog.Add("fault", Available ? "The browser hasn't started yet. Open a page, then try again." : "The built-in browser isn't available on this PC.", false); return; }
+            if (!ThisPc(currentUrl)) userSite = HostOf(currentUrl);
+            drawerUser = true;
+            UpdateCapture();
+            userRuns++;
+            WvScriptDone d = new WvScriptDone(delegate (int hr, string json)
+            {
+                userRuns = Math.Max(0, userRuns - 1);
+                object res = Json.TryParse(json ?? "");
+                Dictionary<string, object> obj = res as Dictionary<string, object>;
+                if (hr < 0 || obj == null || (!obj.ContainsKey("result") && obj.ContainsKey("message")))
+                {
+                    consoleLog.Add("fault", CdpError("Running the code", hr, json), false);
+                    return;
+                }
+                bool failed;
+                string v = ConsoleFormat.Result(res, out failed);
+                consoleLog.Add(failed ? "fault" : "result", v, false);
+                Fire("Runtime.releaseObjectGroup", Json.Write(Json.O("objectGroup", "mingent-user")));
+            });
+            keep.Add(d);
+            if (keep.Count > 400) keep.RemoveRange(0, 100);
+            try
+            {
+                if (wv.CallDevToolsProtocolMethod("Runtime.evaluate", Json.Write(EvalArgs(code, true)), d) < 0) { userRuns = Math.Max(0, userRuns - 1); consoleLog.Add("fault", "The page did not run the code.", false); }
+            }
+            catch (Exception ex) { userRuns = Math.Max(0, userRuns - 1); consoleLog.Add("fault", "The page did not run the code: " + ex.Message, false); }
+        }
+
+        bool AgentWantsConsole(CancelToken ct)
+        {
+            bool fresh = false;
+            string ignored;
+            Ui(delegate (Pending p)
+            {
+                if (!ThisPc(currentUrl)) agentSite = HostOf(currentUrl);
+                bool was = consoleOn;
+                UpdateCapture();
+                fresh = !was && consoleOn;
+                p.Ok(null);
+            }, 5000, ct, out ignored);
+            return fresh;
+        }
+
+        public string ConsoleRead(CancelToken ct, out string text)
+        {
+            text = null;
+            string err = Ensure(ct);
+            if (err != null) return err;
+            lock (opLock)
+            {
+                Reveal();
+                if (AgentWantsConsole(ct)) ct.Sleep(400);
+                if (!consoleOn) return "the console of this page can't be read right now";
+                text = consoleLog.ForAgent(PlaceName(currentUrl), 9000);
+                return null;
+            }
+        }
+
+        public string ConsoleRun(string code, string checkedUrl, CancelToken ct, out string result)
+        {
+            result = null;
+            string err = Ensure(ct);
+            if (err != null) return err;
+            lock (opLock)
+            {
+                Reveal();
+                Busy(true);
+                agentRunning = true;
+                try
+                {
+                    if (AgentWantsConsole(ct)) ct.Sleep(300);
+                    OpenForAgent();
+                    consoleLog.Add("input", code, true);
+                    long mark = consoleLog.Last;
+                    DateTime start = DateTime.UtcNow;
+                    string json;
+                    err = Ui(delegate (Pending p)
+                    {
+                        string moved = Moved(checkedUrl ?? "");
+                        if (moved != null) { p.Fail(moved); return; }
+                        Cdp("Runtime.evaluate", Json.Write(EvalArgs(code, false)), p);
+                    }, 30000, ct, out json);
+                    if (err != null)
+                    {
+                        string why = err == "the browser did not respond in time" ? "the code was still running after 30 seconds, maybe waiting for something that never happens, so MinGent stopped waiting for it"
+                                   : (DateTime.UtcNow - start).TotalSeconds >= 19 && err.IndexOf("Internal error", StringComparison.OrdinalIgnoreCase) >= 0 ? "the code ran for 20 seconds without finishing, so it was stopped"
+                                   : err;
+                        consoleLog.Add("fault", why, true);
+                        if (!err.StartsWith("the browser moved", StringComparison.Ordinal))
+                        {
+                            string busy = StopIfBusy();
+                            if (busy != null) why += ". " + busy;
+                        }
+                        return why;
+                    }
+                    try { BeginInvoke(new Action(delegate { Fire("Runtime.releaseObjectGroup", Json.Write(Json.O("objectGroup", "mingent"))); })); } catch { }
+                    bool failed;
+                    string value = ConsoleFormat.Result(Json.TryParse(json ?? "{}"), out failed);
+                    ct.Sleep(80);
+                    string stuck = StopIfBusy();
+                    List<ConsoleEntry> during = consoleLog.Since(mark);
+                    consoleLog.Add(failed ? "fault" : "result", value, true);
+                    if (stuck != null) consoleLog.Add("note", stuck, true);
+                    consoleLog.SkipNews();
+                    result = RunReport(value, failed, during);
+                    if (stuck != null) result += "\n\n" + stuck;
+                    return null;
+                }
+                finally { agentRunning = false; Busy(false); }
+            }
+        }
+
+        string Moved(string was) { return MovedFrom(was, currentUrl, loading ? goingUrl : ""); }
+
+        public static string MovedFrom(string was, string current, string going)
+        {
+            List<string> now = new List<string>();
+            now.Add(current ?? "");
+            if (!string.IsNullOrEmpty(going)) now.Add(going);
+            foreach (string n in now)
+            {
+                string u = n.StartsWith("data:", StringComparison.OrdinalIgnoreCase) ? "" : n;
+                if (ThisPc(u) != ThisPc(was) || PlaceName(u) != PlaceName(was))
+                    return "the browser moved to " + PlaceName(u) + " after the code was checked, so the code did not run. Look at the page again, then run the code if it still makes sense there";
+            }
+            return null;
+        }
+
+        string StopIfBusy()
+        {
+            CancelToken own = new CancelToken();
+            object res;
+            string err = CdpCall("Runtime.evaluate", Json.O("expression", "0", "returnByValue", true, "silent", true), 2500, own, out res);
+            if (err != "the browser did not respond in time") return null;
+            try { BeginInvoke(new Action(delegate { Fire("Runtime.terminateExecution", "{}"); })); } catch { return null; }
+            err = CdpCall("Runtime.evaluate", Json.O("expression", "0", "returnByValue", true, "silent", true), 3000, own, out res);
+            return err == null ? "The page stayed busy running script, probably a loop that never ends, so MinGent stopped that script. The page may need a reload (browser_navigate)."
+                               : "The page is not responding: a script in it never finishes. Reload it with browser_navigate.";
+        }
+
+        public static string RunReport(string value, bool failed, List<ConsoleEntry> during)
+        {
+            StringBuilder sb = new StringBuilder();
+            string v = value ?? "";
+            if (v.Length > 8000) v = v.Substring(0, 8000) + "\n\u2026 (cut: the value is " + v.Length.ToString(CultureInfo.InvariantCulture) + " characters long; return less of it, for example with .slice(0, 2000))";
+            sb.Append(failed ? "The code threw: " : "Result: ").Append(v);
+            if (!failed && v.IndexOf('\u2026') >= 0 && (v.EndsWith("}", StringComparison.Ordinal) || v.EndsWith("]", StringComparison.Ordinal)))
+                sb.Append("\n(This is a shortened preview. For all of it, return JSON.stringify(value, null, 2).)");
+            List<string> lines = new List<string>();
+            int used = 0, more = 0;
+            foreach (ConsoleEntry e in during ?? new List<ConsoleEntry>())
+            {
+                if (!e.IsMessage) continue;
+                string l = ConsoleLog.Line(e);
+                if (lines.Count >= 30 || used + l.Length > 4000) { more++; continue; }
+                lines.Add(l);
+                used += l.Length + 1;
+            }
+            if (lines.Count > 0)
+            {
+                sb.Append("\n\nConsole output while it ran:\n").Append(string.Join("\n", lines.ToArray()));
+                if (more > 0) sb.Append("\n(").Append(more.ToString(CultureInfo.InvariantCulture)).Append(" more messages left out)");
+            }
+            return sb.ToString();
+        }
+
+        void OpenForAgent()
+        {
+            try { BeginInvoke(new Action(delegate { if (Visible) ShowConsole(true, false); else drawer.View.ScrollToEnd(); })); } catch { }
+        }
+
+        public void ConsoleRefused(string code, string why)
+        {
+            consoleLog.Add("input", code, true);
+            consoleLog.Add("refused", why, true);
+            OpenForAgent();
+        }
+
+        public string ConsoleNews()
+        {
+            string url = currentUrl;
+            if (!consoleOn || !(ThisPc(url) || SameHost(HostOf(url), agentSite))) { consoleLog.SkipNews(); return null; }
+            return consoleLog.News();
         }
     }
 }

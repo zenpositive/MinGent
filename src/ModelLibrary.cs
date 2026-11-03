@@ -808,6 +808,10 @@ namespace MinGent
         public long VramBytes;
         public string DriverVersion = "";
         public int NvidiaDriver;
+
+        public bool Nvidia { get { return NvidiaDriver > 0 || (Name ?? "").IndexOf("NVIDIA", StringComparison.OrdinalIgnoreCase) >= 0; } }
+
+        public bool Integrated { get { return Hardware.LooksIntegrated(Name, VramBytes); } }
     }
 
     static class Hardware
@@ -829,6 +833,11 @@ namespace MinGent
 
         public static void Use(List<GpuInfo> list, long ramBytes)
         {
+            if (list != null)
+            {
+                list = new List<GpuInfo>(list);
+                list.Sort(delegate (GpuInfo a, GpuInfo b) { return b.VramBytes.CompareTo(a.VramBytes); });
+            }
             gpus = list;
             ram = ramBytes;
         }
@@ -908,40 +917,125 @@ namespace MinGent
         {
             get
             {
-                foreach (GpuInfo g in Gpus()) return g;
-                return null;
+                GpuInfo first = null;
+                foreach (GpuInfo g in Gpus())
+                {
+                    if (!g.Integrated) return g;
+                    if (first == null) first = g;
+                }
+                return first;
             }
+        }
+
+        public static bool LooksIntegrated(string name, long vramBytes)
+        {
+            string n = Regex.Replace(name ?? "", @"\((TM|R|C)\)|\u2122|\u00AE", " ", RegexOptions.IgnoreCase);
+            n = Regex.Replace(n, @"\s+", " ").Trim();
+            if (n.IndexOf("NVIDIA", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            if (Regex.IsMatch(n, @"\bIntel\b", RegexOptions.IgnoreCase))
+                return !Regex.IsMatch(n, @"\bArc (Pro )?[AB]\d{2,3}M?\b", RegexOptions.IgnoreCase);
+            if (Regex.IsMatch(n, @"\b(AMD|ATI|Radeon)\b", RegexOptions.IgnoreCase))
+                return Regex.IsMatch(n, @"\bRadeon ((RX )?Vega \d+ Graphics|R[2-7] Graphics|Graphics|\d{3,4}[MS]\b)", RegexOptions.IgnoreCase);
+            return vramBytes < (2L << 30);
+        }
+
+        public static List<GpuInfo> UsedBy(string backend)
+        {
+            List<GpuInfo> used = new List<GpuInfo>();
+            if (backend == "cpu") return used;
+            bool cuda = backend != null && backend.StartsWith("cuda", StringComparison.Ordinal);
+            foreach (GpuInfo g in Gpus())
+                if (cuda ? g.Nvidia : !g.Integrated) used.Add(g);
+            if (cuda && used.Count > 1 && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CUDA_VISIBLE_DEVICES"))) used.RemoveRange(1, used.Count - 1);
+            if (!cuda && used.Count == 0 && BestGpu != null) used.Add(BestGpu);
+            return used;
+        }
+
+        public static string EngineBackend()
+        {
+            string backend = null, why;
+            try { backend = Engine.Instance.InstalledBackend; } catch { }
+            return backend ?? RecommendedBackend(out why);
+        }
+
+        public static List<GpuInfo> EngineGpus() { return UsedBy(EngineBackend()); }
+
+        public static long TotalVram(List<GpuInfo> list)
+        {
+            long v = 0;
+            foreach (GpuInfo g in list) v += Math.Max(0, g.VramBytes);
+            return v;
+        }
+
+        public static string ShortName(string name)
+        {
+            string n = (name ?? "").Trim();
+            foreach (string pre in new string[] { "NVIDIA GeForce ", "NVIDIA ", "AMD Radeon ", "Intel(R) " })
+                if (n.StartsWith(pre, StringComparison.OrdinalIgnoreCase) && n.Length > pre.Length + 2) return n.Substring(pre.Length);
+            return n;
+        }
+
+        public static string Names(List<GpuInfo> list, bool shortNames)
+        {
+            List<string> names = new List<string>();
+            List<int> counts = new List<int>();
+            foreach (GpuInfo g in list)
+            {
+                string n = shortNames ? ShortName(g.Name) : (g.Name ?? "").Trim();
+                int at = names.IndexOf(n);
+                if (at >= 0) counts[at]++;
+                else { names.Add(n); counts.Add(1); }
+            }
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < names.Count; i++)
+            {
+                if (i > 0) sb.Append(" + ");
+                if (counts[i] > 1) sb.Append(counts[i]).Append("\u00D7 ");
+                sb.Append(names[i]);
+            }
+            return sb.ToString();
+        }
+
+        static bool OldNvidia(string name)
+        {
+            string n = (name ?? "").ToUpperInvariant();
+            return Regex.IsMatch(n, @"\b(GTX?\s?(6\d\d|7\d\d|8\d\d|9\d\d|10\d\d)|GT\s?\d{3,4}|\d{3}MX\b|\d{3}M\b|MX\s?[123]\d\d|QUADRO\s?(M|P|K|GP|GV)\d|TESLA\s?[MPKV]\d|TITAN\s?(X|XP|V|BLACK|Z)\b|P10\d-\d{3})");
         }
 
         public static string RecommendedBackend(out string why)
         {
             GpuInfo g = BestGpu;
             if (g == null) { why = "No graphics card found - the CPU build works everywhere."; return "cpu"; }
-            bool nvidia = g.NvidiaDriver > 0 || g.Name.IndexOf("NVIDIA", StringComparison.OrdinalIgnoreCase) >= 0;
-            if (!nvidia)
+            if (!g.Nvidia)
             {
-                why = g.Name + " - the Vulkan build uses it.";
+                List<GpuInfo> vk = UsedBy("vulkan");
+                why = Names(vk, vk.Count > 1) + " - the Vulkan build uses " + (vk.Count > 1 ? "them all." : "it.");
                 return "vulkan";
             }
-            if (g.VramBytes > 0 && g.VramBytes < 3584L * 1024 * 1024)
+            List<GpuInfo> nv = UsedBy("cuda13");
+            string names = Names(nv, nv.Count > 1);
+            long vram = TotalVram(nv);
+            if (vram > 0 && vram < 3584L * 1024 * 1024)
             {
-                why = g.Name + " has only " + ModelCatalog.Size(g.VramBytes) + " of graphics memory, so models run faster on the processor with the CPU build.";
+                why = names + (nv.Count > 1 ? " have only " : " has only ") + ModelCatalog.Size(vram) + " of graphics memory, so models run faster on the processor with the CPU build.";
                 return "cpu";
             }
-            string n = g.Name.ToUpperInvariant();
-            bool old = Regex.IsMatch(n, @"\b(GTX?\s?(6\d\d|7\d\d|8\d\d|9\d\d|10\d\d)|GT\s?\d{3,4}|\d{3}MX\b|\d{3}M\b|MX\s?[123]\d\d|QUADRO\s?(M|P|K|GP|GV)\d|TESLA\s?[MPKV]\d|TITAN\s?(X|XP|V|BLACK|Z)\b|P10\d-\d{3})");
+            bool old = false;
+            foreach (GpuInfo x in nv) if (OldNvidia(x.Name)) old = true;
             int drv = g.NvidiaDriver;
             if (!old && drv >= 58000)
             {
-                why = g.Name + " with driver " + (drv / 100) + "." + (drv % 100).ToString("00") + " - CUDA 13 is the fastest option.";
+                why = names + " with driver " + (drv / 100) + "." + (drv % 100).ToString("00") + " - CUDA 13 is the fastest option.";
                 return "cuda13";
             }
             if (!old && drv >= 55100)
             {
-                why = g.Name + " - CUDA 12 (update the NVIDIA driver to 580 or newer for CUDA 13).";
+                why = names + " - CUDA 12 (update the NVIDIA driver to 580 or newer for CUDA 13).";
                 return "cuda12";
             }
-            why = g.Name + " - an older NVIDIA card, so the Vulkan build is the safe choice.";
+            string reason = old ? (nv.Count > 1 ? "one of them is an older NVIDIA card" : "an older NVIDIA card")
+                          : drv > 0 ? "the NVIDIA driver is older than 551" : "the NVIDIA driver version is unknown";
+            why = names + " - " + reason + ", so the Vulkan build is the safe choice.";
             return "vulkan";
         }
     }
@@ -1216,9 +1310,10 @@ namespace MinGent
         static long Usable(bool ramPool)
         {
             if (ramPool) return (Hardware.RamBytes > 0 ? Hardware.RamBytes : 8L << 30) / 2;
-            GpuInfo g = Hardware.BestGpu;
-            long v = g != null ? g.VramBytes : 0;
-            return Math.Max(0, v - Math.Max(1L << 30, v * 7 / 100));
+            long sum = 0;
+            foreach (GpuInfo g in Hardware.EngineGpus())
+                sum += Math.Max(0, g.VramBytes - Math.Max(1L << 30, g.VramBytes * 7 / 100));
+            return sum;
         }
 
         static long Overhead(long weights) { return (512L << 20) + weights / 40; }
@@ -1357,13 +1452,10 @@ namespace MinGent
 
         static void Pool(out long budget, out long fitsLimit, out long limit, out bool ramPool)
         {
-            GpuInfo g = Hardware.BestGpu;
-            long vram = g != null ? g.VramBytes : 0;
+            List<GpuInfo> used = Hardware.EngineGpus();
+            long vram = Hardware.TotalVram(used);
             long ram = Hardware.RamBytes > 0 ? Hardware.RamBytes : 8L << 30;
-            string why, backend = null;
-            try { backend = Engine.Instance.InstalledBackend; } catch { }
-            if (backend == null) backend = Hardware.RecommendedBackend(out why);
-            ramPool = g == null || vram < (2L << 30) || backend == "cpu";
+            ramPool = used.Count == 0 || vram < (2L << 30);
             if (ramPool)
             {
                 budget = Math.Max(1L << 30, ram * 40 / 100);

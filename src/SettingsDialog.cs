@@ -139,6 +139,7 @@ namespace MinGent
         public Func<IWin32Window, Action<bool>, bool> WipeBrowser;
         public Func<IWin32Window, bool> EraseAll;
         public Action ResetAll;
+        public Action<string> UpdateReady;
         public Action<string, string> PreviewLook;
 
         string ThemeChoice { get { return themeBox.SelectedIndex == 1 ? "light" : themeBox.SelectedIndex == 2 ? "dark" : "system"; } }
@@ -378,6 +379,21 @@ namespace MinGent
             foreach (SlashCommand sc in SlashCommands.All) c.Add(new KeysRow(Th, sc.Detail, sc.Name));
             Place(p, c);
 
+            Section(p, "Updates", null);
+            c = NewCard(p);
+            PillButton check = new PillButton("Check for updates", Th, false);
+            check.Click += delegate
+            {
+                UpdateFlow.Run(this, Th, delegate (string version)
+                {
+                    if (UpdateReady != null) UpdateReady(version);
+                    DialogResult = DialogResult.Cancel;
+                    Close();
+                });
+            };
+            Row(c, "MinGent " + ReleaseVersion.Display(Updater.Current), "Installs a newer release from GitHub only when you say so, and only if it carries two signatures from the developer's release keys. MinGent then restarts as the new version, in the same folder.", check, check.Width);
+            Place(p, c);
+
             Section(p, "Reset", null);
             c = NewCard(p);
             PillButton reset = new PillButton("Reset...", Th, false);
@@ -543,6 +559,8 @@ namespace MinGent
             List<string> allowed = s.AutoAllowList;
             foreach (string cat in PermissionCategory.All)
                 autoAsk[cat] = Switch(c, PermissionCategory.Title(cat), PermissionCategory.Note(cat), !allowed.Contains(cat));
+            SwitchRow console = autoAsk[PermissionCategory.Console];
+            console.CheckedChanged += delegate { if (!console.Checked && !reverting) BeginInvoke(new Action(delegate { ConfirmConsoleOff(console); })); };
             Place(p, c);
 
             Section(p, "Always on", "These limits apply in every mode, also in Full auto.");
@@ -560,6 +578,20 @@ namespace MinGent
             Finish(p);
         }
 
+        bool reverting;
+
+        void ConfirmConsoleOff(SwitchRow row)
+        {
+            if (row.Checked || IsDisposed) return;
+            string text = "Let Auto run the agent's code in the browser console without asking?\n\n" +
+                          "Code in a web page's console can do anything you can do on that site while you are signed in, such as reading private details, changing settings or sending things for you. " +
+                          "MinGent still refuses code that clicks, types, scrolls or opens pages" + (guard.Checked ? ", and the prompt-injection guard still asks once the agent has read web content." : ".");
+            if (Alert.Confirm(this, Th, text, Text, "Run without asking", true)) return;
+            reverting = true;
+            row.Checked = true;
+            reverting = false;
+        }
+
         void BuildPrivacy()
         {
             ScrollHost p = AddPage("Privacy", "lock");
@@ -568,7 +600,7 @@ namespace MinGent
             offline = Switch(c, "Work offline", "MinGent makes no internet connections: no cloud models, web search, web pages or downloads. Local models and everything on this PC keep working, and the agent may not run commands that need the internet. It is not a firewall: a program that goes online by itself still can.", s.Offline);
             Place(p, c);
 
-            Section(p, "Logs", "MinGent sends nothing about you anywhere: no telemetry, no crash reports, and no update checks unless you switch on newer llama.cpp releases in Models.");
+            Section(p, "Logs", "MinGent sends nothing about you anywhere: no telemetry, no crash reports, and no update checks except when you click Check for updates or switch on newer llama.cpp releases in Models.");
             c = NewCard(p);
             PillButton show = new PillButton("Show...", Th, false);
             show.Click += delegate { using (ConnectionsDialog d = new ConnectionsDialog(Th)) d.ShowDialog(this); };

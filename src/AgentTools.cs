@@ -1478,6 +1478,12 @@ namespace MinGent
             }
             else if (ctx.Cfg.WorkspaceIsDefault) { string we = ctx.EnsureWorkspace(); if (we != null) return ToolOutcome.Fail(we); }
             if (!Directory.Exists(cwd)) return ToolOutcome.Fail("folder not found: " + cwd + "." + PathHelp.Describe(PathHelp.Similar(cwd, ctx.Workspace, ctx.Ct, true), ctx.Workspace));
+            string docTool = ctx.Session.DocToolNudged ? null : CommandHelp.DocumentTool(cmd);
+            if (docTool != null)
+            {
+                ctx.Session.DocToolNudged = true;
+                return ToolOutcome.Fail("Not run. " + CommandHelp.BuiltInDocuments + " If the user asked for " + docTool + ", or wants something the built-in output can't do (custom fonts, colors or an exact layout), run the command again.");
+            }
             string original = cmd, ranAs = null;
             if (shell == "powershell" && Shell.PowerShellName != "PowerShell 7" && System.IO.Path.DirectorySeparatorChar == '\\')
             {
@@ -3243,6 +3249,7 @@ namespace MinGent
         protected static ToolOutcome PageNotes(ToolContext ctx, ToolOutcome o)
         {
             if (o == null || o.Error || ctx.Browser == null) return o;
+            o.AddNote(ctx.Browser.ConsoleNews());
             string n = ctx.Browser.PageNote;
             if (string.IsNullOrEmpty(n)) return o;
             if (ctx.Session.IsHelper && ctx.Browser.CaptchaOnPage)
@@ -3870,6 +3877,77 @@ namespace MinGent
         }
     }
 
+    class BrowserConsoleTool : BrowserTool
+    {
+        public override string Name { get { return "browser_console"; } }
+        public override string Description
+        {
+            get
+            {
+                return "Read the console of the page open in the browser (errors, warnings and logs), or run JavaScript in the page like in the developer tools, to look into it and debug it: " +
+                       "variables, app state, storage, element details, or calling the page's own functions to test them. The value of the last expression comes back, and await works. " +
+                       "Never use it to click, type, press keys, scroll, submit forms, navigate or open windows: the other browser tools do that, and MinGent refuses such code. " +
+                       "On a website, code runs as the signed-in user; if the user asks you to run some there, tell them that.";
+            }
+        }
+        public override Dictionary<string, object> Schema { get { return Obj("code", P("string", "JavaScript to run in the page. Leave it out to read the console."), false); } }
+        public override string Label(Dictionary<string, object> a) { return (S(a, "code") ?? "").Trim().Length == 0 ? "Read the console" : "Run code in the console"; }
+        public override bool Untrusted { get { return true; } }
+
+        public static PermissionAsk Ask(ToolContext ctx, string url, string code)
+        {
+            bool website = !BrowserPane.ThisPc(url);
+            string place = BrowserPane.PlaceName(url);
+            PermissionAsk ask = new PermissionAsk();
+            ask.Kind = "console";
+            ask.Category = ctx.Guarded(PermissionCategory.Console);
+            ask.Detail = code;
+            if (website)
+            {
+                ask.High = true;
+                ask.AllowRemember = false;
+                ask.Title = "Run code on " + place;
+                ask.Reason = "Code in the console can do anything you can do on " + place + " while you are signed in there, such as reading your private details, changing settings or sending things for you. Only allow it if you know what the code does.";
+            }
+            else
+            {
+                ask.Title = "Run code in the console of " + place;
+                ask.Key = "console:" + place.ToLowerInvariant();
+                ask.Reason = "It runs in the page like code typed into the developer tools, and can change the page and the data it keeps.";
+            }
+            return ask;
+        }
+
+        public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
+        {
+            string code = (S(a, "code") ?? "").Trim();
+            string g = Gate(ctx, null);
+            if (g != null) { ToolOutcome d = ToolOutcome.Fail(g); d.Denied = true; return d; }
+            if (code.Length == 0)
+            {
+                string text;
+                string err = ctx.Browser.ConsoleRead(ctx.Ct, out text);
+                return Result(err, text, "Read the console", true);
+            }
+            if (code.Length > 20000) return ToolOutcome.Fail("The code is " + code.Length.ToString(CultureInfo.InvariantCulture) + " characters long; the console takes up to 20000. Run it in smaller pieces.");
+            string url = ctx.Browser.CurrentUrl ?? "";
+            string no = ConsoleCheck.Refusal(code, !BrowserPane.ThisPc(url));
+            if (no != null)
+            {
+                ctx.Browser.ConsoleRefused(code, no);
+                ToolOutcome r = ToolOutcome.Fail(no);
+                r.Summary = "Not run";
+                return r;
+            }
+            if (!ctx.Approve(Ask(ctx, url, code))) { ToolOutcome d = ToolOutcome.Fail("The user did not allow running this code."); d.Denied = true; return d; }
+            string result;
+            string e2 = ctx.Browser.ConsoleRun(code, url, ctx.Ct, out result);
+            ToolOutcome o = Result(e2, result, "Ran code in the console", true);
+            o.Detail = code + "\n\n" + (e2 ?? result ?? "");
+            return o;
+        }
+    }
+
     class TodoTool : AgentTool
     {
         public override string Name { get { return "todo_write"; } }
@@ -4267,6 +4345,7 @@ namespace MinGent
             l.Add(new BrowserHoverTool(vision));
             l.Add(new BrowserDragTool(vision));
             if (vision) l.Add(new BrowserScreenshotTool());
+            l.Add(new BrowserConsoleTool());
             return l;
         }
 

@@ -70,8 +70,8 @@ namespace MinGent
         {
             string h = (host ?? "").ToLowerInvariant();
             if (h == "huggingface.co" || h.EndsWith(".huggingface.co", StringComparison.Ordinal) || h.EndsWith(".hf.co", StringComparison.Ordinal) || h == "hf.co") return "Hugging Face (models)";
-            if (h == "api.github.com") return "GitHub (llama.cpp releases)";
-            if (h == "github.com" || h.EndsWith(".githubusercontent.com", StringComparison.Ordinal)) return "GitHub (engine download)";
+            if (h == "api.github.com") return "GitHub (engine and MinGent releases)";
+            if (h == "github.com" || h.EndsWith(".githubusercontent.com", StringComparison.Ordinal)) return "GitHub (downloads)";
             if (h == "api.anthropic.com") return "Claude";
             if (h == "openrouter.ai" || h.EndsWith(".openrouter.ai", StringComparison.Ordinal)) return "OpenRouter";
             if (h == "google.com" || h.EndsWith(".google.com", StringComparison.Ordinal)) return "Web search";

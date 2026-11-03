@@ -57,7 +57,7 @@ namespace MinGent
         [PreserveSig] int NavigateToString([MarshalAs(UnmanagedType.LPWStr)] string p0);
         [PreserveSig] int add_NavigationStarting([MarshalAs(UnmanagedType.Interface)] ICoreWebView2NavigationStartingEventHandler p0, out long p1);
         [PreserveSig] int remove_NavigationStarting(long p0);
-        [PreserveSig] int add_ContentLoading(IntPtr p0, out long p1);
+        [PreserveSig] int add_ContentLoading([MarshalAs(UnmanagedType.Interface)] ICoreWebView2ContentLoadingEventHandler p0, out long p1);
         [PreserveSig] int remove_ContentLoading(long p0);
         [PreserveSig] int add_SourceChanged([MarshalAs(UnmanagedType.Interface)] ICoreWebView2SourceChangedEventHandler p0, out long p1);
         [PreserveSig] int remove_SourceChanged(long p0);
@@ -314,6 +314,12 @@ namespace MinGent
         [PreserveSig] int Invoke(IntPtr p0, IntPtr p1);
     }
 
+    [ComImport, Guid("364471e7-f2be-4910-bdba-d72077d51c4b"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface ICoreWebView2ContentLoadingEventHandler
+    {
+        [PreserveSig] int Invoke(IntPtr p0, IntPtr p1);
+    }
+
     [ComImport, Guid("79e0aea4-990b-42d9-aa1d-0fcc2e5bc7f1"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     interface ICoreWebView2ProcessFailedEventHandler
     {
@@ -330,6 +336,25 @@ namespace MinGent
     interface ICoreWebView2CallDevToolsProtocolMethodCompletedHandler
     {
         [PreserveSig] int Invoke(int p0, [MarshalAs(UnmanagedType.LPWStr)] string p1);
+    }
+
+    [ComImport, Guid("b32ca51a-8371-45e9-9317-af021d080367"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface ICoreWebView2DevToolsProtocolEventReceiver
+    {
+        [PreserveSig] int add_DevToolsProtocolEventReceived([MarshalAs(UnmanagedType.Interface)] ICoreWebView2DevToolsProtocolEventReceivedEventHandler p0, out long p1);
+        [PreserveSig] int remove_DevToolsProtocolEventReceived(long p0);
+    }
+
+    [ComImport, Guid("e2fda4be-5456-406c-a261-3d452138362c"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface ICoreWebView2DevToolsProtocolEventReceivedEventHandler
+    {
+        [PreserveSig] int Invoke(IntPtr p0, [MarshalAs(UnmanagedType.Interface)] ICoreWebView2DevToolsProtocolEventReceivedEventArgs p1);
+    }
+
+    [ComImport, Guid("653c2959-bb3a-4377-8632-b58ada4e66c4"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface ICoreWebView2DevToolsProtocolEventReceivedEventArgs
+    {
+        [PreserveSig] int ParameterObjectAsJson(out IntPtr p0);
     }
 
     [ComImport, Guid("b99369f3-9b11-47b5-bc6f-8e7895fcea17"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]

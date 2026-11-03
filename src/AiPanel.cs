@@ -470,6 +470,18 @@ namespace MinGent
 
         void SetAuto(bool on) { SetLevel(on ? "auto" : "ask"); }
 
+        const string LocalFullAutoNote = "With a local model this is riskier: smaller models are easier for a web page to trick and make more mistakes. For Full auto, a frontier model such as Claude, GPT or Gemini is the safer choice.";
+
+        bool LocalModelPicked()
+        {
+            ModelEntry m = SelectedEntry();
+            if (m != null) return !m.Cloud;
+            string r = settings.AiModel ?? "";
+            int c = r.IndexOf(':');
+            string p = c > 0 ? r.Substring(0, c) : "";
+            return p == "engine" || p == "lmstudio";
+        }
+
         void SetLevel(string lv)
         {
             if (lv != "auto" && lv != "full") lv = "ask";
@@ -477,6 +489,7 @@ namespace MinGent
             {
                 Form f = FindForm();
                 bool yes = Alert.Ask(f, th, "Full auto asks you nothing. The agent can install software, delete files, change settings, press buy buttons and run any command without your OK, also when a web page tries to trick it.\n\n" +
+                                            (LocalModelPicked() ? LocalFullAutoNote + "\n\n" : "") +
                                             "Its file tools still never write into Windows, Program Files or MinGent's own data, and it never sends your saved API keys to a website. Full auto goes back to Auto when you close MinGent.\n\nOnly use it for work you trust.",
                                      Program.AppName, "Turn on Full auto");
                 if (!yes) { composer.Level = level; return; }
@@ -497,12 +510,12 @@ namespace MinGent
                        (settings.AiWebGuard ? "and before commands once it has read web content. " : "") + "You can choose what Auto asks about in Settings > Safety. Ctrl+Z or the Undo link reverts file changes.", 0);
             }
             if (lv == "full" && was != "full")
-                Notice("Full auto is on: the agent asks nothing until you switch it back (click the red switch). It goes back to Auto when you close MinGent.", 2);
+                Notice("Full auto is on: the agent asks nothing until you switch it back (click the red switch). It goes back to Auto when you close MinGent." + (LocalModelPicked() ? " " + LocalFullAutoNote : ""), 2);
             ChatItem pending = chat.PendingPermission();
             if (pending == null || lv == "ask") return;
             if (lv == "full") { chat.Resolve(pending, pending.Ask.Never ? PermissionDecision.Deny : PermissionDecision.Allow); return; }
             bool allowedCategory = !pending.Ask.Never && session.Perms.AutoAllows(pending.Ask.Category);
-            if (allowedCategory || (!pending.Ask.High && pending.Ask.Kind != "read" && pending.Ask.Kind != "web" &&
+            if (allowedCategory || (!pending.Ask.High && pending.Ask.Kind != "read" && pending.Ask.Kind != "web" && pending.Ask.Kind != "console" &&
                 !(session.Perms.WebGuard && session.Perms.Tainted && (pending.Ask.Kind == "command" || pending.Ask.Kind == "write"))))
                 chat.Resolve(pending, PermissionDecision.Allow);
         }
@@ -838,9 +851,11 @@ namespace MinGent
 
         void Choose(string modelRef)
         {
+            bool wasLocal = LocalModelPicked();
             settings.AiModel = modelRef;
             settings.Save();
             UpdateModelChip();
+            if (level == "full" && !wasLocal && LocalModelPicked()) Notice("Full auto is still on. " + LocalFullAutoNote, 2);
             if (modelRef.StartsWith("lmstudio:") && modelRef.Length > 9)
             {
                 ModelEntry e = catalog == null ? null : catalog.Find(modelRef);
@@ -1986,6 +2001,7 @@ namespace MinGent
                 case "ask_user": return "ask";
                 case "present_plan": return "map";
                 case "analyze_audio": return "wave";
+                case "browser_console": return "terminal";
             }
             if (tool.StartsWith("browser_")) return "cursor";
             return "dot";

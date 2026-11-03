@@ -12,9 +12,9 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("MinGent - an AI agent for Windows with its own notepad and browser")]
 [assembly: AssemblyProduct("MinGent")]
 [assembly: AssemblyCopyright("Built locally from source")]
-[assembly: AssemblyVersion("1.0.4.0")]
-[assembly: AssemblyFileVersion("1.0.4.0")]
-[assembly: AssemblyInformationalVersion("1.0.4 beta")]
+[assembly: AssemblyVersion("1.0.5.0")]
+[assembly: AssemblyFileVersion("1.0.5.0")]
+[assembly: AssemblyInformationalVersion("1.0.5 beta")]
 
 namespace MinGent
 {
@@ -23,7 +23,7 @@ namespace MinGent
         public const string AppName = "MinGent", LegacyName = "JustPad";
         public static string IpcTitle = "MinGent.IPC.Window.v1";
         public static string DataDir, SessionDir;
-        public static bool Elevated;
+        public static bool Elevated, Primary = true;
         public static volatile bool Erased, KeepErrorLog;
         public static MainForm MainWindow;
 
@@ -36,15 +36,20 @@ namespace MinGent
                 Eraser.Finish(args[1]);
                 return;
             }
+            if (args.Length >= 1 && args[0] == Updater.FinishArg)
+            {
+                Updater.Finish(args);
+                return;
+            }
+            if (args.Length == 2 && args[0] == Updater.CheckArg)
+            {
+                Environment.Exit(Updater.CheckOwnRelease(args[1]));
+                return;
+            }
             Native.TryDpiAware();
             string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             DataDir = MoveOldData(Path.Combine(local, LegacyName), Path.Combine(local, AppName));
-            try
-            {
-                using (System.Security.Principal.WindowsIdentity id = System.Security.Principal.WindowsIdentity.GetCurrent())
-                    Elevated = new System.Security.Principal.WindowsPrincipal(id).IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
-            }
-            catch { Elevated = false; }
+            Elevated = RunsElevated();
             SessionDir = Elevated ? Path.Combine(DataDir, "admin") : DataDir;
             if (Elevated) IpcTitle += ".admin";
 
@@ -52,7 +57,7 @@ namespace MinGent
             Mutex mutex = null;
             try
             {
-                mutex = new Mutex(false, "Local\\MinGent.SingleInstance." + Environment.UserName + (Elevated ? ".admin" : ""));
+                mutex = new Mutex(false, InstanceMutexName(Elevated));
                 primary = Owns(mutex, 0);
             }
             catch { primary = false; }
@@ -92,6 +97,7 @@ namespace MinGent
                 try { Shell.SweepScripts(); } catch { }
             }
             UI.Init();
+            Primary = primary;
             MainWindow = new MainForm(args, primary);
             Application.Run(MainWindow);
             GC.KeepAlive(mutex);
@@ -102,6 +108,21 @@ namespace MinGent
             });
             guard.IsBackground = true;
             guard.Start();
+        }
+
+        public static bool RunsElevated()
+        {
+            try
+            {
+                using (System.Security.Principal.WindowsIdentity id = System.Security.Principal.WindowsIdentity.GetCurrent())
+                    return new System.Security.Principal.WindowsPrincipal(id).IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+            }
+            catch { return false; }
+        }
+
+        public static string InstanceMutexName(bool elevated)
+        {
+            return "Local\\MinGent.SingleInstance." + Environment.UserName + (elevated ? ".admin" : "");
         }
 
         static string MoveOldData(string old, string fresh)
@@ -274,6 +295,34 @@ namespace MinGent
         public static void SafeDllSearch()
         {
             try { if (Environment.OSVersion.Platform == PlatformID.Win32NT) SetDllDirectoryW(""); } catch { }
+        }
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        static extern bool GetTokenInformation(IntPtr token, int infoClass, out int info, int length, out int returned);
+
+        public static bool ElevatedByChoice()
+        {
+            try
+            {
+                using (System.Security.Principal.WindowsIdentity id = System.Security.Principal.WindowsIdentity.GetCurrent())
+                {
+                    int type, got;
+                    return GetTokenInformation(id.Token, 18, out type, 4, out got) && type == 2;
+                }
+            }
+            catch { return false; }
+        }
+
+        public static string CSharpCompiler()
+        {
+            string win = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+            if (string.IsNullOrEmpty(win)) return null;
+            foreach (string d in new string[] { "Framework64", "Framework" })
+            {
+                string p = Path.Combine(Path.Combine(Path.Combine(Path.Combine(win, "Microsoft.NET"), d), "v4.0.30319"), "csc.exe");
+                if (File.Exists(p)) return p;
+            }
+            return null;
         }
 
         public static string WindowsExe(string name)

@@ -543,12 +543,11 @@ namespace MinGent
 
         static string HardwareText()
         {
-            GpuInfo g = Hardware.BestGpu;
             long ram = Hardware.RamBytes;
-            string name = g == null ? "" : g.Name;
-            foreach (string pre in new string[] { "NVIDIA GeForce ", "NVIDIA ", "AMD Radeon ", "Intel(R) " })
-                if (name.StartsWith(pre, StringComparison.OrdinalIgnoreCase) && name.Length > pre.Length + 2) { name = name.Substring(pre.Length); break; }
-            string gpu = g == null ? "No graphics card found" : name + (g.VramBytes > 0 ? " \u00B7 " + Gb(g.VramBytes) + " VRAM" : "");
+            List<GpuInfo> used = Hardware.EngineGpus();
+            if (used.Count == 0 && Hardware.BestGpu != null) used.Add(Hardware.BestGpu);
+            long vram = Hardware.TotalVram(used);
+            string gpu = used.Count == 0 ? "No graphics card found" : Hardware.Names(used, true) + (vram > 0 ? " \u00B7 " + Gb(vram) + " VRAM" : "");
             return gpu + (ram > 0 ? " \u00B7 " + Gb(ram) + " RAM" : "");
         }
 
@@ -674,6 +673,7 @@ namespace MinGent
         void UpdateBanner()
         {
             if (installing) return;
+            if (hardware != null) hardware.Text = HardwareText();
             Engine e = Engine.Instance;
             EngineBuild have = e.Installed ? Engine.BuildFor(e.InstalledBackend) : null;
             engineChip.Visible = have != null;

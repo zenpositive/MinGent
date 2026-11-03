@@ -478,6 +478,17 @@ namespace MinGent
             catch { return false; }
         }
 
+        public static bool HasPython()
+        {
+            Dictionary<string, string> found = OnPath();
+            foreach (string t in new string[] { "python", "py" })
+            {
+                string p;
+                if (found.TryGetValue(t, out p) && !StoreShortcut(p)) return true;
+            }
+            return false;
+        }
+
         public static string PathLine()
         {
             Dictionary<string, string> found = OnPath();
