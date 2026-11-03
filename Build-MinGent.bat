@@ -28,7 +28,7 @@ if not defined CSC (
 for %%I in ("%CSC%") do set "NET=%%~dpI"
 set "SYS=%WINDIR%\System32"
 
-set "SOURCES=Program.cs Theme.cs Syntax.cs Document.cs EditorView.cs TabStrip.cs FindBar.cs MainForm.cs UiKit.cs PixelIcons.cs Json.cs Net.cs Eraser.cs Http.cs Secret.cs Llm.cs ModelCatalog.cs ModelLibrary.cs Engine.cs Shell.cs AgentCore.cs AgentTools.cs AgentAssist.cs AgentExtras.cs AgentHelpers.cs YouTube.cs Audio.cs Markdown.cs TexParse.cs TexLayout.cs Documents.cs PdfText.cs DocBuild.cs DocExport.cs DocxWriter.cs XlsxWriter.cs PptxWriter.cs PdfFont.cs PdfLayout.cs PdfWriter.cs AppHighlight.cs ChatView.cs AiPanel.cs Attachments.cs Terminal.cs Browser.cs BrowserWindows.cs BrowserScripts.cs WebView2Interop.cs SettingsDialog.cs ModelLibraryDialog.cs Controls.cs Sidebar.cs"
+set "SOURCES=Program.cs Theme.cs Syntax.cs Document.cs EditorView.cs TabStrip.cs FindBar.cs MainForm.cs UiKit.cs PixelIcons.cs Json.cs Net.cs Eraser.cs Http.cs Secret.cs Llm.cs ModelCatalog.cs ModelLibrary.cs Engine.cs Shell.cs AgentCore.cs AgentTools.cs AgentAssist.cs AgentExtras.cs AgentHelpers.cs YouTube.cs Audio.cs AudioDetail.cs AudioFocus.cs Release.cs ReleaseKeys.cs Updater.cs Markdown.cs TexParse.cs TexLayout.cs Documents.cs PdfText.cs DocBuild.cs DocExport.cs DocxWriter.cs XlsxWriter.cs PptxWriter.cs PdfFont.cs PdfLayout.cs PdfWriter.cs AppHighlight.cs ChatView.cs AiPanel.cs Attachments.cs Terminal.cs Browser.cs BrowserWindows.cs BrowserScripts.cs BrowserConsole.cs ConsoleDrawer.cs WebView2Interop.cs SettingsDialog.cs ModelLibraryDialog.cs Controls.cs Sidebar.cs"
 set "FILES="
 for %%F in (%SOURCES% MinGent.manifest MinGent.ico) do (
     if not exist "src\%%F" (
@@ -39,6 +39,7 @@ for %%F in (%SOURCES% MinGent.manifest MinGent.ico) do (
 )
 for %%S in (%SOURCES%) do call set "FILES=%%FILES%% src\%%S"
 
+if not exist "MinGent.exe" goto :notrunning
 :checkrunning
 "%SYS%\tasklist.exe" /FI "IMAGENAME eq MinGent.exe" /NH 2>nul | "%SYS%\find.exe" /I "MinGent.exe" >nul
 if not errorlevel 1 (
@@ -51,6 +52,7 @@ if not errorlevel 1 (
     goto :checkrunning
 )
 
+:notrunning
 set "ICONARGS=/win32icon:src\MinGent.ico /resource:src\MinGent.ico,MinGent.ico"
 set "USERICON="
 if exist "icon.png" set "USERICON=icon.png"

@@ -11,7 +11,8 @@ other programs, only the ones it starts itself. While it tests one of those,
 it moves your mouse pointer and types into that window, so leave the mouse
 alone until it is done.
 
-No dependency tree: no installer, no packages, no plugins and no updater.
+No dependency tree: no installer, no packages, no plugins and no automatic
+updates.
 MinGent itself has no third-party code. You compile it yourself from the
 source in the "src" folder with the C# compiler that is part of Windows, so
 the program you run is the code you can read. The optional built-in engine
@@ -19,7 +20,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.0.4 beta: it works, and it still has rough edges. Report
+This is version 1.0.5 beta: it works, and it still has rough edges. Report
 problems at https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -59,11 +60,21 @@ themselves. Each of those is a way in: a hijacked maintainer account or a
 look-alike package runs its code on your PC, next to your files, keys and
 sign-ins. MinGent has none of that.
 - No packages. It uses only the .NET Framework that comes with Windows. All
-  of it is in "src": about 70,000 lines of C# you can read.
+  of it is in "src": about 75,000 lines of C# you can read.
 - No prebuilt programs. A release is the source code and Build-MinGent.bat,
   which compiles it with csc.exe from Windows itself.
-- No updater, plugins, extensions or telemetry. A new version arrives only
-  when you download it and build it.
+- No automatic updates, plugins, extensions or telemetry. A new version
+  arrives only when you download and build it, or when you click "Check for
+  updates" in Settings > General and then Install.
+- "Check for updates" installs a release only if both release keys pinned
+  in your version signed it: one locked in the TPM chip of the developer's
+  PC, and a security key that has to be touched for each signature. One key
+  alone can't sign a release. MinGent checks the download against the
+  SHA-256 in the signature and builds it from source with the C# compiler
+  in Windows. Then it closes, puts the new version in place of the old one
+  in the same folder, and opens again, so shortcuts and pins keep working.
+  If the new version fails to start, the old one is put back. A release
+  without both signatures is never installed.
 - The one program MinGent downloads, the built-in engine (llama.cpp's
   server), is pinned to one release and checked against SHA-256 checksums
   written in the source before it is unpacked. Models are checked against the
@@ -76,7 +87,7 @@ sign-ins. MinGent has none of that.
   Full auto asks nothing. The check reads the command; it can't see what a
   script does once it runs.
 To check a download, compare its SHA-256 with the one on the release page.
-In PowerShell: Get-FileHash .\MinGent-1.0.4-beta.zip
+In PowerShell: Get-FileHash .\MinGent-1.0.5-beta.zip
 
 
 YOUR OWN ICON
@@ -166,7 +177,14 @@ CHATS
   tones, pitch, tempo and a rough key. Models that can see images also get a
   waveform and a spectrogram. It can't make out words or name a song. MinGent
   reads WAV and AIFF itself and other formats with the decoders built into
-  Windows.
+  Windows. When it needs more, the agent asks for one thing at a time: the
+  beat and bar times, the hits (kick, snare, hi-hat), the notes of a melody,
+  the sections of a song, or where a second file lines up with the first
+  (to the sample when they share audio, and whether they drift apart). For
+  a sound it made in code, it can listen to it: how it starts and ends,
+  clicks between notes, pitch and tuning, tone and aliasing, clipping and
+  DC offset. Long lists go to a .csv file in the workspace instead of the
+  chat.
 - It also makes Word, Excel, PowerPoint and PDF files: ask for "a Word report",
   "slides about ..." or "a spreadsheet of ..." and it writes the file, with
   headings, tables, pictures, formulas and links. Slides split at --- lines or
@@ -174,7 +192,14 @@ CHATS
   real numbers and dates; formulas that could reach the internet or other
   files stay plain text. An existing document is never changed in place - the
   agent writes a complete new version. Open the result with the Open link in
-  the chat.
+  the chat. The agent uses this instead of installing Python libraries or
+  other programs; only when you want something it can't do (custom fonts,
+  colors or an exact layout) does it ask before using another tool, and it
+  uses a tool you name.
+- Scripts: the agent uses what is already on your PC. Python only if it is
+  installed; otherwise PowerShell for small jobs and C#, compiled with the
+  compiler that comes with Windows, for heavy work such as generating sound.
+  It doesn't install a language just for one task.
 - Math: formulas the model writes in LaTeX are typeset - $...$ or \(...\)
   inside a sentence, $$...$$ or \[...\] on their own lines. Selecting a formula
   copies it as plain text with real symbols; "Copy" under the answer copies
@@ -229,7 +254,8 @@ KEYBOARD
   Ctrl+Tab             next tab             Ctrl+Z / Ctrl+Y  undo / redo
   Ctrl+Shift+Tab       previous tab         Alt+Left/Right   back / forward
 
-  Browser:  Ctrl+L, F6 or Alt+D go to the address bar.
+  Browser:  Ctrl+L, F6 or Alt+D go to the address bar. Ctrl+Shift+J shows
+            or hides the console, F12 opens the developer tools.
   Models:   Up / Down choose, Enter opens, uses or downloads the selected
             model; the menu key or Shift+F10 lists all you can do with it.
 
@@ -255,7 +281,11 @@ models..." for the full list.
   build for NVIDIA cards with less than about 3.5 GB of memory, where the
   processor is faster). It also finds GGUF models LM Studio already
   downloaded, so you do not need two copies. The "Engine" button at the top of
-  the model library switches to another build or removes the engine.
+  the model library switches to another build or removes the engine. With
+  two or more graphics cards, the engine spreads a model over all of them by
+  itself (the CUDA builds use the NVIDIA cards, Vulkan every card except
+  graphics built into the processor), and the model library adds up their
+  memory when it says what fits.
 - Newer llama.cpp releases: off by default. With Settings > Models > "Offer
   newer llama.cpp releases" on, MinGent asks GitHub for llama.cpp's latest
   stable release when it starts and when you open Models, and offers it there
@@ -484,7 +514,9 @@ ASK, AUTO OR FULL AUTO
   Auto (switch on): it works on its own and asks only before risky things
   (see below).
   Full auto (red): it asks nothing at all. It warns you the first time and
-  goes back to Auto when you close MinGent.
+  goes back to Auto when you close MinGent. With a local model it also
+  points out that smaller models are easier for a web page to trick, so a
+  frontier model such as Claude, GPT or Gemini is the safer choice.
 - What Auto still asks about is listed in Settings > Safety, one switch per
   kind, all on until you switch one off:
     Installing software and packages
@@ -496,6 +528,7 @@ ASK, AUTO OR FULL AUTO
     Changes on servers over ssh
     Payments, passwords and account actions
     Downloading programs and archives in the browser
+    Running code in the browser console
 - These rows also cover commands that hide what they do or reach outside the
   work folder: deletes of files picked by another command, a loop or a script
   outside the work folder, wildcard deletes outside it, emptying the whole
@@ -566,7 +599,8 @@ THE BROWSER
   images); you watch it happen and can take over any time.
 - To websites it looks like ordinary Microsoft Edge: MinGent adds nothing to
   the pages and sets no automation flags. The agent reads and clicks from a
-  separate, private script context that pages cannot see or tamper with.
+  separate, private script context that pages cannot see or tamper with. The
+  console is the exception: see below.
 - It has its own profile, separate from your normal browsers: sign in there to
   the sites you want the agent to use, and the sign-ins stay. Every chat
   starts on a fresh page, so a new chat never carries on in the last chat's
@@ -605,6 +639,29 @@ THE BROWSER
   browsers (this applies to every app, not only MinGent). When a page sends
   you there, MinGent shows "Open in your browser" to continue in your normal
   browser.
+- The console: "Console" in the browser's "..." menu (or Ctrl+Shift+J) opens
+  it under the page. It shows the page's errors, warnings and logs, the code
+  the agent ran there and what came back, and has a line where you can run
+  JavaScript yourself. "Developer tools" in the same menu (or F12) opens
+  Edge's full developer tools in their own window.
+- The agent can read the console and run JavaScript in the page to look into
+  a problem, for example an error on a page it built. After each browser step
+  it is told about new errors on pages from this PC (files, localhost).
+  Websites can notice when their console is read, and some turn such
+  browsers away, so MinGent reads a website's console only once you or the
+  agent ask for it, and only for that site.
+- Running code in the console asks first in Ask mode, and in Auto mode while
+  "Running code in the browser console" in Settings > Safety is on (switching
+  it off shows a warning). On a website the question is red: code there can
+  do anything you can do on that site while signed in. Full auto doesn't ask.
+- MinGent refuses console code that does what the other browser tools do -
+  clicking, typing, key presses, scrolling, submitting forms, opening pages
+  or windows - so those keep going through the checks for buy, password and
+  account buttons. It also refuses code that hides what it runs (eval, code
+  in strings, encoded text, calls through computed names), and on websites
+  network requests and reading cookies, storage, saved sign-ins or form
+  fields. Like the command checks, this reads the code: it catches the
+  common cases, not every possible trick.
 
 
 NOTES
@@ -713,9 +770,10 @@ and MinGent.exe.
 PRIVACY
 -------
 - MinGent sends nothing about you anywhere: no account, no telemetry, no
-  crash reports, and no update checks unless you switch on newer llama.cpp
-  releases. With a local model your chats stay on your PC; only the web
-  searches and pages the agent uses go out.
+  crash reports, and no update checks except when you click "Check for
+  updates" or switch on newer llama.cpp releases. With a local model your
+  chats stay on your PC; only the web searches and pages the agent uses go
+  out.
 - Settings > Privacy > Offline mode: MinGent makes no internet connections -
   no cloud models, web search, web pages, update checks or downloads. Local
   models and pages on this PC or your local network keep working. The
@@ -764,9 +822,9 @@ SECURITY / ATTACK SURFACE
 -------------------------
 - Uses only the .NET Framework that is part of Windows. MinGent itself has no
   third-party code: every line is in the "src" folder for you to read. No
-  auto-update, telemetry, plugins, macros or scripting engine, and it never
-  needs administrator rights. The optional engine is llama.cpp's own build
-  and the browser is Microsoft's WebView2.
+  automatic updates, telemetry, plugins, macros or scripting engine, and it
+  never needs administrator rights. The optional engine is llama.cpp's own
+  build and the browser is Microsoft's WebView2.
 - MinGent itself connects only to: the model you chose (the built-in engine
   or LM Studio on 127.0.0.1, or api.anthropic.com / api.openai.com /
   generativelanguage.googleapis.com / openrouter.ai / your custom server),
@@ -775,8 +833,9 @@ SECURITY / ATTACK SURFACE
   once per result, to look up its real address), the pages and YouTube
   videos it reads, the sites you or it open in the browser, huggingface.co
   and its download servers when you search or download models, github.com
-  and its download server when you set up, switch or update the engine, and
-  api.github.com only with "Offer newer llama.cpp releases" on. Notes itself
+  and its download server when you set up, switch or update the engine or
+  install a MinGent update, and api.github.com only with "Offer newer
+  llama.cpp releases" on or when you click "Check for updates". Notes itself
   makes no network connections. Settings > Privacy > Connections shows each
   one.
 - The built-in engine is llama.cpp's server, pinned to one release and checked

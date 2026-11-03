@@ -1,6 +1,67 @@
 MinGent - what changed
 ======================
 
+Version 1.0.5 beta
+- Turning on Full auto with a local model, or picking a local model while
+  Full auto is on, says that smaller models are easier for a web page to
+  trick, and that a frontier model such as Claude, GPT or Gemini is the
+  safer choice for Full auto.
+- The agent makes PDF, Word, PowerPoint and Excel files with MinGent's own
+  writer instead of installing reportlab, python-docx and the like. The
+  first time in a chat that it tries to install such a library or run a
+  converter like pandoc, LibreOffice or wkhtmltopdf, MinGent points it to
+  the built-in way; if you asked for that tool, or want something the
+  built-in writer can't do, it can run the command again.
+- For scripts the agent uses what is on the PC: Python only when it is
+  installed, otherwise PowerShell, and C# compiled with the compiler in
+  Windows for heavy work. When that compiler rejects newer C# syntax,
+  MinGent says what to write instead.
+- The built-in browser has a console under the page: "Console" in its new
+  "..." menu, or Ctrl+Shift+J. It shows the page's errors, warnings and
+  logs, the code the agent runs and what came back, and you can run
+  JavaScript there yourself. "Developer tools" in the same menu, or F12,
+  opens Edge's developer tools.
+- The agent can read the console and run JavaScript in the page to debug
+  it, and after each browser step it hears about new errors on pages from
+  this PC. A website's console is only read once you or the agent ask,
+  since some sites turn away browsers that read it.
+- Running console code asks first, in Auto mode too, unless you switch off
+  the new "Running code in the browser console" row in Settings > Safety,
+  which warns before it goes off. On websites the question is red. MinGent
+  refuses console code that clicks, types, presses keys, scrolls, submits,
+  opens pages or windows, or hides what it runs, so the agent does those
+  with the normal browser tools and their checks. On websites it also
+  refuses network requests and reading cookies, storage or form fields.
+- Sound analysis goes deeper when the agent asks for it: beat and bar
+  times, hits sorted into low, mid and high, the notes of a melody with a
+  guess at the key, and the sections of a song. Long lists are saved to a
+  .csv file in the workspace, so the chat gets a short answer.
+- The agent can line up two sound files: where one starts in the other, to
+  the sample when they share audio, and whether they drift apart over time,
+  with their tempo, key and loudness side by side.
+- For sound the agent makes in code, a listening report says how it starts
+  and ends, whether notes click as they change or a loop clicks at the
+  seam, the pitch and tuning, whether the tone is pure, square, triangle or
+  sawtooth-like, aliasing from waves made without band-limiting, and
+  clipping, DC offset or levels that are too loud or quiet.
+- Settings > General > "Check for updates" asks GitHub for the newest
+  release, only when you click it. MinGent installs a release only if both
+  release keys pinned in this version signed it (a key in the TPM chip of
+  the developer's PC and a security key that has to be touched), checks
+  the download against the signed SHA-256, and builds it with the C#
+  compiler in Windows. Then MinGent closes, the new version takes its
+  place in the same folder, and it opens again. If it fails to start, the
+  old version is put back. A release without both signatures is never
+  installed.
+- With two or more graphics cards, the model library adds up the memory of
+  the cards the engine uses when it suggests sizes and says what fits, and
+  its header names them all with their total memory. The engine already
+  spread models over every card; MinGent only counted the biggest.
+- On a laptop, the graphics card counts ahead of graphics built into the
+  processor, even when the built-in one reports more memory. A PC with an
+  older NVIDIA card next to a newer one gets the Vulkan build, which runs
+  on both.
+
 Version 1.0.4 beta
 - Local models that always think, such as DeepSeek R1 and its distills,
   QwQ and the Qwen 3 Thinking-2507 models, no longer offer Off on the
