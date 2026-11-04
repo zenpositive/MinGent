@@ -20,7 +20,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.0.8 beta: it works, and it still has rough edges. Report
+This is version 1.0.9 beta: it works, and it still has rough edges. Report
 problems at https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -87,7 +87,7 @@ sign-ins. MinGent has none of that.
   Full auto asks nothing. The check reads the command; it can't see what a
   script does once it runs.
 To check a download, compare its SHA-256 with the one on the release page.
-In PowerShell: Get-FileHash .\MinGent-1.0.8-beta.zip
+In PowerShell: Get-FileHash .\MinGent-1.0.9-beta.zip
 
 
 YOUR OWN ICON
@@ -522,10 +522,10 @@ Testing programs it builds
   off.
 - While it uses a program, that window has an outline in your accent color
   and a small "MinGent" tag. Clicks go straight through the outline, it
-  never shows up in the agent's screenshots, and it fades when the agent is
-  done. When the program opens a Save or Open dialog, the agent works in the
-  dialog, and it asks you before typing in it (the same Settings > Safety
-  row decides this in Auto mode).
+  shows in your screenshots and screen recordings but never in the agent's,
+  and it fades when the agent is done. When the program opens a Save or
+  Open dialog, the agent works in the dialog, and it asks you before typing
+  in it (the same Settings > Safety row decides this in Auto mode).
 
 
 ASK, AUTO OR FULL AUTO
@@ -665,13 +665,17 @@ THE BROWSER
   checks get a few seconds to finish by themselves. CAPTCHAs are left to you:
   the agent stops and asks you to complete them. (Settings > Agent has an
   experimental switch that lets the agent try them itself. Its screenshots
-  then zoom in on the CAPTCHA, it picks several picture tiles and Verify in
-  one step, it sees the CAPTCHA again after every click, and after five
-  answers that fail it hands the CAPTCHA to you.)
+  then zoom in on the CAPTCHA, or add a zoomed picture of one that sits
+  inside the page. It picks several picture tiles and Verify in one step,
+  types the characters of a text CAPTCHA, and sees the CAPTCHA again after
+  every click in it. After five answers that fail it hands the CAPTCHA to you;
+  hCaptcha, whose puzzles have pages, gets ten, and Arkose, with its
+  rounds, fifteen.)
 - Give the agent a YouTube link and it reads the video's title, channel,
   date, description and transcript. Long pages and transcripts come in parts.
 - The agent's pointer, in your accent color, shows where it points, clicks,
-  drags and scrolls in the browser. It never shows up in screenshots.
+  drags and scrolls in the browser. It shows in your screenshots and screen
+  recordings, but not in the agent's own screenshots.
 - "Sign in with..." and payment pop-ups open in their own small window with the
   address shown at the top. Links that open a new tab open in the same pane,
   the same way as a normal click. Messages, confirmations and "leave this page?"

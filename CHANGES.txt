@@ -1,6 +1,32 @@
 MinGent - what changed
 ======================
 
+Version 1.0.9 beta
+- CAPTCHA mode no longer makes the page blink while it waits. To see when
+  the pictures stop changing, MinGent now watches the browser's own screen
+  stream instead of taking cropped screenshots, which flashed the page. It
+  waits just as long as before. On screens scaled to about 250% or more,
+  the zoomed picture the agent looks at after each round is cut from a
+  normal screenshot as well; on other screens it is still drawn at twice
+  the size so it stays as sharp, which shows as one blink per round.
+- CAPTCHA mode recognizes puzzles from more providers, such as Yandex
+  SmartCaptcha, Tencent, MTCaptcha and GeeTest, and Arkose puzzles that a
+  site serves from its own address.
+- Text CAPTCHAs: in CAPTCHA mode the agent types the characters it reads
+  into the answer box. With CAPTCHA mode off, typing into one asks you
+  first, the same as clicking any other CAPTCHA.
+- A CAPTCHA that sits inside the page, like a text picture or a GeeTest
+  slider, comes as a zoomed second picture next to the screenshot of the
+  page.
+- hCaptcha's pages and Arkose's rounds no longer use up the tries within
+  one attempt: the agent gets ten answers for hCaptcha and fifteen for
+  Arkose before it hands the CAPTCHA to you.
+- The first time the agent meets a kind of puzzle (pages, rounds, a slider,
+  press and hold), it is told how that kind works.
+- The agent's pointer and the outline of the program it uses now show in
+  your screenshots and screen recordings. They still stay out of the
+  agent's own screenshots.
+
 Version 1.0.8 beta
 - CAPTCHA mode is much faster. The agent clicks all the picture tiles in
   one go, and MinGent waits only until the pictures stop changing (about a
