@@ -1,6 +1,66 @@
 MinGent - what changed
 ======================
 
+Version 1.0.8 beta
+- CAPTCHA mode is much faster. The agent clicks all the picture tiles in
+  one go, and MinGent waits only until the pictures stop changing (about a
+  second) before the agent looks again; after Verify it waits for the next
+  puzzle. A picture puzzle that took about a minute takes a few seconds.
+  The five tries now count answers sent with Verify, not looks.
+- Commands in Auto ask in more cases where your files could be lost:
+  deleting even a single file outside the work folder (except in the temp
+  folder), replacing or emptying an existing file there (Set-Content,
+  Out-File, >, or copying, downloading or unpacking over it), moving files
+  out of folders outside it, and git commands that throw away changes git
+  hasn't saved (git checkout of a file, git restore, git stash drop).
+  MinGent now follows cd, pushd and Set-Location before a delete, so
+  "cd ..; Remove-Item -Recurse old" asks, and so do deletes whose target is
+  worked out while they run. Writing a new file outside the work folder
+  still doesn't ask.
+- The agent asks before changing files that hold passwords, keys or tokens
+  (.npmrc, .git-credentials, the .ssh folder, private keys), also in Auto.
+- Deleting with a patch asks like delete_file outside the work folder, and
+  a file the Recycle Bin can't take is kept instead of deleted for good.
+  Deleting through a link checks where the link really points.
+- With a file open straight from Documents, Desktop or Downloads, the agent
+  works in Documents\MinGent Files instead of the whole folder.
+- Switching from Ask to Auto while a question waits no longer approves a
+  risky one, such as a delete outside the work folder or a clipboard paste.
+- Explore helpers can't change files, and the agent can stop helpers again
+  (in 1.0.7 it couldn't).
+- Browser: clicking a pay, buy or delete-account control by its ref asks
+  like clicking it by position (controls made of div, span or role=link
+  slipped through). Typing into a field checks where the cursor really
+  lands, so a click that moves it into a password or card field types
+  nothing. browser_read shows content in web components and links in SVG
+  maps, and localhost:5500/index.html opens as a web page, not a file.
+- The browser console refuses code that keeps a page method under a
+  computed name and calls it later.
+- Documents: a table row taller than a page continues on the next PDF
+  pages and slides instead of losing text, and in Word long rows can break
+  across pages. A spreadsheet formula with a missing bracket or quote is
+  saved as text with a note, so Excel doesn't have to repair the file, and
+  semicolons between arguments become commas.
+- A UTF-8 file with a few bad bytes opens as UTF-8 with those bytes marked
+  (saving asks first), instead of as ANSI with garbled accents. A tab too
+  large for the agent is refused by its tools instead of read as empty.
+- A checklist left over from an earlier task no longer pulls the agent back
+  to it in a later turn about something else.
+- Actions you confirm while the agent stops (open a chat, delete all chats,
+  wipe the browser) all run, in order, instead of only the last one.
+- A chat brought back from the archive is no longer pruned at once as one
+  of the oldest, and opening an archived chat while the agent works brings
+  it back only if you choose to stop the agent.
+- Settings changes are kept when you install an update from Settings, and
+  updates refuse to unpack into a personal folder (MinGent.exe straight in
+  Downloads, say).
+- Smaller fixes: the browser console keeps its height, Esc in the chat
+  search clears it, the archive says when it is empty and its button is
+  reachable by keyboard, a draft keeps its attachments when you switch
+  chats, and text boxes no longer cover the frame for dropped files.
+- Shorter, plainer text in Settings, the chat panel, the update window and
+  the model library.
+
 Version 1.0.7 beta
 - Check for updates: "What's new" opens the release notes and keeps the
   update window open, so Install is still there when you come back.

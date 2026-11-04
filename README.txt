@@ -20,7 +20,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.0.7 beta: it works, and it still has rough edges. Report
+This is version 1.0.8 beta: it works, and it still has rough edges. Report
 problems at https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -87,7 +87,7 @@ sign-ins. MinGent has none of that.
   Full auto asks nothing. The check reads the command; it can't see what a
   script does once it runs.
 To check a download, compare its SHA-256 with the one on the release page.
-In PowerShell: Get-FileHash .\MinGent-1.0.7-beta.zip
+In PowerShell: Get-FileHash .\MinGent-1.0.8-beta.zip
 
 
 YOUR OWN ICON
@@ -211,11 +211,11 @@ CHATS
   copies it as plain text with real symbols; "Copy" under the answer copies
   the LaTeX.
 - If a reply stops because of an error, "Continue" picks up where it stopped.
-- Right-click a chat in the list to rename or delete it (F2 and Delete work
-  too). Deleting really deletes: the chat file is overwritten before it is
-  removed, and what the agent remembered in that chat is forgotten too. It
-  can't be undone, so MinGent asks first. Older saves of a chat are
-  overwritten as well each time it is saved.
+- A chat's "..." button, or a right-click, renames, archives or deletes it
+  (F2 and Delete work too). Deleting really deletes: the chat file is
+  overwritten before it is removed, and what the agent remembered in that
+  chat is forgotten too. It can't be undone, so MinGent asks first. Older
+  saves of a chat are overwritten as well each time it is saved.
 - The ring under the message box shows how full the model's context window is
   (amber at 70%, red at 90%). Long chats are summarized automatically when
   they get close to the limit; click the ring and "Compact now", or type
@@ -481,7 +481,7 @@ Testing programs it builds
   limits, unless you switch on "Programs you opened yourself" (below).
 - Programs you opened yourself (Settings > Agent, off by default): the agent
   can list the programs you have open, by name only, and ask to use one.
-  MinGent asks you for each program, once in each chat, also in Full auto,
+  MinGent asks you for each program, once in each chat, even in Full auto,
   and the agent sees its windows only after you allow it. Browsers, File
   Explorer, terminals and code editors can only be looked at, because a
   click there can run a script or a command. In any other program you
@@ -555,11 +555,12 @@ ASK, AUTO OR FULL AUTO
     Running code in the browser console
 - These rows also cover commands that hide what they do or reach outside the
   work folder: deletes of files picked by another command, a loop or a script
-  outside the work folder, wildcard deletes outside it, emptying the whole
-  work folder, links or junctions to other folders, robocopy /MIR, emptying
-  the Recycle Bin, generated or encoded code, and anything that touches
-  MinGent's own settings, chats or browser data. Switching a row off stops
-  those questions too.
+  outside the work folder, commands that delete, empty, replace or move
+  files outside it (except in the temp folder), emptying the whole work
+  folder, throwing away changes git hasn't saved, links or junctions to
+  other folders, robocopy /MIR, emptying the Recycle Bin, generated or
+  encoded code, and anything that touches MinGent's own settings, chats or
+  browser data. Switching a row off stops those questions too.
 - Sending one of your saved API keys to a website or over the internet asks
   first in Ask and Auto, and is refused in Full auto. The check looks for the
   key as written, so a command or script can get past it.
@@ -622,15 +623,16 @@ Undo
   The delete tool never deletes a whole drive, your Windows folders or the
   workspace itself, and outside the workspace it asks first, also in Auto
   mode, unless you switch off "Deleting widely or outside the work folder".
-  In Auto, a command that deletes inside the workspace, or a single file
-  elsewhere, does not ask.
+  In Auto, a command that deletes inside the workspace, or a single file in
+  the temp folder, does not ask.
 - By default files are saved after the agent edits them, so tests and builds
   see the new code (Settings > Agent to switch this off).
 
 Workspace
 - When the open Notes tab is a saved file, the agent works in that file's
-  folder. Otherwise new files go to Documents\MinGent Files (changeable in
-  Settings > Agent). You never have to create a folder first.
+  folder, unless that folder is a whole personal folder such as Documents,
+  Desktop or Downloads. Otherwise new files go to Documents\MinGent Files
+  (changeable in Settings > Agent). You never have to create a folder first.
 - Unsaved Notes tabs can be read and edited too: it refers to them by their
   tab name.
 - Project notes: ask it to "remember" something about a project and it writes
@@ -663,9 +665,9 @@ THE BROWSER
   checks get a few seconds to finish by themselves. CAPTCHAs are left to you:
   the agent stops and asks you to complete them. (Settings > Agent has an
   experimental switch that lets the agent try them itself. Its screenshots
-  then zoom in on the CAPTCHA, it can pick several picture tiles in one step
-  and sees the CAPTCHA again right after, and after five failed tries it hands
-  the CAPTCHA to you.)
+  then zoom in on the CAPTCHA, it picks several picture tiles and Verify in
+  one step, it sees the CAPTCHA again after every click, and after five
+  answers that fail it hands the CAPTCHA to you.)
 - Give the agent a YouTube link and it reads the video's title, channel,
   date, description and transcript. Long pages and transcripts come in parts.
 - The agent's pointer, in your accent color, shows where it points, clicks,
