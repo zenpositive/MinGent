@@ -20,7 +20,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.0.5 beta: it works, and it still has rough edges. Report
+This is version 1.0.6 beta: it works, and it still has rough edges. Report
 problems at https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -60,7 +60,7 @@ themselves. Each of those is a way in: a hijacked maintainer account or a
 look-alike package runs its code on your PC, next to your files, keys and
 sign-ins. MinGent has none of that.
 - No packages. It uses only the .NET Framework that comes with Windows. All
-  of it is in "src": about 75,000 lines of C# you can read.
+  of it is in "src": about 80,000 lines of C# you can read.
 - No prebuilt programs. A release is the source code and Build-MinGent.bat,
   which compiles it with csc.exe from Windows itself.
 - No automatic updates, plugins, extensions or telemetry. A new version
@@ -87,7 +87,7 @@ sign-ins. MinGent has none of that.
   Full auto asks nothing. The check reads the command; it can't see what a
   script does once it runs.
 To check a download, compare its SHA-256 with the one on the release page.
-In PowerShell: Get-FileHash .\MinGent-1.0.5-beta.zip
+In PowerShell: Get-FileHash .\MinGent-1.0.6-beta.zip
 
 
 YOUR OWN ICON
@@ -113,6 +113,10 @@ THE WINDOW
   with a search box, New chat, Models (the model library) and Settings. The
   button at the top folds the list into a narrow rail; it does that by itself
   when the window gets too narrow.
+- Each chat's "..." button has Rename, Archive and Delete. Archived chats
+  leave the list but stay on your PC; "Archived chats" at the bottom of the
+  list shows them, and opening one moves it back. "Delete all chats" deletes
+  archived chats too.
 - Middle: the chat and the message box.
 - Right, when you or the agent need them: Notes (a full text editor with tabs;
   each chat keeps its own) and the browser. The two buttons at the top right
@@ -160,13 +164,15 @@ CHATS
   as a card. "Start" goes ahead, "Start in Auto" goes ahead without asking
   about ordinary steps, and "Keep planning" lets you change the plan. Nothing
   is changed before you approve it.
-- Attach files, folders and pictures with +, by dropping them on the message
-  box, or with Ctrl+V (a screenshot, a picture copied from a browser, files
+- Attach files, folders and pictures with +, by dropping them anywhere on the
+  chat, or with Ctrl+V (a screenshot, a picture copied from a browser, files
   copied in Explorer). They show as cards above the message box, pictures as
-  small previews; the x on a card removes it. In the chat, click a picture to
-  see it larger, a text file to open it in Notes, a document to open it, and
-  anything else to show it in its folder. The agent gets the full path of
-  each one, and models that can see pictures get the pictures too.
+  small previews; the x on a card removes it. Dropped on Notes, text files
+  open there and anything else (a PDF, a picture, a folder) is attached to the
+  chat. In the chat, click a picture to see it larger, a text file to open it
+  in Notes, a document to open it, and anything else to show it in its folder.
+  The agent gets the full path of each one, and models that can see pictures
+  get the pictures too.
 - Documents: attach a PDF, Word, Excel, PowerPoint, OpenDocument, RTF or EPUB
   file with + (or name it in your message) and the agent reads its text -
   PDFs page by page, spreadsheets as tables, slides with their speaker notes.
@@ -217,7 +223,8 @@ CHATS
   The summary is written from the whole chat; your messages, your answers to
   the agent's questions, the plan you approved and what helpers found come
   first when it doesn't all fit.
-  The 200 most recent chats are kept.
+  The 200 most recent chats are kept; archived chats are kept until you delete
+  them.
 - Commands: type / in the message box and a list of them pops up - /compact,
   /new (or /clear) for a new chat, /temp for a temporary chat, /plan to switch
   plan first on or off. Pick one with the arrow keys and Enter or Tab, or
@@ -380,16 +387,18 @@ Made for local models
   checklist or repeat an approved plan, and research in plan mode that never
   ends, are stopped after a few rounds, and the agent says where it is.
 - Web search happens in the built-in browser, so you see it: Google first,
-  then Bing, then DuckDuckGo when Google shows a bot check or has nothing.
-  Google hides each result's address behind its own link, so MinGent looks up
-  the real address and the agent gets normal links it can read and cite.
-  Reading a page from its address stays a direct download, without the
-  browser. Searches use the built-in browser's own sign-ins: if you signed in
-  to Google there, they show up in that account's search history like your
-  own. When the browser is off, searches go to DuckDuckGo, DuckDuckGo
-  Lite and Bing directly. Results that have nothing to do with the query are
-  left out (search engines sometimes answer automated searches with
-  unrelated pages).
+  then Bing, then DuckDuckGo when Google has nothing. When Google answers with
+  a CAPTCHA, MinGent asks you to solve it in the browser pane and carries on
+  with Google once you're through; "Skip Google" searches with Bing instead
+  and doesn't ask again for 30 minutes. Google hides each result's address
+  behind its own link, so MinGent looks up the real address and the agent gets
+  normal links it can read and cite. Reading a page from its address stays a
+  direct download, without the browser. Searches use the built-in browser's
+  own sign-ins: if you signed in to Google there, they show up in that
+  account's search history like your own. When the browser is off, searches go
+  to DuckDuckGo, DuckDuckGo Lite and Bing directly. Results that have nothing
+  to do with the query are left out (search engines sometimes answer automated
+  searches with unrelated pages).
 - Its memory of the conversation is kept in the shape the model's cache
   expects, so long sessions don't reprocess the whole chat at every step.
 - It recovers from the ways local servers fail: a reply that runs out of room
@@ -469,7 +478,22 @@ Testing programs it builds
   one you opened at the same moment, MinGent asks before the agent looks at
   it, also in Auto mode, unless you switched off "Starting and using other
   programs" in Settings > Safety. Programs that were already open stay off
-  limits.
+  limits, unless you switch on "Programs you opened yourself" (below).
+- Programs you opened yourself (Settings > Agent, off by default): the agent
+  can list the programs you have open, by name only, and ask to use one.
+  MinGent asks you for each program, once in each chat, also in Full auto,
+  and the agent sees its windows only after you allow it. Browsers, File
+  Explorer, terminals and code editors can only be looked at, because a
+  click there can run a script or a command. In any other program you
+  allow, the agent can do whatever the program can do, macros and scripts
+  included; the question says so. Mail, chat, AI chat apps, password
+  managers, money and remote-access programs, Windows' own settings and
+  security tools, and MinGent itself are never offered; MinGent knows them
+  by their program names, so check the name in the question. When a chat
+  that has read web content goes on to click or type in a program you
+  allowed earlier, MinGent asks once more. The agent always says which of
+  your windows it means, and MinGent doesn't rearrange them. Switching this
+  off ends what you allowed in open chats.
 - It can open its own terminal window (Windows Terminal, or a console where
   that is missing) and type commands there while you watch, for example to
   manage a server over ssh. Before Enter, and before any other key or click
@@ -558,6 +582,31 @@ ASK, AUTO OR FULL AUTO
   Commands are checked by the rows above instead: in Full auto they run
   without asking, and only Windows' own permissions protect Windows and
   Program Files. So don't start MinGent as administrator.
+- Sandbox (Settings > Safety, experimental, off by default): the agent's
+  commands run with low rights. They can still read files and use the
+  internet, but they can change files only in the work folder and in
+  MinGent's own temp and cache folders (in AppData\LocalLow\MinGent), and
+  they can't change other programs, your settings in the registry, or
+  MinGent's own data, nor read MinGent's settings, keys, chats or notes
+  backups. They can read the built-in browser's data, which MinGent leaves
+  alone so the browser keeps working.
+- To let commands work in a folder, MinGent allows low-rights programs to
+  change files there, except its .git folder, files linked from elsewhere
+  and links to other folders. It never does that for a whole drive, your
+  user folder, Desktop, Documents, Downloads, OneDrive, a Windows or program
+  folder, or the folder MinGent runs from; commands then can't change files
+  there at all. The change stays when you turn the sandbox off; it only
+  lets low-rights programs write there.
+- A command runs outside the sandbox only after you allow that command, or
+  in Full auto: when the agent asks for it, when MinGent asks about the
+  command anyway (installs, opening programs), or when the sandbox can't
+  start. A row you switched off in "What Auto still asks about" keeps such
+  commands in the sandbox instead of letting them out without asking.
+- The sandbox limits what a command can change, not what you run later: a
+  script or program a sandboxed command changed in the work folder does
+  whatever it now says when you or another program run it. If a sandboxed
+  command replaces the work folder's .git folder, MinGent tells you, because
+  git run outside the sandbox would then use its hooks and settings.
 
 Undo
 - After each reply that changed files with the agent's file tools, "N files
@@ -613,8 +662,10 @@ THE BROWSER
   is told what happened and what else it can try, and "verify you are human"
   checks get a few seconds to finish by themselves. CAPTCHAs are left to you:
   the agent stops and asks you to complete them. (Settings > Agent has an
-  experimental switch that lets the agent try them itself; after three failed
-  tries it hands the CAPTCHA to you.)
+  experimental switch that lets the agent try them itself. Its screenshots
+  then zoom in on the CAPTCHA, it can pick several picture tiles in one step
+  and sees the CAPTCHA again right after, and after five failed tries it hands
+  the CAPTCHA to you.)
 - Give the agent a YouTube link and it reads the video's title, channel,
   date, description and transcript. Long pages and transcripts come in parts.
 - The agent's pointer, in your accent color, shows where it points, clicks,
@@ -745,7 +796,8 @@ WHERE YOUR DATA IS
   %LOCALAPPDATA%\MinGent\session.txt    the list of open Notes tabs
   %LOCALAPPDATA%\MinGent\backup\        text of tabs with unsaved changes
   %LOCALAPPDATA%\MinGent\chats\         your chats (the 200 most recent;
-                                        temporary chats are never written)
+                                        temporary chats are never written;
+                                        archived chats are in chats\archive)
   %LOCALAPPDATA%\MinGent\memory.md      what the agent remembers about you
                                         (also shown in Settings > Memory)
   %LOCALAPPDATA%\MinGent\Browser\       the built-in browser's profile

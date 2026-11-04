@@ -1,6 +1,92 @@
 MinGent - what changed
 ======================
 
+Version 1.0.6 beta
+- The Auto switch: only the switch itself turns Auto on or off. Clicking
+  its name or the arrow opens the menu of Auto modes, and the pointer is a
+  hand over all of it.
+- The window title is MinGent, not the name of the open chat.
+- Settings and the other dialogs open without a white flash.
+- The sidebar: the open chat stands out clearly from the one under the
+  pointer, long chat names fade out instead of ending in "...", and a "..."
+  button with Rename and Delete replaces the trash can.
+- Files dropped anywhere on the chat are attached to your message, several
+  at a time, with a frame that shows where they go. Dropped on Notes, text
+  files open there as before, and PDFs, pictures, documents and folders are
+  attached to the chat instead of asking about each "binary file".
+- The agent can close the browser's console when it is done with it, or
+  when you ask. A console you opened or typed in stays open unless you ask,
+  and closing the browser pane also closes a console the agent opened.
+- Built-in engine: a model whose template names its own thinking levels gets
+  exactly those in the thinking menu, and Off when the template can switch
+  thinking off. Qwen 3.8 shows Off, Low, Medium and Extra high (it has no
+  plain High).
+- Every command MinGent asks about says in plain words what it does. When
+  the model gives no description, or only "Run a command", MinGent writes
+  one from the command itself ("In src: install the project's packages,
+  then run the npm script build"). Commands typed in a terminal get the
+  same line.
+- Telling the agent to stop in words ("stop", "quit working on this now",
+  "that's enough") works like you mean it: no independent review starts
+  afterwards, a review that is running is stopped, helpers working in the
+  background stop too, and the checklist no longer pushes the agent to carry
+  on. A review report that arrives anyway only tells you what it found.
+- Text the agent writes before it carries on working no longer disappears
+  into the steps: anything longer than a short note ("Let me check the
+  file") stays visible in the chat where it was written.
+- Answers show how fast the model wrote them, next to Copy: tokens per
+  second and the time to the first token, over all the steps of that turn.
+  It works for every model, so the built-in engine and LM Studio can be
+  compared on the same PC. "About" marks an estimate, when a server doesn't
+  report its token count.
+- When Google answers a search with a CAPTCHA, MinGent asks you to solve it
+  in the browser pane and carries on with Google once you're through.
+  "Skip Google" searches with Bing instead and doesn't ask again for 30
+  minutes. With CAPTCHA mode on, the agent tries it itself first and asks
+  you after five tries that fail.
+- CAPTCHA mode is quicker: the agent's screenshots zoom in on the CAPTCHA,
+  it can pick several picture tiles in one step, and it sees the CAPTCHA
+  again right after, without a separate screenshot step. It now gets five
+  tries instead of three.
+- Experimental sandbox for the agent's commands, in Settings > Safety (off
+  by default). Commands run with low rights: they can read files and use the
+  internet, but can change files only in the work folder (not its .git
+  folder) and in MinGent's own temp and cache folders, can't change other
+  programs or settings, and can't read MinGent's settings, keys or chats. A
+  command runs outside the sandbox only when you allow it, or in Full auto.
+- Programs you opened yourself, in Settings > Agent (off by default): the
+  agent can ask to use a program that was already open. You decide for each
+  program, once in each chat, also in Full auto. Browsers, File Explorer,
+  terminals and code editors can only be looked at, and mail, chat,
+  password managers, money and remote-access programs are never offered.
+- Chats can be archived from their "..." menu. They leave the list but stay
+  on your PC, under "Archived chats" at the bottom of the list, and opening
+  one moves it back.
+- Clicking Auto while its menu is open closes the menu.
+- The frame that shows where dropped files go no longer leaves dark corners
+  around the message box.
+- The agent's window names (w1, w2...) stay the same for the whole chat
+  instead of changing when another window comes to the front, so it can't
+  mix up two programs.
+- Sturdier agent loop:
+  - a tool that fails in an unexpected way no longer ends the turn; the
+    agent hears what went wrong and carries on.
+  - a chat that was cut off in the middle of a step (MinGent closed or
+    crashed) continues instead of getting an error from the model's server.
+  - answering one of the agent's questions, or its plan, with "stop" stops
+    the work, like saying it in the chat.
+  - telling it to stop is understood more carefully: "add a stop button" or
+    "stop the timer at zero" are tasks, not a request to stop.
+  - when the automatic review can't finish, the agent gives its answer
+    instead of waiting for it.
+  - files a background helper changed are reviewed too.
+  - pressing Stop while MinGent asks for your OK ends the turn without
+    telling the agent you said no.
+  - a message you send while a review runs reaches the agent as a message of
+    its own.
+  - on the last step of a turn the model still sees its tools but can't call
+    them, so local models keep their cache and answer sooner.
+
 Version 1.0.5 beta
 - Turning on Full auto with a local model, or picking a local model while
   Full auto is on, says that smaller models are easier for a web page to
