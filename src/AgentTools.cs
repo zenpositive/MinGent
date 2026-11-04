@@ -28,6 +28,17 @@ namespace MinGent
 
         public static FileTarget Resolve(ToolContext ctx, string path, bool withText, out string error)
         {
+            FileTarget t = Find(ctx, path, withText, out error);
+            if (t != null && withText && t.Tab != null && t.Tab.TooLarge)
+            {
+                error = "it is open in the tab " + t.Tab.Title + " with more than 8 million characters, which is too large for the agent's file tools. Nothing was read or changed";
+                return null;
+            }
+            return t;
+        }
+
+        static FileTarget Find(ToolContext ctx, string path, bool withText, out string error)
+        {
             error = null;
             FileTarget t = new FileTarget();
             string p = (path ?? "").Trim();
@@ -511,6 +522,7 @@ namespace MinGent
                 }
                 if (t.Tab != null)
                 {
+                    if (t.Tab.TooLarge) return ToolOutcome.Fail(t.Full + " is open in the tab " + t.Tab.Title + " with more than 8 million characters, which is too large for the agent's file tools.");
                     string deny1 = ctx.CheckRead(t.Full);
                     if (deny1 != null) { ToolOutcome d1 = ToolOutcome.Fail(deny1); d1.Denied = true; return d1; }
                     text = Document.NormalizeNewlines(t.Tab.Text ?? "");
@@ -680,11 +692,13 @@ namespace MinGent
                 if (tab != null && tab.Path == null) return ToolOutcome.Fail(tab.Title + " is an unsaved tab, not a file, so there is nothing to delete.");
                 return ToolOutcome.Fail("there is no file or folder at " + full);
             }
-            string why = Protected(full);
-            if (why != null) return ToolOutcome.Fail("Not allowed: " + why + ".");
-            if (isDir && AgentPaths.IsInside(ctx.Workspace, full)) return ToolOutcome.Fail("Not allowed: " + full + " holds the workspace itself. Delete the files inside it instead.");
             FileAttributes attrs = File.GetAttributes(full);
             bool link = (attrs & FileAttributes.ReparsePoint) != 0;
+            string realPath = link ? full : AgentPaths.Real(full);
+            bool through = !string.Equals(realPath, full, StringComparison.OrdinalIgnoreCase);
+            string why = Protected(full) ?? (through ? Protected(realPath) : null);
+            if (why != null) return ToolOutcome.Fail("Not allowed: " + why + ".");
+            if (isDir && (AgentPaths.IsInside(ctx.Workspace, full) || through && AgentPaths.IsInside(AgentPaths.Real(ctx.Workspace), realPath))) return ToolOutcome.Fail("Not allowed: " + full + " holds the workspace itself. Delete the files inside it instead.");
             string blocked = AgentPaths.WriteBlocked(full);
             if (blocked == null && !link)
             {
@@ -705,14 +719,15 @@ namespace MinGent
                 files.Add(full);
                 try { if (new FileInfo(full).Length > MaxUndoFile) tooMany = true; } catch { tooMany = true; }
             }
-            bool inside = AgentPaths.IsInside(full, ctx.Workspace) && !Same(full, ctx.Workspace);
+            bool inside = AgentPaths.IsInside(full, ctx.Workspace) && !Same(full, ctx.Workspace) && (!through || AgentPaths.IsInside(realPath, AgentPaths.Real(ctx.Workspace)));
             if (!inside)
             {
                 PermissionAsk ask = new PermissionAsk();
                 ask.Kind = "write";
                 ask.Category = ctx.Guarded(PermissionCategory.Delete);
                 ask.Title = isDir ? "Delete a folder outside the workspace" : "Delete a file outside the workspace";
-                ask.Detail = full + (isDir && !link ? (tooMany ? " (a large folder)" : " (" + files.Count + (files.Count == 1 ? " file)" : " files)")) : "");
+                ask.High = true;
+                ask.Detail = full + (through ? " (really " + realPath + ")" : "") + (isDir && !link ? (tooMany ? " (a large folder)" : " (" + files.Count + (files.Count == 1 ? " file)" : " files)")) : "");
                 ask.Key = "delete:" + full;
                 ask.Reason = "It goes to the Recycle Bin.";
                 if (!ctx.Approve(ask)) { ToolOutcome d = ToolOutcome.Fail("The user did not allow deleting " + full + ". Do not try another way; ask the user if you need it."); d.Denied = true; return d; }
@@ -1365,6 +1380,7 @@ namespace MinGent
                 if (!under) continue;
                 if (nameRx != null && !nameRx.IsMatch(System.IO.Path.GetFileName(tab.Path ?? tab.Title))) continue;
                 if (tab.Path != null) seen.Add(tab.Path);
+                if (tab.TooLarge) continue;
                 Scan(tab.Path != null ? ToolKit.Rel(tab.Path, root) : tab.Title, tab.Text ?? "", rx, sb, ref hits, ref more);
             }
             if (File.Exists(root))
@@ -1603,7 +1619,7 @@ namespace MinGent
                 if (ctx.Ct.IsCancelled) return ToolOutcome.Fail("stopped by the user");
             }
             Dictionary<string, string> env = ctx.Session.IsHelper ? HelperEnv : null;
-            string gitWatch = low ? Sandbox.GitWatch(ctx.Workspace) : null;
+            string gitWatch = low ? Sandbox.GitWatch(ctx.Workspace, cwd) : null;
             DateTime launchAt = DateTime.UtcNow;
             bool lowFailed;
             ShellJob j = Shell.Start(cmd, shell, cwd, bg, env, low, out err, out lowFailed);
@@ -1839,7 +1855,7 @@ namespace MinGent
             a.Title = title;
             a.Detail = text.Length > 600 ? text.Substring(0, 600) + "..." : text;
             a.Where = where;
-            a.Reason = "This chat has read web content. A long piece of text, or one that looks like a password or key, sent to a website can carry your data out, so this one needs your OK.";
+            a.Reason = "This chat has read web content. Long text, or text that looks like a password or key, sent to a website could carry your data out.";
             return ctx.Approve(a) ? null : "The user did not allow sending this text.";
         }
 
@@ -1863,7 +1879,7 @@ namespace MinGent
             a.AllowRemember = false;
             a.Title = "Open an address that carries a lot of data";
             a.Detail = url.Length > 600 ? url.Substring(0, 600) + "..." : url;
-            a.Reason = "This chat has read web content. A long address, or one that holds something like a password or key, can be used to send your data to a website, so this one needs your OK.";
+            a.Reason = "This chat has read web content. A long address, or one holding something like a password or key, could send your data to a website.";
             return ctx.Approve(a) ? null : "The user did not allow opening this address.";
         }
     }
@@ -2009,6 +2025,7 @@ namespace MinGent
             ToolOutcome o = ToolOutcome.Ok(sb.ToString(), "Google asks for a CAPTCHA");
             o.Untrusted = true;
             o.Snapshot = err == null && text != null && text.IndexOf("\nURL: ", StringComparison.Ordinal) >= 0;
+            BrowserTool.LookAfterCaptcha(ctx, o, true);
             return o;
         }
     }
@@ -3326,7 +3343,7 @@ namespace MinGent
         {
             AgentSession s = ctx.Session;
             string host = BlockCheck.HostOf(ctx.Browser.CurrentUrl ?? "") ?? "";
-            if (!string.Equals(host, s.CaptchaHost ?? "", StringComparison.OrdinalIgnoreCase)) { s.CaptchaHost = host; s.CaptchaTries = 0; s.CaptchaActed = false; }
+            if (!string.Equals(host, s.CaptchaHost ?? "", StringComparison.OrdinalIgnoreCase)) { s.CaptchaHost = host; s.CaptchaTries = 0; s.CaptchaActed = false; s.CaptchaSubmitted = false; }
             if (s.CaptchaActed && ctx.Cfg.Vision) return null;
             if (s.CaptchaTries >= CaptchaLimit)
                 return "You have tried this CAPTCHA " + CaptchaLimit + " times, which is the limit. Stop trying: call ask_user to ask the user to solve it in the browser pane, then carry on once they say it's done.";
@@ -3338,8 +3355,8 @@ namespace MinGent
         protected static void Looked(ToolContext ctx)
         {
             AgentSession s = ctx.Session;
-            s.CaptchaActed = false;
-            if (ctx.Browser != null && !ctx.Browser.CaptchaOnPage) s.CaptchaTries = 0;
+            if (s.CaptchaSubmitted || !ctx.Cfg.Vision) { s.CaptchaActed = false; s.CaptchaSubmitted = false; }
+            if (ctx.Browser != null && !ctx.Browser.CaptchaOnPage) { s.CaptchaTries = 0; s.CaptchaActed = false; }
         }
 
         protected static ToolOutcome Result(string err, string text, string summary, bool untrusted)
@@ -3488,10 +3505,10 @@ namespace MinGent
             return fresh;
         }
 
-        protected static void LookAfterCaptcha(ToolContext ctx, ToolOutcome o)
+        internal static void LookAfterCaptcha(ToolContext ctx, ToolOutcome o, bool settled)
         {
             if (o == null || o.Error || !ctx.Cfg.TryCaptchas || !ctx.Cfg.Vision || ctx.Session.IsHelper || ctx.Browser == null) return;
-            if (!ctx.Ct.Sleep(900)) return;
+            if (!settled && !ctx.Ct.Sleep(900)) return;
             ImageData img;
             int w, h;
             string e = ctx.Browser.CaptchaShot(ctx.Ct, out img, out w, out h);
@@ -3501,8 +3518,8 @@ namespace MinGent
             Looked(ctx);
             ctx.Session.BrowserMovedTo = null;
             o.Images = new List<ImageData>(new ImageData[] { img });
-            o.AddNote(zoomed ? "This is the CAPTCHA now, zoomed in (picture below, " + w + " x " + h + " pixels). Positions for the next browser_click are pixels in this picture."
-                             : "The CAPTCHA is gone from view; this is the page now (picture below, " + w + " x " + h + " pixels).");
+            o.AddNote(zoomed ? "This is the CAPTCHA now, zoomed in (picture below, " + w + " x " + h + " pixels). Positions for the next browser_click are pixels in this picture. If a picture in it is still loading or fading in, take browser_screenshot again before you pick it or press Verify."
+                             : "This is the page now (picture below, " + w + " x " + h + " pixels); no CAPTCHA puzzle is open. Positions for the next browser_click are pixels in this picture.");
         }
 
         protected static ToolOutcome Act(ToolContext ctx, string err, string summary, string label)
@@ -3565,6 +3582,13 @@ namespace MinGent
                 bool web = low.StartsWith("http://") || low.StartsWith("https://");
                 bool local = !web && (low.StartsWith("file:") || (url.Length > 2 && url[1] == ':') || low.StartsWith("~") || low.StartsWith(".") || low.StartsWith("\\") ||
                              bareLow.EndsWith(".html") || bareLow.EndsWith(".htm") || bareLow.EndsWith(".svg"));
+                if (local && !web && Regex.IsMatch(low, @"^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?([/?#]|$)|^[a-z0-9-]+(\.[a-z0-9-]+)+(:\d+)?[/?#]|^[a-z0-9-]+(\.[a-z0-9-]+)*:\d+([/?#]|$)"))
+                {
+                    string t0, s0, e0;
+                    LocalUrl.Split(url, out t0, out s0);
+                    string f0 = AgentPaths.Resolve(t0, ctx.Workspace, out e0);
+                    if (f0 == null || !File.Exists(f0)) local = false;
+                }
                 if (local)
                 {
                     string target, suffix;
@@ -3585,7 +3609,7 @@ namespace MinGent
                     if (!web)
                     {
                         if (low.IndexOf("://", StringComparison.Ordinal) >= 0 || low.StartsWith("javascript:") || low.StartsWith("data:")) return ToolOutcome.Fail("only http and https addresses (or local files) can be opened");
-                        url = (low.StartsWith("localhost") || low.StartsWith("127.0.0.1") ? "http://" : "https://") + url;
+                        url = (low.StartsWith("localhost") || low.StartsWith("127.0.0.1") || low.StartsWith("[::1]") ? "http://" : "https://") + url;
                     }
                     Uri u;
                     if (!Uri.TryCreate(url, UriKind.Absolute, out u) || (u.Scheme != "http" && u.Scheme != "https"))
@@ -3652,7 +3676,7 @@ namespace MinGent
                 {
                     props.AddRange(new object[] { "x", P("number", "Pixels from the left of the last screenshot (only when there is no ref)"), false });
                     props.AddRange(new object[] { "y", P("number", "Pixels from the top of the last screenshot (only when there is no ref)"), false });
-                    Dictionary<string, object> pts = P("array", "CAPTCHA picture grids only: several [x, y] positions from the last screenshot, clicked in order");
+                    Dictionary<string, object> pts = P("array", "CAPTCHAs only: several [x, y] positions from the last screenshot, clicked in order, such as the picture tiles to pick. Once your picks are complete, add the Verify (or Next or Skip) button as the last point, except on puzzles that say to click verify once there are none left");
                     pts["items"] = Json.O("type", "array", "items", Json.O("type", "number"));
                     props.AddRange(new object[] { "points", pts, false });
                 }
@@ -3713,15 +3737,12 @@ namespace MinGent
             if (!ctx.Cfg.TryCaptchas) return ToolOutcome.Fail("These positions are inside a CAPTCHA. The agent only solves CAPTCHAs when CAPTCHA mode is on in Settings: ask the user to solve it.");
             string stop = CaptchaTurn(ctx);
             if (stop != null) return ToolOutcome.Fail(stop);
-            string summary = null, err = null;
-            for (int i = 0; i < pts.Count; i++)
-            {
-                if (i > 0 && !ctx.Ct.Sleep(350)) return ToolOutcome.Fail("stopped");
-                err = ctx.Browser.ClickAt(pts[i][0], pts[i][1], mouse, ctx.Ct, out summary);
-                if (err != null) { err = "Clicked " + i + " of " + pts.Count + " points, then: " + err; break; }
-            }
-            ToolOutcome o = Act(ctx, err, err == null ? "Clicked " + pts.Count + (pts.Count == 1 ? " spot" : " spots") + " in the CAPTCHA, in order." : summary, "Clicked " + pts.Count + " spots in the CAPTCHA");
-            LookAfterCaptcha(ctx, o);
+            string summary;
+            bool submitted;
+            string err = ctx.Browser.CaptchaClick(pts, mouse, ctx.Ct, out summary, out submitted);
+            if (submitted) ctx.Session.CaptchaSubmitted = true;
+            ToolOutcome o = Act(ctx, err, FrameHint(ctx, summary), "Clicked " + pts.Count + (pts.Count == 1 ? " spot" : " spots") + " in the CAPTCHA");
+            LookAfterCaptcha(ctx, o, true);
             return o;
         }
 
@@ -3772,8 +3793,12 @@ namespace MinGent
                     if (!ctx.Approve(pask)) { ToolOutcome pd = ToolOutcome.Fail("The user did not allow this click."); pd.Denied = true; return pd; }
                 }
                 string ps;
-                string pe = ctx.Browser.ClickAt(x, y, mouse, ctx.Ct, out ps);
-                return Act(ctx, pe, FrameHint(ctx, ps), mouse.Describe() + " at " + x.ToString("0", CultureInfo.InvariantCulture) + ", " + y.ToString("0", CultureInfo.InvariantCulture));
+                bool sent = false;
+                string pe = captcha ? ctx.Browser.CaptchaClick(new List<double[]> { new double[] { x, y } }, mouse, ctx.Ct, out ps, out sent) : ctx.Browser.ClickAt(x, y, mouse, ctx.Ct, out ps);
+                if (sent) ctx.Session.CaptchaSubmitted = true;
+                ToolOutcome po = Act(ctx, pe, FrameHint(ctx, ps), mouse.Describe() + " at " + x.ToString("0", CultureInfo.InvariantCulture) + ", " + y.ToString("0", CultureInfo.InvariantCulture));
+                if (captcha) LookAfterCaptcha(ctx, po, true);
+                return po;
             }
             string kind;
             bool sensitive;
@@ -3800,7 +3825,10 @@ namespace MinGent
             }
             string summary;
             string err = ctx.Browser.ClickElement(r, mouse, ctx.Ct, out summary);
-            return Act(ctx, err, FrameHint(ctx, summary), mouse.Describe() + " " + r);
+            if (isCaptcha && err == null) ctx.Session.CaptchaSubmitted = true;
+            ToolOutcome ro = Act(ctx, err, FrameHint(ctx, summary), mouse.Describe() + " " + r);
+            if (isCaptcha) LookAfterCaptcha(ctx, ro, true);
+            return ro;
         }
     }
 
@@ -3881,6 +3909,7 @@ namespace MinGent
             if (stale != null) return stale;
             string g = Gate(ctx, null);
             if (g != null) { ToolOutcome d = ToolOutcome.Fail(g); d.Denied = true; return d; }
+            bool inCaptcha = false;
             if (r.Length > 0)
             {
                 string kind;
@@ -3888,6 +3917,7 @@ namespace MinGent
                 string ie = ctx.Browser.ElementInfo(r, ctx.Ct, out kind, out sensitive);
                 if (ie != null) return ToolOutcome.Fail(ie);
                 bool dragCaptcha = kind.StartsWith("a CAPTCHA box", StringComparison.Ordinal);
+                inCaptcha = dragCaptcha;
                 if (dragCaptcha && ctx.Session.IsHelper) return HelperCaptcha();
                 if (dragCaptcha && ctx.Cfg.TryCaptchas)
                 {
@@ -3914,6 +3944,7 @@ namespace MinGent
                 string pie = ctx.Browser.PointInfo(D(a, "x", -1), D(a, "y", -1), ctx.Ct, out pkind, out psens);
                 if (pie != null) return ToolOutcome.Fail(pie);
                 bool posCaptcha = pkind.StartsWith("a CAPTCHA box", StringComparison.Ordinal);
+                inCaptcha = posCaptcha;
                 if (posCaptcha && ctx.Session.IsHelper) return HelperCaptcha();
                 if (posCaptcha && ctx.Cfg.TryCaptchas)
                 {
@@ -3935,7 +3966,10 @@ namespace MinGent
             }
             string summary;
             string err = ctx.Browser.Drag(r, D(a, "x", -1), D(a, "y", -1), t, D(a, "to_x", -1), D(a, "to_y", -1), ctx.Ct, out summary);
-            return Act(ctx, err, FrameHint(ctx, summary), "Dragged");
+            if (inCaptcha && err == null) ctx.Session.CaptchaSubmitted = true;
+            ToolOutcome o = Act(ctx, err, FrameHint(ctx, summary), "Dragged");
+            if (inCaptcha) LookAfterCaptcha(ctx, o, true);
+            return o;
         }
     }
 
@@ -4024,6 +4058,7 @@ namespace MinGent
                 PermissionAsk ask = new PermissionAsk();
                 ask.Kind = "browser";
                 ask.Category = ctx.Guarded(PermissionCategory.Credentials);
+                ask.High = true;
                 ask.Title = "Paste your clipboard into " + (WebFetchTool.Host(ctx.Browser.CurrentUrl) ?? "the page");
                 ask.Detail = ctx.Browser.CurrentUrl;
                 ask.Key = "paste:" + (BlockCheck.HostOf(ctx.Browser.CurrentUrl) ?? "");

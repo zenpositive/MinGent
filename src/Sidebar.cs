@@ -37,7 +37,7 @@ namespace MinGent
         readonly List<ChatInfo> chats = new List<ChatInfo>();
         readonly List<Row> rows = new List<Row>();
         Image logo;
-        bool collapsed, running, listHover, archiveView;
+        bool collapsed, running, listHover, archiveView, actionFocus;
         int archivedCount;
         string activePath, filter = "";
         int scroll, contentH, hoverRow = -1, hoverZone, pressRow = -1, pressZone, phase, focusRow = -1;
@@ -64,7 +64,7 @@ namespace MinGent
             search.KeyDown += delegate (object s, KeyEventArgs e)
             {
                 if (e.KeyCode == Keys.Escape) { e.Handled = e.SuppressKeyPress = true; search.Text = ""; Focus(); }
-                else if (e.KeyCode == Keys.Down) { e.Handled = e.SuppressKeyPress = true; Focus(); MoveFocus(1); }
+                else if (e.KeyCode == Keys.Down) { e.Handled = e.SuppressKeyPress = true; Focus(); actionFocus = false; MoveFocus(1); if (FirstChatRow() < 0 && ShowArchived) { actionFocus = true; Invalidate(); } }
                 else if (e.KeyCode == Keys.Enter) { e.Handled = e.SuppressKeyPress = true; int i = FirstChatRow(); if (i >= 0) Open(rows[i].Chat); }
             };
             search.HandleCreated += delegate { Native.SetCueBanner(search, archiveView ? "Search archived chats" : "Search chats"); };
@@ -324,7 +324,7 @@ namespace MinGent
             else if (!th.Dark || th.HighContrast) Glyphs.DrawRound(g, th.Border, new Rectangle(sr.X, sr.Y, sr.Width - 1, sr.Height - 1), UI.S(8));
             Glyphs.Draw("search", g, new Rectangle(sr.X + UI.S(8), sr.Y, UI.S(16), sr.Height), th.ChromeDim);
             PaintList(g);
-            if (ShowArchived) PaintAction(g, ArchivedRect, archiveView ? "back" : "archive", archiveView ? "Back to chats" : "Archived chats", archiveView ? null : archivedCount.ToString(CultureInfo.CurrentCulture), hoverZone == ZArchived);
+            if (ShowArchived) PaintAction(g, ArchivedRect, archiveView ? "back" : "archive", archiveView ? "Back to chats" : "Archived chats", archiveView ? null : archivedCount.ToString(CultureInfo.CurrentCulture), hoverZone == ZArchived || actionFocus && Focused);
             PaintAction(g, LibraryRect, "library", "Models", null, hoverZone == ZLibrary);
             PaintAction(g, SettingsRect, "gear", "Settings", null, hoverZone == ZSettings);
         }
@@ -370,10 +370,11 @@ namespace MinGent
             if (lr.Height <= 0) return;
             System.Drawing.Drawing2D.GraphicsState st = g.Save();
             g.SetClip(lr);
-            if (rows.Count == 0)
+            if (!rows.Exists(delegate (Row x) { return x.Chat != null; }))
             {
                 string msg = filter.Length > 0 ? "No chats match \u201C" + filter + "\u201D." : archiveView ? "No archived chats." : "Your chats will show up here.";
-                TextRenderer.DrawText(g, msg, Font, new Rectangle(UI.S(18), lr.Y + UI.S(4), Width - UI.S(36), UI.S(60)), th.ChromeDim, TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.PreserveGraphicsClipping);
+                int below = rows.Count > 0 ? RowRect(rows.Count - 1).Bottom - lr.Y + UI.S(4) : 0;
+                TextRenderer.DrawText(g, msg, Font, new Rectangle(UI.S(18), lr.Y + below + UI.S(4), Width - UI.S(36), UI.S(60)), th.ChromeDim, TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.PreserveGraphicsClipping);
             }
             using (Font small = new Font(UI.Font.FontFamily, UI.Font.Size * 0.9f))
             {
@@ -499,7 +500,7 @@ namespace MinGent
             base.OnMouseDown(e);
             HitTest(e.Location, out pressRow, out pressZone);
             pressPath = RowPath(pressRow);
-            if (pressRow >= 0) { focusRow = pressRow; Focus(); }
+            if (pressRow >= 0) { focusRow = pressRow; actionFocus = false; Focus(); }
         }
 
         string pressPath;
@@ -606,16 +607,35 @@ namespace MinGent
         protected override void OnKeyDown(KeyEventArgs e)
         {
             base.OnKeyDown(e);
-            ChatInfo c = focusRow >= 0 && focusRow < rows.Count ? rows[focusRow].Chat : null;
+            ChatInfo c = !actionFocus && focusRow >= 0 && focusRow < rows.Count ? rows[focusRow].Chat : null;
             switch (e.KeyCode)
             {
-                case Keys.Down: MoveFocus(1); e.Handled = true; break;
+                case Keys.Down:
+                    if (!actionFocus)
+                    {
+                        int was = focusRow;
+                        MoveFocus(1);
+                        if (focusRow == was && ShowArchived) { actionFocus = true; Invalidate(); }
+                    }
+                    e.Handled = true; break;
                 case Keys.Up:
+                    if (actionFocus)
+                    {
+                        actionFocus = false;
+                        focusRow = rows.Count;
+                        MoveFocus(-1);
+                        if (FirstChatRow() < 0) search.Focus();
+                        Invalidate();
+                        e.Handled = true; break;
+                    }
                     if (focusRow == FirstChatRow()) { search.Focus(); e.Handled = true; break; }
                     MoveFocus(-1); e.Handled = true; break;
-                case Keys.Home: focusRow = -1; MoveFocus(1); e.Handled = true; break;
-                case Keys.End: focusRow = rows.Count; MoveFocus(-1); e.Handled = true; break;
-                case Keys.Enter: Open(c); e.Handled = true; break;
+                case Keys.Home: actionFocus = false; focusRow = -1; MoveFocus(1); e.Handled = true; break;
+                case Keys.End: actionFocus = false; focusRow = rows.Count; MoveFocus(-1); e.Handled = true; break;
+                case Keys.Enter:
+                    if (actionFocus) { if (ArchiveViewClicked != null) ArchiveViewClicked(this, EventArgs.Empty); }
+                    else Open(c);
+                    e.Handled = true; break;
                 case Keys.Delete: Delete(c); e.Handled = true; break;
                 case Keys.F2: if (c != null && !archiveView && RenameClicked != null) RenameClicked(c.Path); e.Handled = true; break;
                 case Keys.Apps: if (focusRow >= 0 && c != null) { Rectangle r = RowRect(focusRow); ShowRowMenu(focusRow, new Point(r.X + UI.S(20), r.Bottom)); } e.Handled = true; break;

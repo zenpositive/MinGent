@@ -383,6 +383,7 @@ namespace MinGent
             }
             bool two = pics == 1 && texts >= 1 && others == 0;
             double avail = Avail(s);
+            foreach (Item it in items) if (it.Kind == KTable) SplitTallRows(it, avail, meter);
             bool dense = items.Count == 1 && (items[0].Kind == KTable || items[0].Kind == KCode);
             double[] scales = more ? new double[] { 1.0 } : dense ? new double[] { 1.0, 0.92, 0.85, 0.78 } : new double[] { 1.0, 0.92, 0.85 };
             foreach (double sc in scales)
@@ -503,6 +504,86 @@ namespace MinGent
         static DocBlock Clone(DocBlock b)
         {
             return new DocBlock { Kind = b.Kind, Level = b.Level, Ordered = b.Ordered, Number = b.Number, ListId = b.ListId, Run = b.Run, Task = b.Task, Spans = b.Spans, Code = b.Code, Lang = b.Lang, Tex = b.Tex, Rows = b.Rows, Align = b.Align, Picture = b.Picture };
+        }
+
+        static void SplitTallRows(Item it, double avail, Meter meter)
+        {
+            DocBlock t = it.Blocks[0];
+            if (t.Rows == null || t.Rows.Count < 2) return;
+            double pt = TablePt(1.0);
+            double[] cols = TableColumns(it.Source ?? t, pt, meter);
+            List<List<List<DocSpan>>> rows = new List<List<List<DocSpan>>>();
+            rows.Add(t.Rows[0]);
+            bool changed = false;
+            for (int r = 1; r < t.Rows.Count; r++)
+            {
+                List<List<List<DocSpan>>> pending = new List<List<List<DocSpan>>> { t.Rows[r] };
+                for (int round = 0; round < 4 && pending.Count > 0; round++)
+                {
+                    List<List<List<DocSpan>>> next = new List<List<List<DocSpan>>>();
+                    foreach (List<List<DocSpan>> row in pending)
+                    {
+                        double h = RowHeight(row, cols, pt, meter);
+                        if (h <= avail * 0.85 || round == 3) { rows.Add(row); continue; }
+                        int parts = Math.Max(2, (int)Math.Ceiling(h / (avail * 0.6)));
+                        List<List<DocSpan>>[] pieces = new List<List<DocSpan>>[parts];
+                        for (int p = 0; p < parts; p++) pieces[p] = new List<List<DocSpan>>();
+                        for (int c = 0; c < row.Count; c++)
+                        {
+                            List<List<DocSpan>> split = SplitSpans(row[c], parts);
+                            for (int p = 0; p < parts; p++) pieces[p].Add(split[p]);
+                        }
+                        next.AddRange(pieces);
+                        changed = true;
+                    }
+                    pending = next;
+                }
+            }
+            if (!changed) return;
+            DocBlock nb = Clone(t);
+            nb.Rows = rows;
+            if (it.Source == null) it.Source = t;
+            it.Blocks[0] = nb;
+        }
+
+        static List<List<DocSpan>> SplitSpans(List<DocSpan> cell, int parts)
+        {
+            List<List<DocSpan>> res = new List<List<DocSpan>>();
+            for (int p = 0; p < parts; p++) res.Add(new List<DocSpan>());
+            int total = 0;
+            foreach (DocSpan s in cell) total += Math.Max(1, (s.Text ?? "").Length);
+            double each = Math.Max(1, total / (double)parts);
+            int done = 0, at = 0;
+            foreach (DocSpan s in cell)
+            {
+                string text = s.Text ?? "";
+                if (s.Break || text.Length == 0)
+                {
+                    if (res[at].Count > 0) res[at].Add(s);
+                    done += Math.Max(1, text.Length);
+                    continue;
+                }
+                int i = 0;
+                while (i < text.Length)
+                {
+                    int j = text.IndexOf(' ', i);
+                    j = j < 0 ? text.Length : j + 1;
+                    string word = text.Substring(i, j - i);
+                    if (at < parts - 1 && done >= each * (at + 1) && res[at].Count > 0) at++;
+                    DocSpan last = res[at].Count > 0 ? res[at][res[at].Count - 1] : null;
+                    if (last != null && !last.Break && last.SameLook(s)) last.Text += word;
+                    else
+                    {
+                        DocSpan piece = new DocSpan { Text = word, Bold = s.Bold, Italic = s.Italic, Code = s.Code, Strike = s.Strike, Link = s.Link };
+                        res[at].Add(piece);
+                    }
+                    done += word.Length;
+                    i = j;
+                }
+            }
+            foreach (List<DocSpan> piece in res)
+                if (piece.Count > 0) piece[piece.Count - 1].Text = piece[piece.Count - 1].Text.TrimEnd(' ');
+            return res;
         }
 
         static bool SplitTable(Item it, double room, int minRows, Meter meter, out Item head, out Item tail)

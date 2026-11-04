@@ -511,10 +511,11 @@ namespace MinGent
                 { @"\b(invoke-webrequest|iwr|invoke-restmethod|irm|curl(\.exe)?|wget)\b[^\n]*(-infile|--upload-file|-t\s|-f\s|--data-binary\s+@|-d\s+@|--form)", "uploads files from your PC to the internet", PermissionCategory.Publish },
                 { @"\b(invoke-webrequest|iwr|invoke-restmethod|irm|curl|wget)\b[^\n|]*\|\s*(sh|bash|pwsh|powershell|cmd|python|node)\b", "downloads and runs a script", PermissionCategory.Install },
                 { @"\bgit\s+push\b[^\n]*(--force|-f\b)|\bgit\s+(reset\s+--hard|clean\s+-[a-z]*f)", "rewrites or discards git history / files", PermissionCategory.Publish },
+                { @"\bgit\s+(checkout\b(?![^\n;|&]*\s-[bB]\b|[^\n;|&]*\s--orphan\b)[^\n;|&]*(\s--(\s|$)|\s-f\b|\s--force\b|\s\.(\s|$)|\s[""']?(\.[\\/]|[^\s""'-][^\s""']*\.[a-z][a-z0-9]{0,7}[""']?(\s|$)|[^\s""']*[*?]))|restore\b(?=[^\n;|&]*(\s--worktree\b|\s(?-i:-[a-zA-Z]*W)))|restore\b(?![^\n;|&]*(\s--staged\b|\s(?-i:-[a-zA-Z]*S)))|stash\s+(drop|clear)\b)", "throws away changes in the work folder that git hasn't saved", PermissionCategory.Delete },
                 { @"\b(npm|pnpm|yarn)\s+publish\b|\bdotnet\s+nuget\s+push\b|\btwine\s+upload\b|\bdocker\s+push\b|\bcargo\s+publish\b|\bgh\s+(release|repo\s+delete)", "publishes or deletes something online", PermissionCategory.Publish },
                 { @"\b(cmdkey|vaultcmd)\b|\bmimikatz\b|\\config\\(sam|security|system)\b|login data|\bpasswords?\.(txt|csv)\b", "reads stored passwords or credentials", PermissionCategory.Credentials },
                 { @"[~\\/]\.(ssh|aws|azure|kube|gnupg)(\b|[\\/])|(^|[\s'""\\/=])\.(git-credentials|npmrc|pypirc|netrc)\b|[\\/]\.docker[\\/]config\.json|[\\/]\.cargo[\\/]credentials|\\github cli\\|\bid_(rsa|ed25519|ecdsa)\b", "touches credential, token or key files", PermissionCategory.Credentials },
-                { @"\$profile\b|\\documents\\(windows)?powershell\\.*profile\.ps1|\\start menu\\programs\\startup\\|\\currentversion\\run", "sets something to run automatically at startup", PermissionCategory.System },
+                { @"\$profile\b|\\documents\\(windows)?powershell\\.*profile\.ps1|\\start menu\\programs\\startup(\\|['""\s]|$)|\bshell:(common\s*)?startup\b|getfolderpath\s*\(\s*['""]?(\[environment\+specialfolder\]::)?(common)?startup\b|\\currentversion\\run", "sets something to run automatically at startup", PermissionCategory.System },
                 { @"\b(set-itemproperty|new-itemproperty)\b[^\n]*\\(policies|system)\\", "changes Windows policies", PermissionCategory.System },
                 { @"\b(bcdedit|wevtutil\s+cl|clear-eventlog|remove-eventlog)\b", "clears system logs or boot settings", PermissionCategory.System },
                 { @"\buninstall-(package|module)\b|\bmsiexec(\.exe)?\s+/x\b|\bwinget\s+uninstall\b|\bchoco\s+uninstall\b", "uninstalls software", PermissionCategory.Install },
@@ -587,7 +588,8 @@ namespace MinGent
             string launchCat;
             string install = InstallOrLaunch(flat, workspace, dir, out launchCat);
             if (install != null && launchCat != PermissionCategory.Launch) { category = launchCat; return install; }
-            string del = DeleteDanger(flat, workspace, dir);
+            string pwdFree = Pwd(flat);
+            string del = DeleteDanger(pwdFree, workspace, dir) ?? WriteDanger(pwdFree, workspace, dir);
             if (del != null) { category = PermissionCategory.Delete; return del; }
             if (install != null) { category = PermissionCategory.Launch; return install; }
             if (opener != null) { category = PermissionCategory.Launch; return opener; }
@@ -1054,14 +1056,631 @@ namespace MinGent
             return l.Contains("localapplicationdata") && (l.Contains("mingent") || l.Contains("justpad"));
         }
 
+        static readonly Regex LocationMove = new Regex(
+            @"(?:^|[\n;|&({""'])\s*(cd|chdir|set-location|sl|push-location|pushd)(?=[\s;|&)}""'.\\/]|$)((?:\s+/d)?(?:\s+-(?:path|literalpath|lp|pspath)(?::|\s+))?\s*(?:""[^""]*""|'[^']*'|[^\s;|&)}""']+)?)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex PwdRef = new Regex(@"\$\{?pwd\}?(\.(path|providerpath))?(?!\w)|\$?\(\s*(get-location|gl|pwd)\s*\)(\.(path|providerpath))?", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex FarPath = new Regex(
+            @"\.\.(?=[\\/'""\s);,]|$)|getfolderpath|specialfolder|split-path|resolve-path|convert-path|\.parent\b|\bpardir\b|\$\{?home\b|(^|[\s'""(=,;])~(?=[\\/'""\s]|$)|userprofile|homepath|homedrive|\$\{?env:(?!te?mp\b)\w+|%(?!te?mp%)\w+%|\[(system\.)?environment\]|(^|[\s;|&(=])(get-content|gc|cat|type|import-csv)(?=\s)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        static string Pwd(string c) { return PwdRef.Replace(c ?? "", "."); }
+
+        [ThreadStatic] static string trackOf, trackCwd;
+        [ThreadStatic] static List<KeyValuePair<int, string>> track;
+        static readonly Regex LocationBack = new Regex(@"(?:^|[\n;|&({""'])\s*(popd|pop-location)(?=[\s;|&)}""']|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex RootedPath = new Regex(@"^\s*[""']?([a-z]:[\\/]|\\\\|\$\{?env:\w+|%\w+%|\$\{?home\b|~(?=[\\/""']|$))", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex ScriptUp = new Regex(@"\bpardir\b|\.parent\b|\bdirname\s*\(|['""]\.\.['""\\/]|\.\.\\|\.\./", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        static bool Rooted(string p) { return RootedPath.IsMatch(p ?? ""); }
+
+        static bool Piped(string c, int at)
+        {
+            int b = at - 1;
+            while (b >= 0 && char.IsWhiteSpace(c[b])) b--;
+            return b >= 0 && c[b] == '|' && !(b > 0 && c[b - 1] == '|');
+        }
+
+        [ThreadStatic] static string unrunOf;
+        [ThreadStatic] static bool[] unrun;
+
+        static bool[] Unrun(string c)
+        {
+            if (unrun != null && ReferenceEquals(unrunOf, c)) return unrun;
+            bool[] r = new bool[c.Length + 1];
+            char open = '\0';
+            bool runs = false;
+            for (int k = 0; k < c.Length; k++)
+            {
+                r[k] = open != '\0' && !runs;
+                char ch = c[k];
+                if (open == '\0')
+                {
+                    if (ch == '"' || ch == '\'')
+                    {
+                        open = ch;
+                        int from = Math.Max(0, k - 40);
+                        runs = RunsString.IsMatch(c.Substring(from, k - from));
+                    }
+                }
+                else if (ch == open) { open = '\0'; runs = false; }
+            }
+            r[c.Length] = open != '\0' && !runs;
+            unrunOf = c;
+            unrun = r;
+            return r;
+        }
+
+        static List<KeyValuePair<int, string>> Track(string c, string cwd)
+        {
+            if (track != null && ReferenceEquals(trackOf, c) && trackCwd == cwd) return track;
+            List<KeyValuePair<int, string[]>> moves = new List<KeyValuePair<int, string[]>>();
+            foreach (Match m in LocationMove.Matches(c)) moves.Add(new KeyValuePair<int, string[]>(m.Index, new string[] { m.Groups[1].Value.ToLowerInvariant(), m.Groups[2].Value }));
+            foreach (Match m in LocationBack.Matches(c)) moves.Add(new KeyValuePair<int, string[]>(m.Index, null));
+            moves.Sort(delegate (KeyValuePair<int, string[]> a, KeyValuePair<int, string[]> b) { return a.Key.CompareTo(b.Key); });
+            List<KeyValuePair<int, string>> res = new List<KeyValuePair<int, string>>();
+            string dir = cwd;
+            List<string> stack = new List<string>();
+            foreach (KeyValuePair<int, string[]> mv in moves)
+            {
+                if (res.Count >= 256) dir = null;
+                else if (mv.Value == null)
+                {
+                    if (stack.Count == 0) dir = null;
+                    else { dir = stack[stack.Count - 1]; stack.RemoveAt(stack.Count - 1); }
+                }
+                else
+                {
+                    if (mv.Value[0] == "pushd" || mv.Value[0] == "push-location") stack.Add(dir);
+                    string t = Regex.Replace(Pwd(mv.Value[1]), @"^\s*(/d\s+)?(-(path|literalpath|lp|pspath)(:|\s+))?", "", RegexOptions.IgnoreCase).Trim();
+                    if (t.Length == 0 || t == "-" || t == "+" || t.IndexOf('(') >= 0 || t.Contains("::") || (dir == null && !Rooted(t))) dir = null;
+                    else
+                    {
+                        bool unknown;
+                        string full = Full(t, dir, out unknown);
+                        dir = unknown ? null : full;
+                    }
+                }
+                res.Add(new KeyValuePair<int, string>(mv.Key, dir));
+            }
+            trackOf = c;
+            trackCwd = cwd;
+            track = res;
+            return res;
+        }
+
+        static string Here(string c, int upTo, string cwd, out bool lost)
+        {
+            List<KeyValuePair<int, string>> moves = Track(c, cwd);
+            int lo = 0, hi = moves.Count - 1, at = -1;
+            while (lo <= hi)
+            {
+                int mid = (lo + hi) / 2;
+                if (moves[mid].Key < upTo) { at = mid; lo = mid + 1; }
+                else hi = mid - 1;
+            }
+            string dir = at < 0 ? cwd : moves[at].Value;
+            lost = dir == null;
+            return dir;
+        }
+
+        static bool InTemp(string full)
+        {
+            List<string> temps = new List<string>();
+            try { temps.Add(System.IO.Path.GetTempPath()); } catch { }
+            foreach (string v in new string[] { "TEMP", "TMP" })
+            {
+                string e = Environment.GetEnvironmentVariable(v);
+                if (!string.IsNullOrEmpty(e)) temps.Add(e);
+            }
+            foreach (string t in temps)
+            {
+                string root = t.Replace('/', '\\').TrimEnd('\\');
+                if (root.Length > 3 && AgentPaths.IsInside(full, root)) return true;
+            }
+            return false;
+        }
+
+        static bool UncheckedSource(string before)
+        {
+            int start = Math.Max(before.LastIndexOf(';'), before.LastIndexOf('\n')) + 1;
+            int and = before.LastIndexOf("&&", StringComparison.Ordinal), or = before.LastIndexOf("||", StringComparison.Ordinal);
+            start = Math.Max(start, Math.Max(and >= 0 ? and + 2 : 0, or >= 0 ? or + 2 : 0));
+            string pipeline = before.Substring(start);
+            int bar = pipeline.IndexOf('|');
+            string source = Regex.Replace(bar >= 0 ? pipeline.Substring(0, bar) : pipeline, @"""[^""$]*""|'[^']*'", "\"\"");
+            source = Regex.Replace(source, @"\$(_|psitem|true|false|null)\b", "", RegexOptions.IgnoreCase);
+            return source.IndexOf('$') >= 0 || source.IndexOf('(') >= 0 || source.Contains("::") || Regex.IsMatch(source, @"(^|[\s;|&(=])(get-content|gc|cat|type|import-csv)(\s|$)", RegexOptions.IgnoreCase);
+        }
+
+        static bool IsWorkspace(string full, string workspace)
+        {
+            return !string.IsNullOrEmpty(workspace) && string.Equals((full ?? "").Replace('/', '\\').TrimEnd('\\'), workspace.Replace('/', '\\').TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
+        }
+
+        static string Leaf(string full)
+        {
+            string f = (full ?? "").TrimEnd('\\');
+            int slash = f.LastIndexOf('\\');
+            return slash >= 0 && slash < f.Length - 1 ? f.Substring(slash + 1) : f;
+        }
+
+        static string StripGroups(string s)
+        {
+            StringBuilder sb = new StringBuilder();
+            int depth = 0;
+            char q = '\0';
+            foreach (char ch in s)
+            {
+                if (q != '\0') { if (depth == 0) sb.Append(ch); if (ch == q) q = '\0'; continue; }
+                if (ch == '"' || ch == '\'') { q = ch; if (depth == 0) sb.Append(ch); continue; }
+                if (ch == '(')
+                {
+                    if (depth == 0) { if (sb.Length > 0 && sb[sb.Length - 1] == '$') sb.Length--; sb.Append("$x"); }
+                    depth++;
+                    continue;
+                }
+                if (ch == ')') { if (depth > 0) depth--; continue; }
+                if (depth == 0) sb.Append(ch);
+            }
+            return sb.ToString();
+        }
+
+        static List<string> Tokens(string s)
+        {
+            List<string> raw = new List<string>();
+            StringBuilder cur = new StringBuilder();
+            char q = '\0';
+            foreach (char ch in s)
+            {
+                if (q != '\0') { cur.Append(ch); if (ch == q) q = '\0'; continue; }
+                if (ch == '"' || ch == '\'') { q = ch; cur.Append(ch); continue; }
+                if (char.IsWhiteSpace(ch)) { if (cur.Length > 0) { raw.Add(cur.ToString()); cur.Length = 0; } continue; }
+                cur.Append(ch);
+            }
+            if (cur.Length > 0) raw.Add(cur.ToString());
+            List<string> l = new List<string>();
+            foreach (string t in raw)
+            {
+                if (l.Count > 0 && (l[l.Count - 1].EndsWith(",") || t.StartsWith(","))) l[l.Count - 1] += t;
+                else l.Add(t);
+            }
+            return l;
+        }
+
+        static List<string> Items(string token)
+        {
+            List<string> l = new List<string>();
+            StringBuilder cur = new StringBuilder();
+            char q = '\0';
+            foreach (char ch in token ?? "")
+            {
+                if (q != '\0') { if (ch == q) q = '\0'; else cur.Append(ch); continue; }
+                if (ch == '"' || ch == '\'') { q = ch; continue; }
+                if (ch == ',') { if (cur.Length > 0) l.Add(cur.ToString()); cur.Length = 0; continue; }
+                cur.Append(ch);
+            }
+            if (cur.Length > 0) l.Add(cur.ToString());
+            return l;
+        }
+
+        static readonly string[] ValueNames = {
+            "path", "literalpath", "lp", "pspath", "destination", "destinationpath", "filter", "include", "exclude", "credential", "value", "encoding", "itemtype",
+            "type", "name", "target", "stream", "delimiter", "filepath", "inputobject", "width", "tosession", "fromsession", "variable", "newname", "outfile",
+            "uri", "erroraction", "warningaction", "informationaction", "outvariable", "errorvariable", "pipelinevariable", "outbuffer" };
+
+        static bool TakesValue(string name)
+        {
+            if (name.Length < 2) return false;
+            foreach (string v in ValueNames) if (v.StartsWith(name, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        static void Parts(string rest, out List<string> pos, out Dictionary<string, List<string>> named, out List<string> flags)
+        {
+            pos = new List<string>();
+            named = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            flags = new List<string>();
+            List<string> toks = Tokens(StripGroups(rest));
+            for (int i = 0; i < toks.Count; i++)
+            {
+                string t = toks[i];
+                if (t.Length > 1 && t[0] == '-' && char.IsLetter(t[1]))
+                {
+                    string name = t.Substring(1), val = null;
+                    int colon = name.IndexOf(':');
+                    if (colon >= 0) { val = name.Substring(colon + 1); name = name.Substring(0, colon); }
+                    name = name.ToLowerInvariant();
+                    if (val != null && Regex.IsMatch(val, @"^\$?(true|false)$", RegexOptions.IgnoreCase))
+                    {
+                        if (val.TrimStart('$').Equals("true", StringComparison.OrdinalIgnoreCase)) flags.Add(name);
+                        continue;
+                    }
+                    if (val == null && TakesValue(name) && i + 1 < toks.Count && !(toks[i + 1].Length > 1 && toks[i + 1][0] == '-' && char.IsLetter(toks[i + 1][1]))) val = toks[++i];
+                    if (val == null) flags.Add(name);
+                    else
+                    {
+                        List<string> vs;
+                        if (!named.TryGetValue(name, out vs)) named[name] = vs = new List<string>();
+                        vs.Add(val);
+                    }
+                    continue;
+                }
+                if (t.Length > 1 && t[0] == '/' && Regex.IsMatch(t, @"^/[a-z]+(:\S*)?$", RegexOptions.IgnoreCase)) { flags.Add(t.Substring(1).ToLowerInvariant()); continue; }
+                pos.Add(t);
+            }
+        }
+
+        static bool Flag(List<string> flags, string full, int min)
+        {
+            foreach (string f in flags)
+            {
+                int colon = f.IndexOf(':');
+                string n = colon >= 0 ? f.Substring(0, colon) : f;
+                if (n.Length >= min && full.StartsWith(n, StringComparison.Ordinal)) return true;
+            }
+            return false;
+        }
+
+        static List<string> Named(Dictionary<string, List<string>> named, string full, int min)
+        {
+            List<string> l = new List<string>();
+            foreach (KeyValuePair<string, List<string>> kv in named)
+                if (kv.Key.Length >= min && full.StartsWith(kv.Key, StringComparison.Ordinal))
+                    foreach (string v in kv.Value) l.AddRange(Items(v));
+            return l;
+        }
+
+        internal static Func<string, int> Probe = DefaultProbe;
+
+        static int DefaultProbe(string full)
+        {
+            if (full.StartsWith("\\\\", StringComparison.Ordinal)) return 1;
+            try
+            {
+                if (Directory.Exists(full)) return 2;
+                if (File.Exists(full)) return 1;
+            }
+            catch { return 1; }
+            return 0;
+        }
+
+        static readonly Regex WriteCmd = new Regex(
+            @"(?<![\w:.$-])(set-content|sc|out-file|tee-object|tee|new-item|ni|copy-item|cpi|cp|copy|xcopy|robocopy|move-item|mi|mv|move|export-csv|epcsv|export-clixml|expand-archive|tar|invoke-webrequest|iwr|invoke-restmethod|irm|curl|wget)(?:\.exe)?(?![\w-])([^\n;|&]*)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly HashSet<string> ScVerbs = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+            "query", "queryex", "qc", "qdescription", "qfailure", "qfailureflag", "qsidtype", "qprivs", "qtriggerinfo", "qpreferrednode", "qmanagedaccount", "qprotection",
+            "create", "config", "start", "stop", "pause", "continue", "delete", "description", "failure", "failureflag", "sidtype", "privs", "managedaccount", "sdshow",
+            "sdset", "showsid", "triggerinfo", "preferrednode", "getdisplayname", "getkeyname", "enumdepend", "boot", "lock", "querylock", "interrogate", "control" };
+        static readonly Regex NetWrite = new Regex(
+            @"\]\s*::\s*(writealltext|writealllines|writeallbytes|create|createtext|openwrite|copy|move|replace)\s*\(", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex NullTarget = new Regex(@"^(\$null|nul|nul:|con|/dev/null)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        static List<string> CallArgs(string c, int open)
+        {
+            List<string> l = new List<string>();
+            StringBuilder cur = new StringBuilder();
+            int depth = 0;
+            char q = '\0';
+            for (int i = open + 1; i < c.Length; i++)
+            {
+                char ch = c[i];
+                if (q != '\0') { cur.Append(ch); if (ch == q) q = '\0'; continue; }
+                if (ch == '"' || ch == '\'') { q = ch; cur.Append(ch); continue; }
+                if (ch == '(' || ch == '[' || ch == '{') depth++;
+                if (ch == ')' || ch == ']' || ch == '}')
+                {
+                    if (depth == 0) break;
+                    depth--;
+                }
+                if (ch == ',' && depth == 0) { l.Add(cur.ToString().Trim()); cur.Length = 0; continue; }
+                cur.Append(ch);
+            }
+            if (cur.ToString().Trim().Length > 0) l.Add(cur.ToString().Trim());
+            return l;
+        }
+
+        static List<KeyValuePair<int, string>> Redirects(string c)
+        {
+            List<KeyValuePair<int, string>> l = new List<KeyValuePair<int, string>>();
+            char q = '\0', run = '\0';
+            for (int i = 0; i < c.Length; i++)
+            {
+                char ch = c[i];
+                if (q != '\0') { if (ch == q) q = '\0'; continue; }
+                if (run != '\0' && ch == run) { run = '\0'; continue; }
+                if (ch == '"' || ch == '\'')
+                {
+                    int from = Math.Max(0, i - 40);
+                    if (run == '\0' && RunsString.IsMatch(c.Substring(from, i - from))) run = ch;
+                    else q = ch;
+                    continue;
+                }
+                if (ch != '>') continue;
+                if (i + 1 < c.Length && c[i + 1] == '>') { i++; continue; }
+                if (i + 1 < c.Length && (c[i + 1] == '&' || c[i + 1] == '=')) continue;
+                if (i > 0 && (c[i - 1] == '-' || c[i - 1] == '=' || c[i - 1] == '<')) continue;
+                int j = i + 1;
+                while (j < c.Length && (c[j] == ' ' || c[j] == '\t')) j++;
+                if (j >= c.Length) break;
+                string target;
+                int end;
+                if (c[j] == '"' || c[j] == '\'')
+                {
+                    end = c.IndexOf(c[j], j + 1);
+                    if (end < 0) end = c.Length;
+                    target = c.Substring(j + 1, end - j - 1);
+                }
+                else
+                {
+                    end = j;
+                    while (end < c.Length && !char.IsWhiteSpace(c[end]) && ";|&)}<>".IndexOf(c[end]) < 0 && c[end] != run) end++;
+                    target = c.Substring(j, end - j);
+                    end--;
+                }
+                l.Add(new KeyValuePair<int, string>(i, target));
+                i = end;
+            }
+            return l;
+        }
+
+        static string Replaced(string target, string here, bool lost, string workspace, out bool computed, out bool folder)
+        {
+            computed = folder = false;
+            string t = (target ?? "").Trim();
+            if (t.Length == 0 || NullTarget.IsMatch(t)) return null;
+            if ((lost && !Rooted(t)) || t.IndexOf('$') >= 0 && !Rooted(t)) { computed = true; return null; }
+            bool unknown;
+            string full = Full(t, here, out unknown);
+            if (unknown) { computed = true; return null; }
+            if (full == null || Inside(full, workspace) || InTemp(full)) return null;
+            if (full.IndexOfAny(new char[] { '*', '?' }) >= 0) return full;
+            int kind = Probe(full);
+            if (kind == 2) { folder = true; return full; }
+            return kind == 1 ? full : null;
+        }
+
+        static string Writes(string full)
+        {
+            return "replaces " + Leaf(full) + " outside the work folder, and Undo can't bring it back";
+        }
+
+        static string WriteDanger(string c, string workspace, string cwd)
+        {
+            bool unknownTarget = false;
+            int unknownAt = 0;
+            foreach (Match m in WriteCmd.Matches(c))
+            {
+                string verb = m.Groups[1].Value.ToLowerInvariant();
+                if (Unrun(c)[m.Index]) continue;
+                List<string> pos, flags;
+                Dictionary<string, List<string>> named;
+                Parts(m.Groups[2].Value, out pos, out named, out flags);
+                if (Flag(flags, "whatif", 2)) continue;
+                bool lost;
+                string here = Here(c, m.Index, cwd, out lost);
+                bool piped = Piped(c, m.Index);
+                string before = piped ? c.Substring(0, m.Index).TrimEnd() : "";
+                bool computed, folder;
+                if (verb == "sc")
+                {
+                    if (pos.Count == 0 || ScVerbs.Contains(pos[0].Trim('"', '\'')) || pos[0].StartsWith("\\\\")) continue;
+                    verb = "set-content";
+                }
+                if (verb == "invoke-webrequest" || verb == "iwr" || verb == "invoke-restmethod" || verb == "irm" || verb == "curl" || verb == "wget")
+                {
+                    List<string> saved = Named(named, "outfile", 2);
+                    List<string> toks = Tokens(StripGroups(m.Groups[2].Value));
+                    for (int i = 0; i + 1 < toks.Count; i++) if (toks[i] == "-o" || toks[i] == "--output") saved.AddRange(Items(toks[i + 1]));
+                    foreach (string t in saved)
+                    {
+                        string full = Replaced(t, here, lost, workspace, out computed, out folder);
+                        if (computed) { if (!unknownTarget) unknownAt = m.Index; unknownTarget = true; continue; }
+                        if (full != null && !folder) return Writes(full);
+                    }
+                    continue;
+                }
+                if (verb == "expand-archive" || verb == "tar")
+                {
+                    List<string> into = new List<string>();
+                    if (verb == "expand-archive")
+                    {
+                        if (!Flag(flags, "force", 1)) continue;
+                        into = Named(named, "destinationpath", 2);
+                        if (into.Count == 0 && pos.Count > 1) into = Items(pos[1]);
+                    }
+                    else
+                    {
+                        List<string> toks = Tokens(StripGroups(m.Groups[2].Value));
+                        bool extract = false;
+                        for (int i = 0; i < toks.Count; i++)
+                        {
+                            string t = toks[i];
+                            if (i == 0 && Regex.IsMatch(t, "^-?[a-z]*x[a-z]*$", RegexOptions.CultureInvariant) || t == "--extract" || t == "--get") extract = true;
+                            if ((t == "-C" || t == "--directory") && i + 1 < toks.Count) into.AddRange(Items(toks[i + 1]));
+                            else if (t.StartsWith("--directory=", StringComparison.Ordinal)) into.AddRange(Items(t.Substring(12)));
+                        }
+                        if (!extract) continue;
+                    }
+                    if (into.Count == 0) into.Add(".");
+                    foreach (string d in into)
+                    {
+                        string full = Replaced(d, here, lost, workspace, out computed, out folder);
+                        if (computed) { if (!unknownTarget) unknownAt = m.Index; unknownTarget = true; continue; }
+                        if (full != null) return "unpacks files into " + Leaf(full) + ", outside the work folder, replacing any with the same name";
+                    }
+                    continue;
+                }
+                if (verb == "set-content" || verb == "out-file" || verb == "tee-object" || verb == "tee" || verb == "new-item" || verb == "ni" || verb == "export-csv" || verb == "epcsv" || verb == "export-clixml")
+                {
+                    bool make = verb == "new-item" || verb == "ni";
+                    if (!make && (Flag(flags, "append", 1) || Flag(flags, "noclobber", 3) || named.ContainsKey("variable") || named.ContainsKey("var"))) continue;
+                    if (make)
+                    {
+                        if (!Flag(flags, "force", 1)) continue;
+                        List<string> type = Named(named, "itemtype", 1);
+                        type.AddRange(Named(named, "type", 2));
+                        if (type.Count > 0 && !type[0].StartsWith("f", StringComparison.OrdinalIgnoreCase)) continue;
+                    }
+                    List<string> targets = Named(named, "path", 3);
+                    targets.AddRange(Named(named, "literalpath", 2));
+                    targets.AddRange(Named(named, "lp", 2));
+                    targets.AddRange(Named(named, "pspath", 2));
+                    if (!make) targets.AddRange(Named(named, "filepath", 2));
+                    if (targets.Count == 0 && pos.Count > 0) targets.AddRange(Items(pos[0]));
+                    List<string> names = make ? Named(named, "name", 2) : new List<string>();
+                    if (names.Count > 0)
+                    {
+                        List<string> joined = new List<string>();
+                        foreach (string b in targets.Count > 0 ? targets : new List<string> { "." })
+                            foreach (string n in names) joined.Add(b.TrimEnd('\\', '/') + "\\" + n);
+                        targets = joined;
+                    }
+                    if (targets.Count == 0 && piped && verb == "set-content")
+                    {
+                        if (UncheckedSource(before)) return "replaces the contents of files that an earlier command picks from a folder that cannot be checked";
+                        string why = Outside(before, workspace, lost ? null : here);
+                        if (why != null) return "replaces the contents of files that an earlier command picks, and " + why;
+                        continue;
+                    }
+                    foreach (string t in targets)
+                    {
+                        string full = Replaced(t, here, lost, workspace, out computed, out folder);
+                        if (computed) { if (!unknownTarget) unknownAt = m.Index; unknownTarget = true; continue; }
+                        if (full != null && !folder) return Writes(full);
+                    }
+                    continue;
+                }
+                List<string> dest = Named(named, "destination", 3);
+                List<string> sources = Named(named, "path", 3);
+                sources.AddRange(Named(named, "literalpath", 2));
+                sources.AddRange(Named(named, "lp", 2));
+                if (verb == "robocopy")
+                {
+                    if (pos.Count < 2) continue;
+                    sources = new List<string>();
+                    dest = Items(pos[1]);
+                }
+                else if (dest.Count == 0 && sources.Count > 0)
+                {
+                    dest = pos.Count > 0 ? Items(pos[0]) : new List<string> { "." };
+                    for (int i = 1; i < pos.Count; i++) sources.AddRange(Items(pos[i]));
+                }
+                else if (dest.Count == 0)
+                {
+                    if (pos.Count >= 2)
+                    {
+                        dest = Items(pos[pos.Count - 1]);
+                        for (int i = 0; i < pos.Count - 1; i++) sources.AddRange(Items(pos[i]));
+                    }
+                    else
+                    {
+                        dest = new List<string> { "." };
+                        foreach (string x in pos) sources.AddRange(Items(x));
+                    }
+                }
+                else foreach (string x in pos) sources.AddRange(Items(x));
+                bool moving = verb == "move-item" || verb == "mi" || verb == "mv" || verb == "move" || verb == "robocopy" && (Flag(flags, "mov", 3) || Flag(flags, "move", 4));
+                string act = moving ? "moves" : "copies";
+                if (moving)
+                {
+                    if (verb == "robocopy") sources = Items(pos[0]);
+                    if (sources.Count == 0 && piped)
+                    {
+                        if (UncheckedSource(before)) return "moves files that an earlier command picks from a folder that cannot be checked";
+                        string why = Outside(before, workspace, lost ? null : here);
+                        if (why != null) return "moves files that an earlier command picks, and " + why;
+                    }
+                    foreach (string src in sources)
+                    {
+                        string t = src.Trim();
+                        if ((lost && !Rooted(t)) || t.IndexOf('$') >= 0 && !Rooted(t)) { if (!unknownTarget) unknownAt = m.Index; unknownTarget = true; continue; }
+                        bool unknown;
+                        string from = Full(t, here, out unknown);
+                        if (unknown) { if (!unknownTarget) unknownAt = m.Index; unknownTarget = true; continue; }
+                        if (from == null || Inside(from, workspace) || InTemp(from)) continue;
+                        if (Broad(from)) return "moves a whole drive, your user folder or a system folder";
+                        return "moves " + Leaf(from) + " from outside the work folder";
+                    }
+                }
+                foreach (string d in dest)
+                {
+                    string full = Replaced(d, here, lost, workspace, out computed, out folder);
+                    if (computed) { if (!unknownTarget) unknownAt = m.Index; unknownTarget = true; continue; }
+                    if (full == null) continue;
+                    if (!folder) return Writes(full);
+                    string into = act + " files into " + Leaf(full) + ", outside the work folder, replacing any with the same name";
+                    if (verb == "robocopy" || verb == "xcopy" || sources.Count == 0 || Flag(flags, "recurse", 1) && verb != "move-item") return into;
+                    foreach (string src in sources)
+                    {
+                        string name = Leaf(src.Replace('/', '\\').TrimEnd('\\'));
+                        if (name.Length == 0 || name.IndexOfAny(new char[] { '*', '?', '$' }) >= 0 || name == "." || name == "..") return into;
+                        string inner = full.TrimEnd('\\') + "\\" + name;
+                        if (Probe(inner) != 0) return Writes(inner);
+                    }
+                }
+            }
+            foreach (KeyValuePair<int, string> r in Redirects(c))
+            {
+                bool lost, computed, folder;
+                string here = Here(c, r.Key, cwd, out lost);
+                string full = Replaced(r.Value, here, lost, workspace, out computed, out folder);
+                if (computed) { if (!unknownTarget) unknownAt = r.Key; unknownTarget = true; continue; }
+                if (full != null && !folder) return Writes(full);
+            }
+            foreach (Match m in NetWrite.Matches(c))
+            {
+                string verb = m.Groups[1].Value.ToLowerInvariant();
+                List<string> args = CallArgs(c, m.Index + m.Length - 1);
+                List<string> targets = new List<string>();
+                if (verb == "move" && args.Count > 0)
+                {
+                    string src = args[0].Trim();
+                    bool lit = src.Length >= 2 && (src[0] == '"' && src[src.Length - 1] == '"' || src[0] == '\'' && src[src.Length - 1] == '\'');
+                    if (!lit) { if (!unknownTarget) unknownAt = m.Index; unknownTarget = true; }
+                    else
+                    {
+                        bool unknown;
+                        string from = Full(src.Substring(1, src.Length - 2), cwd, out unknown);
+                        if (unknown) { if (!unknownTarget) unknownAt = m.Index; unknownTarget = true; }
+                        else if (from != null && !Inside(from, workspace) && !InTemp(from)) return "moves " + Leaf(from) + " from outside the work folder";
+                    }
+                }
+                if (verb == "copy" || verb == "move") { if (args.Count >= 3 && args[2].IndexOf("true", StringComparison.OrdinalIgnoreCase) >= 0) targets.Add(args[1]); }
+                else if (verb == "replace") { for (int i = 1; i < args.Count && i < 3; i++) targets.Add(args[i]); }
+                else if (args.Count > 0) targets.Add(args[0]);
+                foreach (string a in targets)
+                {
+                    string t = a.Trim();
+                    bool literal = t.Length >= 2 && (t[0] == '"' && t[t.Length - 1] == '"' || t[0] == '\'' && t[t.Length - 1] == '\'');
+                    if (!literal) { if (!unknownTarget) unknownAt = m.Index; unknownTarget = true; continue; }
+                    bool computed, folder;
+                    string full = Replaced(t.Substring(1, t.Length - 2), cwd, false, workspace, out computed, out folder);
+                    if (computed) { if (!unknownTarget) unknownAt = m.Index; unknownTarget = true; continue; }
+                    if (full != null && !folder) return Writes(full);
+                }
+            }
+            if (unknownTarget)
+            {
+                bool lost;
+                string here = Here(c, unknownAt, cwd, out lost);
+                string why = Outside(c, workspace, lost ? null : here);
+                if (why != null) return "writes to files that are picked while it runs, and " + why;
+            }
+            return null;
+        }
+
         static string DeleteDanger(string c, string workspace, string cwd)
         {
             foreach (Match m in DeleteCmd.Matches(c))
             {
+                bool lost;
+                string here = Here(c, m.Index, cwd, out lost);
                 string rest = m.Groups[2].Value;
-                bool recursive = false, computed = false;
+                bool recursive = false, computed = false, empties = m.Groups[1].Value.StartsWith("c", StringComparison.OrdinalIgnoreCase);
+                string bare = Regex.Replace(rest, @"""[^""$]*""|'[^']*'", "\"\"");
+                if (bare.IndexOf('(') >= 0 || bare.Contains("::") || Regex.IsMatch(bare, @"(^|\s)@\w")) computed = true;
                 List<string> paths = new List<string>();
-                foreach (string a in Args(rest))
+                foreach (string a in Args(StripGroups(rest)))
                 {
                     if (a.Length > 1 && (a[0] == '-' || (a[0] == '/' && Regex.IsMatch(a, @"^/[a-z](:\S*)?$", RegexOptions.IgnoreCase))))
                     {
@@ -1071,22 +1690,23 @@ namespace MinGent
                         {
                             string v = a.Substring(a.IndexOf(':') + 1);
                             name = name.Substring(0, colon);
-                            if (v.Length > 0 && !v.StartsWith("$") || v.StartsWith("$env:", StringComparison.OrdinalIgnoreCase) || v.StartsWith("${env:", StringComparison.OrdinalIgnoreCase) || v.StartsWith("$home", StringComparison.OrdinalIgnoreCase))
-                                if (!(v.Equals("true", StringComparison.OrdinalIgnoreCase) || v.Equals("false", StringComparison.OrdinalIgnoreCase))) paths.Add(v);
+                            if (v.Length > 0 && !Regex.IsMatch(v, @"^\$?(true|false)$", RegexOptions.IgnoreCase)) paths.Add(v);
                         }
                         if (name.Length > 0 && ("recurse".StartsWith(name) || name == "s" || Regex.IsMatch(name, "^[rfvdi]*r[rfvdi]*$"))) recursive = true;
                         continue;
                     }
                     paths.Add(a);
                 }
-                string before = c.Substring(0, m.Index).TrimEnd();
-                bool piped = before.EndsWith("|") && !before.EndsWith("||");
+                bool piped = Piped(c, m.Index);
+                string before = piped ? c.Substring(0, m.Index).TrimEnd() : "";
                 if (recursive && piped) return "deletes files picked by an earlier command in a pipeline, so they cannot be checked";
+                if (piped && UncheckedSource(before)) return "deletes files that an earlier command picks from a folder that cannot be checked";
                 if (WildRoot.IsMatch(rest)) return "deletes a whole drive, your user folder or a system folder";
                 foreach (string p in paths)
                 {
+                    if (lost && !Rooted(p)) { computed = true; continue; }
                     bool unknown;
-                    string full = Full(p, cwd, out unknown);
+                    string full = Full(p, here, out unknown);
                     if (unknown) { computed = true; continue; }
                     if (full == null) continue;
                     if (Broad(full)) return "deletes a whole drive, your user folder or a system folder";
@@ -1094,60 +1714,75 @@ namespace MinGent
                     string tail = slash >= 0 ? full.Substring(slash + 1) : full;
                     bool all = tail == "*" || tail == "*.*";
                     string dir = all && slash > 0 ? full.Substring(0, slash) : full;
-                    if ((all || p.Trim('"', '\'') == ".") && !string.IsNullOrEmpty(workspace) && string.Equals(dir.TrimEnd('\\'), workspace.Replace('/', '\\').TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+                    if ((all || p.Trim('"', '\'') == "." || string.Equals(full.TrimEnd('\\'), (workspace ?? "").Replace('/', '\\').TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)) && !string.IsNullOrEmpty(workspace) && string.Equals(dir.TrimEnd('\\'), workspace.Replace('/', '\\').TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
                         return "deletes everything in the work folder";
                     if (!Inside(full, workspace))
                     {
-                        if (recursive) return "deletes folders outside the work folder";
-                        if (p.IndexOfAny(new char[] { '*', '?' }) >= 0) return "deletes files outside the work folder";
+                        bool wild = p.IndexOfAny(new char[] { '*', '?' }) >= 0;
+                        if (empties) { if (wild || recursive || !InTemp(full)) return wild || recursive ? "empties files outside the work folder" : "empties a file outside the work folder"; continue; }
+                        if (recursive && all && slash > 0) return "deletes everything in " + Leaf(dir) + ", outside the work folder";
+                        if (recursive) return wild ? "deletes files outside the work folder, also in the folders below it" : "deletes folders outside the work folder";
+                        if (wild) return "deletes files outside the work folder";
+                        if (!InTemp(full)) return "deletes a file outside the work folder (" + Leaf(full) + ")";
                     }
                 }
                 if (computed && recursive && !Regex.IsMatch(rest, @"^\s*\$(_|psitem)\b", RegexOptions.IgnoreCase))
-                    return "deletes a folder whose location comes from a variable, so it cannot be checked";
+                    return "deletes a folder whose location is worked out while it runs, so it cannot be checked";
                 if (computed || piped)
                 {
-                    string why = Outside(c, workspace, cwd);
+                    string why = Outside(c, workspace, lost ? null : here);
                     if (why != null) return "deletes files that are picked while it runs, and " + why;
                 }
             }
             foreach (Match m in NetDelete.Matches(c))
             {
+                bool lost;
+                string here = Here(c, m.Index, cwd, out lost);
                 string args = m.Groups[2].Value;
                 bool recursive = m.Groups[1].Value.Equals("deletedirectory", StringComparison.OrdinalIgnoreCase) || Regex.IsMatch(args, @"\$?\btrue\b", RegexOptions.IgnoreCase);
                 bool computed = false, any = false;
+                bool moved = lost || !string.Equals((here ?? "").TrimEnd('\\'), (cwd ?? "").TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
                 foreach (Match q in Regex.Matches(args, @"""([^""]*)""|'([^']*)'"))
                 {
                     any = true;
+                    string raw = q.Groups[1].Success ? q.Groups[1].Value : q.Groups[2].Value;
+                    if (moved && !Rooted(raw)) { computed = true; continue; }
                     bool unknown;
-                    string full = Full(q.Groups[1].Success ? q.Groups[1].Value : q.Groups[2].Value, cwd, out unknown);
+                    string full = Full(raw, cwd, out unknown);
                     if (unknown || full == null) { computed = true; continue; }
                     if (Broad(full)) return "deletes a whole drive, your user folder or a system folder";
-                    if (recursive && !Inside(full, workspace)) return "deletes folders outside the work folder";
+                    if (recursive && IsWorkspace(full, workspace)) return "deletes everything in the work folder";
+                    if (!Inside(full, workspace) && (recursive || !InTemp(full))) return recursive ? "deletes folders outside the work folder" : "deletes a file outside the work folder (" + Leaf(full) + ")";
                 }
-                if (!any && recursive) return "deletes a folder whose location comes from a variable, so it cannot be checked";
+                if (recursive && (computed || !any)) return "deletes a folder whose location is worked out while it runs, so it cannot be checked";
                 if (!any || computed)
                 {
-                    string why = Outside(c, workspace, cwd);
+                    string why = Outside(c, workspace, lost ? null : here);
                     if (why != null) return "deletes files that are picked while it runs, and " + why;
                 }
             }
+            bool endLost;
+            string end = Here(c, c.Length, cwd, out endLost);
             if (ScriptDelete.IsMatch(c))
             {
                 if (ScriptHome.IsMatch(c)) return "deletes files in your user folder from a script, so the target cannot be checked";
-                string why = Outside(c, workspace, cwd);
+                if (ScriptUp.IsMatch(c)) return "deletes files from a script that reaches outside its folder, so the target cannot be checked";
+                string why = Outside(c, workspace, endLost ? null : end);
                 if (why != null) return "deletes files that are picked while it runs, and " + why;
             }
             foreach (Match m in OtherDelete.Matches(c))
             {
                 bool recursive = Regex.IsMatch(m.Groups[1].Value, @"\$?\btrue\b", RegexOptions.IgnoreCase);
                 string rest = Regex.Replace(c, @"\$(true|false|null|_|psitem)\b", "", RegexOptions.IgnoreCase);
-                if (recursive && rest.IndexOf('$') >= 0) return "deletes a folder whose location comes from a variable, so it cannot be checked";
-                string why = Outside(c, workspace, cwd);
+                if (recursive && rest.IndexOf('$') >= 0) return "deletes a folder whose location is worked out while it runs, so it cannot be checked";
+                bool lost;
+                string here = Here(c, m.Index, cwd, out lost);
+                string why = Outside(c, workspace, lost ? null : here);
                 if (why != null) return "deletes files that are picked while it runs, and " + why;
             }
             if (VarCall.IsMatch(c) && Recurse.IsMatch(c))
             {
-                string why = Outside(c, workspace, cwd);
+                string why = Outside(c, workspace, endLost ? null : end);
                 if (why != null) return "runs a command whose name comes from a variable, and " + why;
             }
             return null;
@@ -1163,6 +1798,7 @@ namespace MinGent
 
         static string Outside(string c, string workspace, string cwd)
         {
+            if (cwd == null) return "the command moves to a folder that cannot be checked";
             if (!Inside(cwd, workspace)) return "it runs outside the work folder";
             foreach (Match m in AbsPath.Matches(c))
             {
@@ -1177,6 +1813,7 @@ namespace MinGent
                 string full = Full(m.Value, cwd, out unknown);
                 if (!unknown && full != null && !Inside(full, workspace)) return "the command points outside the work folder";
             }
+            if (FarPath.IsMatch(c)) return "the command uses a folder that cannot be checked";
             return null;
         }
 
@@ -1251,11 +1888,16 @@ namespace MinGent
 
         static string Dots(string path)
         {
+            string[] parts = path.Replace('/', '\\').Split('\\');
+            int last = parts.Length - 1;
+            if (last > 0 && parts[last] != "." && parts[last] != "..") parts[last] = parts[last].TrimEnd('.', ' ');
             List<string> outp = new List<string>();
-            foreach (string part in path.Replace('/', '\\').Split('\\'))
+            for (int i = 0; i < parts.Length; i++)
             {
+                string part = parts[i];
                 if (part == ".") continue;
                 if (part == "..") { if (outp.Count > 1) outp.RemoveAt(outp.Count - 1); continue; }
+                if (i == last && part.Length == 0 && outp.Count > 1) continue;
                 outp.Add(part);
             }
             return string.Join("\\", outp.ToArray());
@@ -2639,7 +3281,7 @@ namespace MinGent
         static string Trim(string p)
         {
             if (string.IsNullOrEmpty(p)) return null;
-            try { p = Path.GetFullPath(p); } catch { return null; }
+            try { p = AgentPaths.LongForm(Path.GetFullPath(p)); } catch { return null; }
             return p.Length > 3 ? p.TrimEnd('\\', '/') : p;
         }
 
@@ -2667,11 +3309,22 @@ namespace MinGent
             return null;
         }
 
-        static string BroadAt(string f)
+        public static string Personal(string folder)
         {
-            if (f.StartsWith("\\\\")) return "it is on a network share";
+            string f = Trim(folder);
+            if (f == null) return null;
             if (f.Length <= 3) return "it is a whole drive";
-            try { if (new DriveInfo(Path.GetPathRoot(f)).DriveType == DriveType.Network) return "it is on a network drive"; } catch { }
+            foreach (KeyValuePair<string, string> w in Whole()) if (Under(w.Key, f)) return string.Equals(w.Key, f, StringComparison.OrdinalIgnoreCase) ? "it is " + w.Value : "it holds " + w.Value;
+            foreach (Environment.SpecialFolder sf in new Environment.SpecialFolder[] { Environment.SpecialFolder.ApplicationData, Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolder.CommonApplicationData })
+            {
+                string s = Trim(Environment.GetFolderPath(sf));
+                if (s != null && Under(s, f)) return "it is a folder where programs keep their own data";
+            }
+            return null;
+        }
+
+        static List<KeyValuePair<string, string>> Whole()
+        {
             string home = Trim(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
             List<KeyValuePair<string, string>> whole = new List<KeyValuePair<string, string>>();
             Action<string, string> add = delegate (string path, string name) { string t = Trim(path); if (t != null) whole.Add(new KeyValuePair<string, string>(t, name)); };
@@ -2684,7 +3337,15 @@ namespace MinGent
             add(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "your Videos folder");
             if (Supported) add(Known("374DE290-123F-4565-9164-39C4925E467B"), "your Downloads folder");
             foreach (string v in new string[] { "OneDrive", "OneDriveConsumer", "OneDriveCommercial" }) add(Environment.GetEnvironmentVariable(v), "your OneDrive folder");
-            foreach (KeyValuePair<string, string> w in whole) if (Under(w.Key, f)) return string.Equals(w.Key, f, StringComparison.OrdinalIgnoreCase) ? "it is " + w.Value : "it holds " + w.Value;
+            return whole;
+        }
+
+        static string BroadAt(string f)
+        {
+            if (f.StartsWith("\\\\")) return "it is on a network share";
+            if (f.Length <= 3) return "it is a whole drive";
+            try { if (new DriveInfo(Path.GetPathRoot(f)).DriveType == DriveType.Network) return "it is on a network drive"; } catch { }
+            foreach (KeyValuePair<string, string> w in Whole()) if (Under(w.Key, f)) return string.Equals(w.Key, f, StringComparison.OrdinalIgnoreCase) ? "it is " + w.Value : "it holds " + w.Value;
             string app = Trim(AppDomain.CurrentDomain.BaseDirectory);
             if (app != null && (Under(f, app) || Under(app, f))) return "it holds MinGent itself";
             List<string> inside = new List<string>();
@@ -2721,12 +3382,24 @@ namespace MinGent
 
         public static string GitWatch(string workspace)
         {
+            return GitWatch(workspace, workspace);
+        }
+
+        public static string GitWatch(string workspace, string cwd)
+        {
             if (!Supported) return null;
             try
             {
-                string g = Path.Combine(Path.GetFullPath(workspace), ".git");
-                if (!Directory.Exists(g) || Link(g) || LowLabel(g)) return null;
-                return g;
+                string ws = Trim(workspace), dir = Trim(cwd);
+                if (dir == null || !Under(dir, ws)) dir = ws;
+                for (; dir != null && Under(dir, ws); dir = Trim(Path.GetDirectoryName(dir)))
+                {
+                    string g = Path.Combine(dir, ".git");
+                    if (!Directory.Exists(g)) continue;
+                    if (Link(g) || LowLabel(g)) return null;
+                    return g;
+                }
+                return null;
             }
             catch { return null; }
         }

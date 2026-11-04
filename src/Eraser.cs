@@ -363,6 +363,7 @@ namespace MinGent
                 }
             }
             catch { }
+            try { string low = Sandbox.LowRoot; if (!string.IsNullOrEmpty(low)) l.Add(Norm(low)); } catch { }
             return l;
         }
 
@@ -544,7 +545,7 @@ namespace MinGent
             MaximizeBox = false;
             int pad = UI.S(20), w = ClientSize.Width - pad * 2;
             string text = (Net.Offline ? "Offline mode is on, so MinGent makes no internet connections now. " : "") +
-                          "These are the internet addresses MinGent connected to since it started, newest first. For the built-in browser they are the sites it opened; a page can also load files from other sites. Programs that you or the agent start are not listed.";
+                          "Internet addresses MinGent connected to since it started, newest first. For the built-in browser, only the pages it opened are listed, not the files those pages load from other sites. Programs that you or the agent start aren't listed either.";
             Label note = Dialogs.MakeLabel(text, Th, true);
             int h = Fonts.Height(text, UI.Font, w);
             note.SetBounds(pad, pad, w, h + UI.S(2));

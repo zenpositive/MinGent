@@ -186,6 +186,7 @@ namespace MinGent
                         case "netLog": s.KeepNetLog = v == "1"; break;
                         case "errorLog": s.KeepErrorLog = v == "1"; break;
                         case "browserWidth": if (int.TryParse(v, out iv) && iv >= 250 && iv <= 3000) s.BrowserWidth = iv; break;
+                        case "browserConsoleHeight": if (int.TryParse(v, out iv) && iv >= 0 && iv <= 4000) s.BrowserConsoleHeight = iv; break;
                         case "aiMode": oldMode = v; break;
                         case "aiBase": oldBase = v; break;
                         case "aiKey": oldKey = v; break;
@@ -287,6 +288,7 @@ namespace MinGent
                 w("netLog", KeepNetLog ? "1" : "0");
                 w("errorLog", KeepErrorLog ? "1" : "0");
                 w("browserWidth", BrowserWidth.ToString(CultureInfo.InvariantCulture));
+                if (BrowserConsoleHeight > 0) w("browserConsoleHeight", BrowserConsoleHeight.ToString(CultureInfo.InvariantCulture));
                 w("window", Bounds.X + "," + Bounds.Y + "," + Bounds.Width + "," + Bounds.Height);
                 string tmp = FilePath + ".tmp";
                 File.WriteAllText(tmp, sb.ToString(), new UTF8Encoding(false));
@@ -487,8 +489,8 @@ namespace MinGent
             browser = new BrowserPane();
             browser.Visible = false;
             browser.AppShortcut = BrowserShortcut;
-            browser.ConsoleHeight = settings.BrowserConsoleHeight;
-            browser.ConsoleHeightChanged += delegate (int h) { settings.BrowserConsoleHeight = h; };
+            browser.ConsoleHeight = settings.BrowserConsoleHeight > 0 ? UI.S(settings.BrowserConsoleHeight) : 0;
+            browser.ConsoleHeightChanged += delegate (int h) { settings.BrowserConsoleHeight = (int)Math.Round(h / UI.Scale); };
             browser.ShowRequested += delegate { ShowBrowser(true, false); };
             browser.CloseRequested += delegate { ShowBrowser(false, false); };
             aiPanel = new AiPanel(settings, this);
@@ -1124,10 +1126,9 @@ namespace MinGent
             if (aiPanel == null) return;
             if (aiPanel.IsArchived(path))
             {
-                string back = aiPanel.RestoreChat(path);
-                if (back == null) { RefreshSidebar(); return; }
-                showArchived = false;
-                path = back;
+                aiPanel.OpenArchived(path, delegate { showArchived = false; });
+                RefreshSidebar();
+                return;
             }
             aiPanel.OpenChat(path);
             RefreshSidebar();
@@ -1160,7 +1161,7 @@ namespace MinGent
             return true;
         }
 
-        const string DeleteAllText = "Delete all chats?\n\nThey are erased from this PC, archived chats too, and can't be brought back. What the agent remembered in them is forgotten too; facts you added yourself in Settings > Memory stay.";
+        const string DeleteAllText = "Delete all chats?\n\nThey're erased from this PC, archived ones too, and can't be brought back. What the agent remembered from them is forgotten; facts you added yourself in Settings > Memory stay.";
 
         string DeleteAllPrompt()
         {
@@ -1355,7 +1356,8 @@ namespace MinGent
             t.Version = d.Version;
             t.Eol = d.Eol;
             t.Lines = d.Lines.Count;
-            if (withText) t.Text = d.TextLength > 8000000 ? "" : d.AllText("\n");
+            t.TooLarge = d.TextLength > 8000000;
+            if (withText) t.Text = t.TooLarge ? null : d.AllText("\n");
             return t;
         }
 
@@ -1550,14 +1552,8 @@ namespace MinGent
         {
             string f = folder.TrimEnd('\\');
             if (f.Length <= 3) return true;
-            try
-            {
-                string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile).TrimEnd('\\');
-                if (string.Equals(f, home, StringComparison.OrdinalIgnoreCase)) return true;
-                if (string.Equals(f, Path.GetDirectoryName(home), StringComparison.OrdinalIgnoreCase)) return true;
-            }
-            catch { }
-            return false;
+            try { return Sandbox.Personal(f) != null; }
+            catch { return true; }
         }
 
         public void RunStarted(int runId)
@@ -3325,6 +3321,7 @@ namespace MinGent
                     if (aiPanel != null && aiPanel.HandleKey(keyData)) return true;
                     if (inChat) break;
                     if (browser != null && browser.ContainsFocus) break;
+                    if (sidebar != null && sidebar.ContainsFocus) break;
                     if (findBar.Visible) { HideFind(); return true; }
                     break;
                 case Keys.Alt | Keys.Left:

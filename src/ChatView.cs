@@ -128,8 +128,8 @@ namespace MinGent
         public event Action<ChatItem> DeleteRequested, RetryRequested, QueueEditRequested, QueueRemoveRequested, EditCancelled;
         public event Action<ChatItem, Attachment> AttachmentClicked;
         public event EventHandler EditEnded;
-        public const string QueueRunning = "Queued \u00B7 the agent reads this at its next step", QueueHeld = "Queued \u00B7 sends when you finish editing",
-            QueueBehind = "Queued \u00B7 waits until you finish the edit above", QueueCompacting = "Queued \u00B7 goes out when compacting finishes";
+        public const string QueueRunning = "Queued: the agent reads this at its next step", QueueHeld = "Queued: sends when you finish editing",
+            QueueBehind = "Queued: waits for your edit above", QueueCompacting = "Queued: sends when compacting finishes";
 
         public ChatView()
         {
@@ -288,7 +288,7 @@ namespace MinGent
                 if (pq != null) answerBox.Cue = pq.Question.PlanApproval ? "Or type what to change in the plan" : pq.Question.Options.Count > 0 ? "Type a different answer" : "Type your answer";
                 if (pq == null && had && EditEnded != null) EditEnded(this, EventArgs.Empty);
             }
-            if (answering == null || answering.LayoutVersion < 0) { if (answerBox.Visible) answerBox.Visible = false; return; }
+            if (answering == null || answering.LayoutVersion < 0 || dropHint) { if (answerBox.Visible) answerBox.Visible = false; return; }
             int x = ItemX(answering) + UI.S(14) + UI.S(40);
             int y = answering.Top - scrollY + answering.AnswerY + (AnswerRowH - answerLines * answerBox.Font.Height) / 2;
             Rectangle r = new Rectangle(x, y, AnswerBoxW(answering), answerLines * answerBox.Font.Height);
@@ -417,7 +417,7 @@ namespace MinGent
         void PositionEditor()
         {
             PositionAnswer();
-            if (editing == null) { if (editBox.Visible) editBox.Visible = false; return; }
+            if (editing == null || dropHint) { if (editBox.Visible) editBox.Visible = false; return; }
             if (!Items.Contains(editing) || editing.Hidden) { CancelEdit(); return; }
             int x = ItemX(editing) + UI.S(14);
             int y = editing.Top - scrollY + editing.TrayH + UI.S(12);
@@ -1014,7 +1014,13 @@ namespace MinGent
         public bool DropHint
         {
             get { return dropHint; }
-            set { if (dropHint == value) return; dropHint = value; Invalidate(); }
+            set
+            {
+                if (dropHint == value) return;
+                dropHint = value;
+                PositionEditor();
+                Invalidate();
+            }
         }
 
         public Rectangle DropArea
@@ -1520,7 +1526,7 @@ namespace MinGent
             SetButton(it, sr, BtnEditSend, y);
             DrawButton(g, cr, cancel, false, hoverItem == idx && hoverButton == BtnEditCancel);
             DrawButton(g, sr, send, true, hoverItem == idx && hoverButton == BtnEditSend);
-            string hint = it.Queued ? "Enter to save \u00B7 Esc to cancel" : LastUserItem() == it ? "Enter to send \u00B7 Esc to cancel" : "Sending removes the later messages \u00B7 Esc to cancel";
+            string hint = it.Queued ? "Enter saves, Esc cancels" : LastUserItem() == it ? "Enter sends, Esc cancels" : "Sending removes the later messages. Esc cancels.";
             int hw = TextRenderer.MeasureText(g, hint, f.Small, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width;
             Rectangle hr = new Rectangle(box.X + UI.S(16), by, cr.X - UI.S(12) - (box.X + UI.S(16)), UI.S(32));
             if (hr.Width >= Math.Min(hw, UI.S(120)))

@@ -450,7 +450,7 @@ namespace MinGent
                                 fs.Write(buf, 0, n);
                                 sha.TransformBlock(buf, 0, n, null, 0);
                                 got += n;
-                                if (got > 2L * 1024 * 1024 * 1024) return "The download is unexpectedly large - stopped.";
+                                if (got > 2L * 1024 * 1024 * 1024) return "The download was larger than expected, so it was stopped.";
                                 if (progress != null && (DateTime.UtcNow - last).TotalMilliseconds > 200) { last = DateTime.UtcNow; progress(got, len); }
                             }
                             sha.TransformFinalBlock(new byte[0], 0, 0);

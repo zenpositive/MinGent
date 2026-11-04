@@ -254,7 +254,7 @@ namespace MinGent
                 if (r.Status == 401 || r.Status == 403)
                 {
                     st.NeedsKey = true;
-                    st.Status = "LM Studio wants an API token - add it in Settings";
+                    st.Status = "LM Studio needs an API token: add it in Settings";
                     return;
                 }
                 List<object> arr = Json.List(r.Json, "models");
@@ -342,7 +342,7 @@ namespace MinGent
                 return;
             }
             st.Reachable = false;
-            st.Status = "Not running - start LM Studio's server (Developer tab)";
+            st.Status = "Not running: start LM Studio's server in its Developer tab";
         }
 
         static void ProbeEngine(ProviderKeys k, List<ModelEntry> list, ProviderState st)
@@ -458,7 +458,7 @@ namespace MinGent
             st.Reachable = !r.ConnectFailed;
             st.Error = r.Error;
             if (r.Status == 401 || r.Status == 403) { st.NeedsKey = true; st.Status = "The API key was rejected"; return; }
-            st.Status = r.ConnectFailed ? "Offline - showing the usual models" : "Couldn't list models (" + r.Error + ")";
+            st.Status = r.ConnectFailed ? "Offline: showing the usual models" : "Couldn't list models (" + r.Error + ")";
             foreach (string[] f in AnthropicFallback)
             {
                 ModelEntry m = new ModelEntry();

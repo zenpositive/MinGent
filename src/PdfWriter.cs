@@ -881,67 +881,110 @@ namespace MinGent
                     cellLines.Add(lines);
                     rowH = Math.Max(rowH, lines.Count * lh);
                 }
-                rowH += 2 * padV;
                 bool head = r == 0;
-                Unit u = new Unit();
-                u.H = rowH;
-                u.G = group;
-                u.Header = head;
-                u.Before = head ? 2 : 0;
-                u.KeepNext = head;
                 double asc = c.Fonts.AscentOf(false, size);
                 List<List<LayLine>> cl = cellLines;
                 List<Shaped>[] cs = cellShaped;
                 List<LayGlyph>[][] ch = cellHidden;
                 string[][] cr = cellRes;
-                double rh = rowH;
                 bool lastRow = r == t.Rows.Count - 1;
-                u.Draw = delegate (Canvas cv, double x, double y)
+                List<double>[] hts = new List<double>[cols];
+                for (int k = 0; k < cols; k++)
                 {
-                    if (head) cv.Rect(x, y, c.Width, rh, Soft, null, 0, 0);
-                    for (int k = 0; k < cols; k++)
+                    hts[k] = new List<double>();
+                    if (cs[k] != null) foreach (Shaped sl in cs[k]) hts[k].Add(Math.Max(lh, sl.H));
+                    else foreach (LayLine ln in cl[k]) hts[k].Add(lh);
+                }
+                double limit = c.Bottom - c.Top - (group.HeaderUnit != null ? group.HeaderUnit.H : 0) - 2 * padV - 12;
+                List<int[][]> chunks = new List<int[][]>();
+                List<double> chunkH = new List<double>();
+                if (head || rowH <= limit || limit < lh * 3)
+                {
+                    int[][] all = new int[cols][];
+                    for (int k = 0; k < cols; k++) all[k] = new int[] { 0, hts[k].Count };
+                    chunks.Add(all);
+                    chunkH.Add(rowH);
+                }
+                else
+                {
+                    int[] at = new int[cols];
+                    while (true)
                     {
-                        double cx = x + colX[k];
-                        char al = k < t.Align.Count ? t.Align[k] : 'l';
-                        double ly = y + padV;
-                        if (cs[k] != null)
+                        bool more = false;
+                        for (int k = 0; k < cols; k++) if (at[k] < hts[k].Count) more = true;
+                        if (!more) break;
+                        int[][] range = new int[cols][];
+                        double hmax = 0;
+                        for (int k = 0; k < cols; k++)
                         {
-                            for (int q = 0; q < cs[k].Count; q++)
+                            int from = at[k];
+                            double hsum = 0;
+                            while (at[k] < hts[k].Count && (hsum + hts[k][at[k]] <= limit || at[k] == from)) { hsum += hts[k][at[k]]; at[k]++; }
+                            range[k] = new int[] { from, at[k] };
+                            hmax = Math.Max(hmax, hsum);
+                        }
+                        chunks.Add(range);
+                        chunkH.Add(hmax);
+                    }
+                }
+                for (int j = 0; j < chunks.Count; j++)
+                {
+                    int[][] range = chunks[j];
+                    double rh = chunkH[j] + 2 * padV;
+                    Unit u = new Unit();
+                    u.H = rh;
+                    u.G = group;
+                    u.Header = head;
+                    u.Before = head ? 2 : 0;
+                    u.KeepNext = head;
+                    u.Draw = delegate (Canvas cv, double x, double y)
+                    {
+                        if (head) cv.Rect(x, y, c.Width, rh, Soft, null, 0, 0);
+                        for (int k = 0; k < cols; k++)
+                        {
+                            double cx = x + colX[k];
+                            char al = k < t.Align.Count ? t.Align[k] : 'l';
+                            double ly = y + padV;
+                            if (cs[k] != null)
                             {
-                                Shaped sl = cs[k][q];
-                                double inner = w[k] - 2 * padH;
-                                double tx = al == 'c' ? cx + padH + (inner - sl.W) / 2 : al == 'r' ? cx + w[k] - padH - sl.W : cx + padH;
-                                double slot = Math.Max(lh, sl.H);
-                                double top = ly + (slot - sl.H) / 2;
-                                cv.Image(cr[k][q], tx, top, sl.W, sl.H);
-                                cv.Hidden(ch[k][q], tx, top + sl.Ascent, sl.W);
-                                ly += slot;
+                                for (int q = range[k][0]; q < range[k][1]; q++)
+                                {
+                                    Shaped sl = cs[k][q];
+                                    double inner = w[k] - 2 * padH;
+                                    double tx = al == 'c' ? cx + padH + (inner - sl.W) / 2 : al == 'r' ? cx + w[k] - padH - sl.W : cx + padH;
+                                    double slot = Math.Max(lh, sl.H);
+                                    double top = ly + (slot - sl.H) / 2;
+                                    cv.Image(cr[k][q], tx, top, sl.W, sl.H);
+                                    cv.Hidden(ch[k][q], tx, top + sl.Ascent, sl.W);
+                                    ly += slot;
+                                }
+                                continue;
                             }
-                            continue;
+                            for (int q = range[k][0]; q < range[k][1]; q++)
+                            {
+                                LayLine ln = cl[k][q];
+                                double inner = w[k] - 2 * padH;
+                                double tx = al == 'c' ? cx + padH + (inner - ln.Width) / 2 : (al == 'r' || ln.Rtl) ? cx + w[k] - padH - ln.Width : cx + padH;
+                                double cxx = tx;
+                                foreach (LayGlyph pg in ln.Glyphs) { pg.X = cxx; cxx += pg.Adv; }
+                                cv.Decorations(ln.Glyphs, ly + asc, asc, 0);
+                                cv.Glyphs(ln.Glyphs, tx, ly + asc + (lh - c.Fonts.LineHeight(false, size)) / 2);
+                                cv.Lines(ln.Glyphs, ly + asc);
+                                ly += lh;
+                            }
                         }
-                        foreach (LayLine ln in cl[k])
+                        cv.Line(x, y, x + c.Width, y, LineColor, 0.6);
+                        cv.Line(x, y + rh, x + c.Width, y + rh, head ? "B8C0CC" : LineColor, head ? 0.9 : 0.6);
+                        for (int k = 0; k <= cols; k++)
                         {
-                            double inner = w[k] - 2 * padH;
-                            double tx = al == 'c' ? cx + padH + (inner - ln.Width) / 2 : (al == 'r' || ln.Rtl) ? cx + w[k] - padH - ln.Width : cx + padH;
-                            double cxx = tx;
-                            foreach (LayGlyph pg in ln.Glyphs) { pg.X = cxx; cxx += pg.Adv; }
-                            cv.Decorations(ln.Glyphs, ly + asc, asc, 0);
-                            cv.Glyphs(ln.Glyphs, tx, ly + asc + (lh - c.Fonts.LineHeight(false, size)) / 2);
-                            cv.Lines(ln.Glyphs, ly + asc);
-                            ly += lh;
+                            double vx = k == cols ? x + c.Width : x + colX[k];
+                            cv.Line(vx, y, vx, y + rh, LineColor, 0.6);
                         }
-                    }
-                    cv.Line(x, y, x + c.Width, y, LineColor, 0.6);
-                    cv.Line(x, y + rh, x + c.Width, y + rh, head ? "B8C0CC" : LineColor, head ? 0.9 : 0.6);
-                    for (int k = 0; k <= cols; k++)
-                    {
-                        double vx = k == cols ? x + c.Width : x + colX[k];
-                        cv.Line(vx, y, vx, y + rh, LineColor, 0.6);
-                    }
-                };
-                if (head) group.HeaderUnit = u;
-                if (lastRow) { u.H += 10; u.Tail = 10; }
-                c.Units.Add(u);
+                    };
+                    if (head) group.HeaderUnit = u;
+                    if (lastRow && j == chunks.Count - 1) { u.H += 10; u.Tail = 10; }
+                    c.Units.Add(u);
+                }
             }
         }
 

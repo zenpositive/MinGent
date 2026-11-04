@@ -797,7 +797,7 @@ namespace MinGent
             {
                 Dictionary<string, object> k = P("string", "explore (default), review or general");
                 k["enum"] = Json.A("explore", "review", "general");
-                return Obj("task", P("string", "Complete instructions for the helper, including what to report back"), true,
+                return Obj("task", P("string", "Complete instructions for the helper, including what to report back (not needed with stop)"), true,
                            "kind", k, false,
                            "title", P("string", "A few words describing the task, shown to the user"), false,
                            "stop", P("string", "Instead of starting a helper, stop ones working in the background: \"all\", or a word from their title or kind, like \"review\". The automatic independent review stops only when the user asked for that."), false);
@@ -831,7 +831,8 @@ namespace MinGent
         public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
         {
             string stop = (S(a, "stop") ?? "").Trim();
-            if (stop.Length > 0) return ctx.Session.StopBackground(stop);
+            if (stop.Equals("true", StringComparison.OrdinalIgnoreCase) || stop.Equals("yes", StringComparison.OrdinalIgnoreCase)) stop = "all";
+            if (stop.Length > 0 && !stop.Equals("false", StringComparison.OrdinalIgnoreCase) && !stop.Equals("no", StringComparison.OrdinalIgnoreCase)) return ctx.Session.StopBackground(stop);
             string task = (S(a, "task") ?? "").Trim();
             if (task.Length < 25) return ToolOutcome.Fail("task is too short. Write complete instructions: what to do, which files or addresses are involved, and what to report back.");
             return Helpers.Run(ctx, ctx.Call, KindArg(a), task);

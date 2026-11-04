@@ -165,6 +165,9 @@ namespace MinGent
             if (!Program.Primary) return "more than one MinGent window is open. Close them all, start MinGent again, then check for updates";
             if (!File.Exists(Path.Combine(appDir, ExeName))) return ExeName + " isn't in " + appDir + ", the folder this copy runs from";
             if (Directory.Exists(Path.Combine(appDir, ".git")) || File.Exists(Path.Combine(appDir, ".git"))) return "this copy runs from a git checkout (" + appDir + "), and MinGent doesn't overwrite one. Update it with git";
+            string personal = null;
+            try { personal = Sandbox.Personal(appDir); } catch { }
+            if (personal != null) return "this copy runs straight from " + appDir + " (" + personal + "), so the new files would land among your own. Put MinGent in a folder of its own, then check again";
             if (!Writable(appDir)) return "MinGent can't write to the folder it runs from (" + appDir + ")";
             return null;
         }
@@ -878,8 +881,8 @@ namespace MinGent
                 return;
             }
             string text = "Install MinGent " + offer.Version + "?\n\n" +
-                          "It carries two signatures from the developer's release keys. MinGent downloads it (" + SizeText(offer.ZipBytes) + ") from GitHub, checks it against the signature again and builds it with the C# compiler in Windows. " +
-                          "Then MinGent closes, puts the new version in place of this one in " + Updater.AppDir + " and opens again.\n\n" +
+                          "Both of the developer's keys signed it. MinGent downloads it from GitHub (" + SizeText(offer.ZipBytes) + "), checks the signatures again and builds it with the compiler in Windows. " +
+                          "Then MinGent closes, puts the new version in place of this one and opens again.\n\n" +
                           "Your chats, notes and settings stay as they are.";
             string page = offer.Page;
             DialogResult d = Alert.Choose(owner, th, text, caption, MessageBoxIcon.Information, new string[] { "Install", "What's new", "Not now" },

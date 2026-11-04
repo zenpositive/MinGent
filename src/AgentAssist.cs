@@ -265,6 +265,15 @@ namespace MinGent
             return bd <= Math.Max(2, n.Length / 3) ? best : null;
         }
 
+        public static List<object> RawAfterExpand(List<object> raw, string provider, List<ToolCall> calls)
+        {
+            if (provider != "anthropic") return provider == "openai-responses" ? null : raw;
+            List<object> res = new List<object>();
+            foreach (object b in raw) if (Json.Str(b, "type") != "tool_use") res.Add(b);
+            foreach (ToolCall c in calls) res.Add(Json.O("type", "tool_use", "id", c.Id, "name", c.Name, "input", (object)c.Args ?? new Dictionary<string, object>()));
+            return res;
+        }
+
         public static bool ExpandParallel(List<ToolCall> calls)
         {
             bool changed = false;
@@ -549,11 +558,14 @@ namespace MinGent
             List<object> req = Json.List(schema, "required");
             if (req == null) return l;
             bool multi = tool == "edit_file" && (a.ContainsKey("edits") || a.ContainsKey("insert_line"));
+            object stopping;
+            bool stops = tool == "delegate" && a.TryGetValue("stop", out stopping) && stopping != null && Convert.ToString(stopping, System.Globalization.CultureInfo.InvariantCulture).Trim().Length > 0;
             foreach (object o in req)
             {
                 string p = o as string;
                 if (p == null) continue;
                 if (multi && (p == "old_string" || (p == "new_string" && a.ContainsKey("edits")))) continue;
+                if (stops && p == "task") continue;
                 object v;
                 if (!a.TryGetValue(p, out v) || v == null) l.Add(p);
             }
@@ -1951,7 +1963,7 @@ namespace MinGent
     {
         public int Nudges;
         int announce, todo, verify, refusal, summary;
-        public bool AnyTool, Denied, FilesChanged, Reviewed;
+        public bool AnyTool, Denied, FilesChanged, Reviewed, Listed;
         public string LastFamily = "";
         readonly List<string> unverified = new List<string>();
         public HashSet<string> Tools = new HashSet<string>(StringComparer.Ordinal);
@@ -2094,6 +2106,7 @@ namespace MinGent
         public void AfterTool(string name, Dictionary<string, object> args, ToolOutcome o)
         {
             AnyTool = true;
+            if (name == "todo_write" && o != null && !o.Error) Listed = true;
             if (name.StartsWith("app_", StringComparison.Ordinal)) LastFamily = "app";
             else if (name.StartsWith("browser_", StringComparison.Ordinal)) LastFamily = "browser";
             if (o == null) return;
@@ -2430,7 +2443,7 @@ namespace MinGent
                 if (op.Kind == "delete")
                 {
                     if (t.Full == null || !File.Exists(t.Full)) return ToolOutcome.Fail("cannot delete " + op.Path + ": file not found");
-                    string w = ctx.CheckWrite(t.Full, "Delete a file");
+                    string w = ctx.CheckWrite(t.Full, "Delete a file") ?? AskDelete(ctx, t.Full);
                     if (w != null) { ToolOutcome d = ToolOutcome.Fail(w); d.Denied = true; return d; }
                     deletes.Add(t.Full);
                     report.Add("deleted " + ToolKit.Rel(t.Full, ctx.Workspace));
@@ -2479,7 +2492,7 @@ namespace MinGent
                 {
                     FileTarget mt = ToolKit.Resolve(ctx, op.MoveTo, false, out err);
                     if (mt == null || mt.Full == null) return ToolOutcome.Fail(op.MoveTo + ": " + (err ?? "cannot move there"));
-                    string w = ctx.CheckWrite(mt.Full, "Create a file");
+                    string w = ctx.CheckWrite(mt.Full, "Create a file") ?? (t.Full != null ? AskDelete(ctx, t.Full) : null);
                     if (w != null) { ToolOutcome d = ToolOutcome.Fail(w); d.Denied = true; return d; }
                     writes.Add(new KeyValuePair<FileTarget, string>(mt, after));
                     if (t.Full != null) deletes.Add(t.Full);
@@ -2512,15 +2525,43 @@ namespace MinGent
                 if (werr != null) return ToolOutcome.Fail("could not write " + t.Full + ": " + werr);
                 ctx.Session.ReadFiles.Add(t.Full);
             }
+            List<string> kept = new List<string>();
             foreach (string d in deletes)
             {
+                bool fresh = !ctx.Changes.Recorded(d);
                 ctx.Changes.Before(d);
-                if (!RecycleBin.Send(d)) { try { File.Delete(d); } catch (Exception ex) { return ToolOutcome.Fail("could not delete " + d + ": " + ex.Message); } }
+                if (!RecycleBin.Send(d))
+                {
+                    if (fresh) ctx.Changes.Forget(d);
+                    kept.Add(d);
+                    continue;
+                }
                 ctx.Editor.FileChangedOnDisk(d);
             }
+            if (kept.Count > 0)
+                return ToolOutcome.Fail((writes.Count > 0 ? "The other changes in the patch were made, but " : "") + "Windows did not delete " + string.Join(", ", kept.ToArray()) + ". A program may have it open. Close it, or stop the command that uses it, then delete it with delete_file.");
             ToolOutcome o = ToolOutcome.Ok("Applied the patch: " + string.Join("; ", report.ToArray()) + "." + (warnings.Count > 0 ? "\n" + string.Join("\n", warnings.ToArray()) : ""), report.Count == 1 ? report[0] : report.Count + " files");
             o.Paths = paths;
             return o;
+        }
+
+        static string AskDelete(ToolContext ctx, string full)
+        {
+            PermissionState ps = ctx.Session.Perms;
+            if (!ps.Auto || ps.WebGuard && ps.Tainted) return null;
+            string real = AgentPaths.Real(full);
+            bool through = !string.Equals(real, full, StringComparison.OrdinalIgnoreCase);
+            if (AgentPaths.IsInside(full, ctx.Workspace) && (!through || AgentPaths.IsInside(real, AgentPaths.Real(ctx.Workspace)))) return null;
+            PermissionAsk ask = new PermissionAsk();
+            ask.Kind = "write";
+            ask.Category = ctx.Guarded(PermissionCategory.Delete);
+            ask.Title = "Delete a file outside the workspace";
+            ask.High = true;
+            ask.Detail = full + (through ? " (really " + real + ")" : "");
+            ask.Key = "delete:" + full;
+            ask.Reason = "It goes to the Recycle Bin.";
+            if (!ctx.Approve(ask)) return "The user did not allow deleting " + full + ". Do not try another way; ask the user if you need it.";
+            return null;
         }
 
         static bool ApplyHunk(List<string> lines, Hunk h, ref int cursor, out string err)

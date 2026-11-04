@@ -669,6 +669,8 @@ namespace MinGent
             if (k.Kind == Punct)
             {
                 if (k.Text == "]" && (Called(t, i) || GroupCalled(t, i)) && !NumberIndex(t, i)) return Message(Hidden, "a call through a computed name");
+                if (k.Text == "]" && !NumberIndex(t, i) && StoredThenCalled(t, i)) return Message(Hidden, "a call through a computed name");
+                if (k.Text == "[" && i > 0 && t[i - 1].Kind == Punct && (t[i - 1].Text == "{" || t[i - 1].Text == ",") && ComputedPattern(t, i)) return Message(Hidden, "a name taken through a computed key");
                 if (k.Text == "[" && i > 0 && MemberBase(t[i - 1]) && PiecedKey(t, i)) return Message(Hidden, "a name put together from pieces");
                 return null;
             }
@@ -1168,6 +1170,104 @@ namespace MinGent
             int end;
             string c = Chain(t, spans[index].Key, f, out end);
             return end == spans[index].Value ? c : null;
+        }
+
+        static bool Ends(List<Tok> t, int i)
+        {
+            return i + 1 >= t.Count || t[i + 1].Kind == Punct && (t[i + 1].Text == ";" || t[i + 1].Text == "," || t[i + 1].Text == ")" || t[i + 1].Text == "}" || t[i + 1].Text == "]");
+        }
+
+        static bool StoreTarget(List<Tok> t, int at, out string name, out bool member)
+        {
+            name = null;
+            member = false;
+            if (at < 1 || t[at].Kind != Punct || (t[at].Text != "=" && t[at].Text != ":")) return false;
+            Tok target = t[at - 1];
+            if (target.Kind != Ident && !(t[at].Text == ":" && target.Kind == Str)) return false;
+            name = target.Text;
+            member = t[at].Text == ":" || IsMember(t, at - 1);
+            return true;
+        }
+
+        static bool StoredThenCalled(List<Tok> t, int close)
+        {
+            if (!Ends(t, close)) return false;
+            int j = Opener(t, close) - 1;
+            while (j >= 0)
+            {
+                Tok x = t[j];
+                if (x.Kind == Ident || x.Kind == Punct && (x.Text == "." || x.Text == "?.")) { j--; continue; }
+                if (x.Kind == Punct && (x.Text == ")" || x.Text == "]")) { int o = Opener(t, j); if (o < 0) return false; j = o - 1; continue; }
+                break;
+            }
+            string name;
+            bool member, listed = false;
+            if (j >= 0 && t[j].Kind == Punct && (t[j].Text == "[" || t[j].Text == ","))
+            {
+                int depth = 0, open = -1;
+                for (int k = j; k >= 0 && open < 0; k--)
+                {
+                    if (t[k].Kind != Punct) continue;
+                    string x = t[k].Text;
+                    if (x == "]" || x == ")" || x == "}") depth++;
+                    else if (x == "[" || x == "(" || x == "{") { if (depth == 0) open = k; else depth--; }
+                }
+                if (open < 0 || t[open].Text != "[" || (open > 0 && (t[open - 1].Kind == Ident || t[open - 1].Kind == Punct && (t[open - 1].Text == ")" || t[open - 1].Text == "]")))) return false;
+                j = open - 1;
+                listed = true;
+            }
+            if (!StoreTarget(t, j, out name, out member)) return false;
+            if (listed)
+            {
+                for (int c = 0; c + 1 < t.Count; c++)
+                {
+                    if (t[c].Text != name || !(t[c].Kind == Ident || t[c].Kind == Str) || (member ? !IsMember(t, c) : IsMember(t, c)) || !Next(t, c, "[")) continue;
+                    int e = Close(t, c + 1);
+                    if (e + 1 < t.Count && t[e + 1].Kind == Punct && (t[e + 1].Text == "(" || t[e + 1].Text == "?.")) return true;
+                }
+                return false;
+            }
+            List<KeyValuePair<string, bool>> held = new List<KeyValuePair<string, bool>>();
+            held.Add(new KeyValuePair<string, bool>(name, member));
+            for (int round = 0; round < 4; round++)
+            {
+                int had = held.Count;
+                for (int c = 1; c < t.Count; c++)
+                {
+                    if (t[c].Kind != Ident || IsMember(t, c) || !Ends(t, c)) continue;
+                    bool holds = false;
+                    foreach (KeyValuePair<string, bool> h in held) if (!h.Value && h.Key == t[c].Text) holds = true;
+                    string n2;
+                    bool m2;
+                    if (holds && StoreTarget(t, c - 1, out n2, out m2) && !held.Exists(delegate (KeyValuePair<string, bool> h) { return h.Key == n2 && h.Value == m2; }))
+                        held.Add(new KeyValuePair<string, bool>(n2, m2));
+                }
+                if (held.Count == had) break;
+            }
+            for (int c = 0; c < t.Count; c++)
+            {
+                if (!(t[c].Kind == Ident || t[c].Kind == Str) || !(Called(t, c) || GroupCalled(t, c))) continue;
+                foreach (KeyValuePair<string, bool> h in held)
+                    if (h.Key == t[c].Text && (h.Value ? IsMember(t, c) : !IsMember(t, c))) return true;
+            }
+            return false;
+        }
+
+        static bool ComputedPattern(List<Tok> t, int open)
+        {
+            int close = Close(t, open);
+            if (close + 1 >= t.Count || t[close + 1].Kind != Punct || t[close + 1].Text != ":") return false;
+            int depth = 0, brace = -1;
+            for (int k = open - 1; k >= 0 && brace < 0; k--)
+            {
+                if (t[k].Kind != Punct) continue;
+                string x = t[k].Text;
+                if (x == "]" || x == ")" || x == "}") depth++;
+                else if (x == "[" || x == "(" || x == "{") { if (depth == 0) brace = k; else depth--; }
+            }
+            if (brace < 0 || t[brace].Text != "{") return false;
+            int end = Close(t, brace);
+            return end + 1 < t.Count && t[end + 1].Kind == Punct && t[end + 1].Text == "=";
         }
 
         static bool NumberIndex(List<Tok> t, int close)

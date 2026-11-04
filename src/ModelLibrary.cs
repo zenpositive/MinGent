@@ -1007,11 +1007,11 @@ namespace MinGent
         public static string RecommendedBackend(out string why)
         {
             GpuInfo g = BestGpu;
-            if (g == null) { why = "No graphics card found - the CPU build works everywhere."; return "cpu"; }
+            if (g == null) { why = "No graphics card found. The CPU build works on any PC."; return "cpu"; }
             if (!g.Nvidia)
             {
                 List<GpuInfo> vk = UsedBy("vulkan");
-                why = Names(vk, vk.Count > 1) + " - the Vulkan build uses " + (vk.Count > 1 ? "them all." : "it.");
+                why = Names(vk, vk.Count > 1) + ": the Vulkan build uses " + (vk.Count > 1 ? "them all." : "it.");
                 return "vulkan";
             }
             List<GpuInfo> nv = UsedBy("cuda13");
@@ -1027,17 +1027,17 @@ namespace MinGent
             int drv = g.NvidiaDriver;
             if (!old && drv >= 58000)
             {
-                why = names + " with driver " + (drv / 100) + "." + (drv % 100).ToString("00") + " - CUDA 13 is the fastest option.";
+                why = names + " with driver " + (drv / 100) + "." + (drv % 100).ToString("00") + ": CUDA 13 is the fastest option.";
                 return "cuda13";
             }
             if (!old && drv >= 55100)
             {
-                why = names + " - CUDA 12 (update the NVIDIA driver to 580 or newer for CUDA 13).";
+                why = names + ": CUDA 12. Update the NVIDIA driver to 580 or newer for CUDA 13.";
                 return "cuda12";
             }
             string reason = old ? (nv.Count > 1 ? "one of them is an older NVIDIA card" : "an older NVIDIA card")
                           : drv > 0 ? "the NVIDIA driver is older than 551" : "the NVIDIA driver version is unknown";
-            why = names + " - " + reason + ", so the Vulkan build is the safe choice.";
+            why = names + ": " + reason + ", so the Vulkan build is the safe choice.";
             return "vulkan";
         }
     }

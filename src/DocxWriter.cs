@@ -355,8 +355,15 @@ namespace MinGent
             {
                 bool head = r == 0;
                 sb.Append("<w:tr>");
+                int tall = 0;
+                for (int i = 0; i < cols && i < b.Rows[r].Count; i++)
+                {
+                    int perLine = Math.Max(8, widths[i] / 110), n = 0;
+                    foreach (string piece in Plain(b.Rows[r][i]).Split('\n')) n += Math.Max(1, (piece.Length + perLine - 1) / perLine);
+                    tall = Math.Max(tall, n);
+                }
                 if (head) sb.Append("<w:trPr><w:cantSplit/><w:tblHeader/></w:trPr>");
-                else sb.Append("<w:trPr><w:cantSplit/></w:trPr>");
+                else if (tall <= 20) sb.Append("<w:trPr><w:cantSplit/></w:trPr>");
                 for (int i = 0; i < cols; i++)
                 {
                     List<DocSpan> cell = i < b.Rows[r].Count ? b.Rows[r][i] : new List<DocSpan>();

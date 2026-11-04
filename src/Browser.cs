@@ -2216,6 +2216,12 @@ namespace MinGent
             string note;
             string err = WaitNavigation(startCount, 700, 20000, ct, out note);
             if (err != null) return err;
+            return Report(before, done, note, true, ct, out summary);
+        }
+
+        string Report(string before, string done, string note, bool settle, CancelToken ct, out string summary)
+        {
+            summary = null;
             if (userDialogOpen)
             {
                 summary = done + TakeEvents() + " The page is now waiting for the user to answer: \"" + userDialogText + "\". Wait for the user, then call browser_read.";
@@ -2223,9 +2229,9 @@ namespace MinGent
             }
             string happened = TakeEvents();
             string snap;
-            err = Snap(ct, out snap);
+            string err = Snap(ct, out snap);
             if (err != null) return err;
-            snap = SettleChallenge(ct, snap);
+            if (settle) snap = SettleChallenge(ct, snap);
             string now = currentUrl;
             string changed = now != before && now.Length > 0 ? " The browser is now at " + now + note + "." : note.Length > 0 ? note.Trim() : "";
             string dl = "";
@@ -2515,9 +2521,11 @@ namespace MinGent
             host.Invalidate();
         }
 
+        readonly List<Action<bool>> wipeWaiters = new List<Action<bool>>();
+
         public void WipeAll(Action<bool> done)
         {
-            if (wiping) return;
+            if (wiping) { if (done != null) wipeWaiters.Add(done); return; }
             wiping = true;
             BrowserData.Mark(BrowserData.WipeMarker);
             ClosePopups();
@@ -2567,6 +2575,9 @@ namespace MinGent
                         wiping = false;
                         host.Invalidate();
                         if (done != null) done(ok);
+                        List<Action<bool>> waiting = new List<Action<bool>>(wipeWaiters);
+                        wipeWaiters.Clear();
+                        foreach (Action<bool> w in waiting) w(ok);
                         if (Visible && IsHandleCreated && !IsDisposed) CreateView();
                     }));
                 }
@@ -2603,6 +2614,7 @@ namespace MinGent
                 if (err != null) return err;
                 kind = Json.Str(info, "kind") ?? "";
                 sensitive = Json.Bool(info, "sensitive");
+                if (!Json.Bool(info, "captcha")) FrameKind.Inside(info, ref kind, ref sensitive);
                 return null;
             }
         }
@@ -2632,6 +2644,7 @@ namespace MinGent
                     int start = navStarts;
                     double w = Json.Num(info, "w"), h = Json.Num(info, "h");
                     bool plain = mouse.Button == "left" && mouse.Clicks == 1 && mouse.HoldMs == 0 && mouse.CdpModifiers == 0;
+                    bool captcha = Json.Bool(info, "captcha");
                     if (w < 1 || h < 1 || !Json.Bool(info, "inView"))
                     {
                         if (!plain) return r + " is not visible on the screen, so it can't be " + mouse.Describe().ToLowerInvariant() + ". Scroll to it first, or use a plain click.";
@@ -2646,7 +2659,9 @@ namespace MinGent
                         err = Mouse(Json.Num(info, "x"), Json.Num(info, "y"), mouse, ct);
                         if (err != null) return err;
                     }
-                    return AfterAction(start, before, ct, mouse.Describe() + " " + r + (name.Length > 0 ? " (" + Clip(name, 60) + ")" : "") + ".", out summary);
+                    string clickedRef = mouse.Describe() + " " + r + (name.Length > 0 ? " (" + Clip(name, 60) + ")" : "") + ".";
+                    if (captcha) return CaptchaAfter(start, before, true, false, clickedRef, ct, out summary);
+                    return AfterAction(start, before, ct, clickedRef, out summary);
                 }
                 finally { Busy(false); }
             }
@@ -2671,28 +2686,155 @@ namespace MinGent
             {
                 err = ShotCheck(x, y);
                 if (err != null) return err;
-                object v;
-                err = Js("(" + BrowserScripts.Point + ")(" + PageX(x).ToString("0.##", CultureInfo.InvariantCulture) + "," + PageY(y).ToString("0.##", CultureInfo.InvariantCulture) + ")", ct, out v);
-                if (err != null)
-                {
-                    if (userDialogOpen) return err;
-                    sensitive = true;
-                    kind = "a spot MinGent could not check";
-                    return null;
-                }
-                if (Json.Bool(v, "frame"))
-                {
-                    string boxed = FrameKind.Of(Json.Str(v, "src"));
-                    if (boxed != null) { sensitive = true; kind = boxed; }
-                    else FrameKind.Inside(v, ref kind, ref sensitive);
-                    return null;
-                }
-                sensitive = Json.Bool(v, "sensitive");
-                kind = Clip(Json.Str(v, "name") ?? "", 60);
-                if (kind.Length == 0) kind = Clip((Json.Str(v, "tag") ?? "element").ToLowerInvariant(), 30);
-                FrameKind.Inside(v, ref kind, ref sensitive);
+                return KindAt(PageX(x), PageY(y), ct, out kind, out sensitive);
+            }
+        }
+
+        string KindAt(double cssX, double cssY, CancelToken ct, out string kind, out bool sensitive)
+        {
+            kind = "";
+            sensitive = false;
+            object v;
+            string err = Js("(" + BrowserScripts.Point + ")(" + cssX.ToString("0.##", CultureInfo.InvariantCulture) + "," + cssY.ToString("0.##", CultureInfo.InvariantCulture) + ")", ct, out v);
+            if (err != null)
+            {
+                if (userDialogOpen) return err;
+                sensitive = true;
+                kind = "a spot MinGent could not check";
                 return null;
             }
+            if (Json.Bool(v, "frame"))
+            {
+                string boxed = FrameKind.Of(Json.Str(v, "src"));
+                if (boxed != null) { sensitive = true; kind = boxed; }
+                else FrameKind.Inside(v, ref kind, ref sensitive);
+                return null;
+            }
+            sensitive = Json.Bool(v, "sensitive");
+            kind = Clip(Json.Str(v, "name") ?? "", 60);
+            if (kind.Length == 0) kind = Clip((Json.Str(v, "tag") ?? "element").ToLowerInvariant(), 30);
+            FrameKind.Inside(v, ref kind, ref sensitive);
+            return null;
+        }
+
+        const int CaptchaGapMs = 350;
+
+        public string CaptchaClick(List<double[]> points, MouseSpec mouse, CancelToken ct, out string summary, out bool submitted)
+        {
+            summary = null;
+            submitted = false;
+            if (points == null || points.Count == 0) return "no positions to click";
+            string err = Ensure(ct);
+            if (err != null) return err;
+            if (mouse == null) mouse = new MouseSpec();
+            lock (opLock)
+            {
+                Reveal();
+                Busy(true);
+                try
+                {
+                    ArmEvents(ct);
+                    string before = currentUrl, stopped = null;
+                    int start = navStarts, clicked = 0;
+                    bool slow = false;
+                    for (int i = 0; i < points.Count; i++)
+                    {
+                        double x = points[i][0], y = points[i][1];
+                        if (i > 0 && !ct.Sleep(CaptchaGapMs)) return "stopped by the user";
+                        err = navStarts != start || loading ? "the page changed" : ShotCheck(x, y);
+                        if (err != null)
+                        {
+                            if (i == 0) return err;
+                            stopped = err;
+                            break;
+                        }
+                        double px = PageX(x), py = PageY(y);
+                        if (i > 0)
+                        {
+                            string kind;
+                            bool sens;
+                            if (KindAt(px, py, ct, out kind, out sens) != null || !kind.StartsWith("a CAPTCHA box", StringComparison.Ordinal))
+                            {
+                                stopped = Spot(x, y) + " was no longer inside the CAPTCHA";
+                                break;
+                            }
+                        }
+                        if (!slow && ButtonArea(px, py, ct)) slow = submitted = true;
+                        PointAt(px, py, true, false, ct);
+                        err = Mouse(px, py, mouse, ct);
+                        if (err != null) return clicked > 0 ? "Clicked " + clicked + " of " + points.Count + " spots in the CAPTCHA, then: " + err : err;
+                        clicked++;
+                    }
+                    string done = points.Count == 1 ? mouse.Describe() + " at " + Spot(points[0][0], points[0][1]) + " in the CAPTCHA." :
+                                  clicked == points.Count ? "Clicked the " + clicked + " spots in the CAPTCHA, in order." :
+                                  "Clicked " + clicked + " of the " + points.Count + " spots in the CAPTCHA, in order. Then " + stopped + ", so the rest were not clicked.";
+                    return CaptchaAfter(start, before, slow, true, done, ct, out summary);
+                }
+                finally { Busy(false); }
+            }
+        }
+
+        static string Spot(double x, double y)
+        {
+            return Math.Round(x).ToString(CultureInfo.InvariantCulture) + ", " + Math.Round(y).ToString(CultureInfo.InvariantCulture);
+        }
+
+        bool ButtonArea(double cssX, double cssY, CancelToken ct)
+        {
+            object v;
+            if (Js("(" + BrowserScripts.CaptchaRect + ")()", ct, out v) != null || !Json.Bool(v, "found")) return true;
+            double x = Json.Num(v, "x"), y = Json.Num(v, "y"), w = Json.Num(v, "w"), h = Json.Num(v, "h");
+            if (cssX < x || cssX > x + w || cssY < y || cssY > y + h) return true;
+            return cssY >= y + h - 90;
+        }
+
+        string CaptchaAfter(int start, string before, bool slow, bool lean, string done, CancelToken ct, out string summary)
+        {
+            summary = null;
+            bool navigated;
+            Stopwatch clock = Stopwatch.StartNew();
+            bool still = CaptchaSettle.Wait(slow,
+                delegate { return navStarts != start || loading; },
+                delegate { return userDialogOpen; },
+                delegate { return CaptchaPixels(ct); },
+                delegate (int ms) { return ct.Sleep(ms); },
+                delegate { return clock.Elapsed.TotalMilliseconds; },
+                out navigated);
+            if (ct.IsCancelled) return "stopped by the user";
+            if (!still) done += " The CAPTCHA was still changing after " + (CaptchaSettle.MaxMs / 1000) + " seconds.";
+            string note = "";
+            if (navigated)
+            {
+                string err = WaitNavigation(start, 0, 20000, ct, out note);
+                if (err != null) return err;
+            }
+            else if (lean && !userDialogOpen && CaptchaOpen(ct))
+            {
+                summary = done + TakeEvents();
+                return null;
+            }
+            return Report(before, done, note, false, ct, out summary);
+        }
+
+        string CaptchaPixels(CancelToken ct)
+        {
+            object v;
+            if (Js("(" + BrowserScripts.CaptchaRect + ")()", ct, out v) != null || !(v is Dictionary<string, object>)) return null;
+            double x = Json.Num(v, "x"), y = Json.Num(v, "y"), w = Json.Num(v, "w"), h = Json.Num(v, "h"), vw = Json.Num(v, "vw"), vh = Json.Num(v, "vh");
+            double cx = Math.Max(0, x - 8), cy = Math.Max(0, y - 8);
+            double cw = Math.Min(vw - cx, w + 16), ch = Math.Min(vh - cy, h + 16);
+            if (cw < 8 || ch < 8) return null;
+            double scale = Math.Min(1.0, 240.0 / Math.Max(cw, ch));
+            object res;
+            if (CdpCall("Page.captureScreenshot", Json.O("format", "jpeg", "quality", 50,
+                "clip", Json.O("x", cx + Json.Num(v, "sx"), "y", cy + Json.Num(v, "sy"), "width", cw, "height", ch, "scale", scale)), ct, out res) != null) return null;
+            return Math.Round(cx) + "," + Math.Round(cy) + "," + Math.Round(cw) + "," + Math.Round(ch) + ":" + (Json.Str(res, "data") ?? "");
+        }
+
+        bool CaptchaOpen(CancelToken ct)
+        {
+            object v;
+            return Js("(" + BrowserScripts.CaptchaRect + ")()", ct, out v) == null && Json.Bool(v, "found");
         }
 
         public string ClickAt(double x, double y, MouseSpec mouse, CancelToken ct, out string summary)
@@ -2792,6 +2934,18 @@ namespace MinGent
                     string from, to;
                     err = Point(fromRef, fromX, fromY, ct, out ax, out ay, out from);
                     if (err != null) return err;
+                    bool captcha = false;
+                    if (string.IsNullOrEmpty(fromRef))
+                    {
+                        string fk;
+                        bool fs;
+                        captcha = KindAt(ax, ay, ct, out fk, out fs) == null && fk.StartsWith("a CAPTCHA box", StringComparison.Ordinal);
+                    }
+                    else
+                    {
+                        Dictionary<string, object> fi;
+                        captcha = Prep(NormRef(fromRef), false, ct, out fi) == null && Json.Bool(fi, "captcha");
+                    }
                     if (!string.IsNullOrEmpty(fromRef))
                     {
                         Dictionary<string, object> info;
@@ -2836,6 +2990,7 @@ namespace MinGent
                     string up = CdpCall("Input.dispatchMouseEvent", Json.O("type", "mouseReleased", "x", bx, "y", by, "button", "left", "buttons", 0, "clickCount", 1), ct, out res);
                     if (err != null) return err;
                     if (up != null) return up;
+                    if (captcha) return CaptchaAfter(start, before, true, string.IsNullOrEmpty(fromRef), "Dragged from " + from + " to " + to + ".", ct, out summary);
                     return AfterAction(start, before, ct, "Dragged from " + from + " to " + to + ".", out summary);
                 }
                 finally { Busy(false); }
@@ -2927,6 +3082,17 @@ namespace MinGent
                     if (err != null) return err;
                     if (Json.Str(v, "err") == "stale") return r + " is no longer on the page. Call browser_read to get fresh refs.";
                     if (!Json.Bool(v, "ok") && Json.Bool(info, "sensitive")) return "the cursor did not land in " + r + " (the page moved it elsewhere), so nothing was typed. Call browser_read and try again.";
+                    if (!Json.Bool(info, "sensitive") && !string.IsNullOrEmpty(text))
+                    {
+                        object fv;
+                        if (Js("(" + BrowserScripts.Focused + ")()", ct, out fv) == null && !Json.Bool(fv, "none"))
+                        {
+                            string fk = Json.Str(fv, "kind") ?? "";
+                            bool fs = Json.Bool(fv, "sensitive") || Json.Bool(fv, "frame");
+                            FrameKind.Inside(fv, ref fk, ref fs);
+                            if (fs) return "the click on " + r + " put the cursor in " + (Json.Bool(fv, "frame") ? "a field inside a frame from another site" : fk.Length > 0 ? (fk.StartsWith("a ", StringComparison.Ordinal) ? fk : "a " + fk + " field") : "a sensitive field") + ", so nothing was typed. Type into that field by its own ref from browser_read, so MinGent can ask the user first.";
+                        }
+                    }
                     if (!string.IsNullOrEmpty(text))
                     {
                         err = InsertText(text, ct);
@@ -3092,7 +3258,7 @@ namespace MinGent
                     object v;
                     err = Js("(" + BrowserScripts.CaptchaRect + ")()", ct, out v);
                     if (err != null) return err;
-                    if (!(v is Dictionary<string, object>)) return null;
+                    if (!(v is Dictionary<string, object>) || !Json.Bool(v, "found")) return null;
                     double x = Json.Num(v, "x"), y = Json.Num(v, "y"), w = Json.Num(v, "w"), h = Json.Num(v, "h"), vw = Json.Num(v, "vw"), vh = Json.Num(v, "vh");
                     const double pad = 12;
                     double cx = Math.Max(0, x - pad), cy = Math.Max(0, y - pad);
@@ -3538,6 +3704,35 @@ namespace MinGent
             string url = currentUrl;
             if (!consoleOn || !(ThisPc(url) || SameHost(HostOf(url), agentSite))) { consoleLog.SkipNews(); return null; }
             return consoleLog.News();
+        }
+    }
+
+    static class CaptchaSettle
+    {
+        public const int MaxMs = 4000, StillMs = 400, PollMs = 100, QuietMs = 2500;
+
+        public static int Least(bool slow) { return slow ? 1200 : 600; }
+
+        public static bool Wait(bool slow, Func<bool> navigation, Func<bool> interrupted, Func<string> look, Func<int, bool> sleep, Func<double> clock, out bool navigated)
+        {
+            navigated = false;
+            double began = clock(), changed = began;
+            string first = null, last = null;
+            bool seen = false, moved = false;
+            while (true)
+            {
+                if (navigation()) { navigated = true; return true; }
+                if (interrupted()) return true;
+                string now = look();
+                double t = clock(), gone = t - began;
+                if (!seen) { first = now; last = now; seen = true; changed = t; }
+                else if (now != last) { last = now; changed = t; moved = moved || now != first; }
+                bool settled = gone >= Least(slow) && t - changed >= StillMs;
+                if (settled && (!slow || moved)) return true;
+                if (slow && !moved && gone >= QuietMs) return true;
+                if (gone >= MaxMs) return false;
+                if (!sleep(PollMs)) return true;
+            }
         }
     }
 

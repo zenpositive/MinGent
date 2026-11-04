@@ -687,7 +687,7 @@ namespace MinGent
             {
                 bannerMode = "setup";
                 banner.Visible = true;
-                bannerText.Text = "The built-in engine runs GGUF models on this PC. It is llama.cpp " + Engine.BuildVersion + " from GitHub, checked against SHA-256 checksums built into MinGent, and it only listens on this PC.\nRecommended for this PC: " + (b != null ? b.Title + " (about " + ModelCatalog.Size(b.ApproxBytes) + ")" : rec) + ".";
+                bannerText.Text = "The built-in engine runs models on this PC: llama.cpp " + Engine.BuildVersion + " from GitHub, checked against checksums built into MinGent.\nRecommended for this PC: " + (b != null ? b.Title + " (about " + ModelCatalog.Size(b.ApproxBytes) + ")" : rec) + ".";
                 bannerButton.Text = "Set up the engine";
                 bannerButton.Visible = true;
             }
@@ -1282,7 +1282,7 @@ namespace MinGent
 
         void UpdateFooter()
         {
-            footer.Text = "Downloads come from huggingface.co and are checked against their published SHA-256 checksums when the site lists one. New models are saved in " + ModelLibrary.OwnRoot + ".";
+            footer.Text = "Downloads come from huggingface.co and are checked against its checksums when it lists them. New models are saved in " + ModelLibrary.OwnRoot + ".";
         }
 
         void ChooseFolder()

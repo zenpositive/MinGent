@@ -2426,6 +2426,7 @@ namespace MinGent
             PermissionAsk ask = new PermissionAsk();
             ask.Kind = "app";
             ask.Category = ctx.Guarded(PermissionCategory.Credentials);
+            ask.High = true;
             ask.Title = "Paste your clipboard into \"" + (w.Title.Length > 0 ? w.Title : w.Process) + "\"";
             ask.Detail = w.Process;
             ask.Key = "paste:app:" + w.Process.ToLowerInvariant();

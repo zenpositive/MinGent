@@ -1259,7 +1259,7 @@ namespace MinGent
             {
                 DrawOp more = new DrawOp();
                 more.Kind = DrawOp.KText;
-                more.Text = "(" + (lines.Length - maxLines) + " more lines - use Copy to get all of it)";
+                more.Text = "(" + (lines.Length - maxLines) + " more lines; Copy gets all of it)";
                 more.NoSelect = true;
                 more.Font = f.Small;
                 more.Role = DrawOp.RDim;

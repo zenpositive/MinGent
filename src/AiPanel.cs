@@ -76,7 +76,7 @@ namespace MinGent
         readonly List<UiEvent> queue = new List<UiEvent>();
         readonly Dictionary<string, ChatItem> toolItems = new Dictionary<string, ChatItem>();
         readonly Dictionary<string, KeyValuePair<DateTime, string>> titleCache = new Dictionary<string, KeyValuePair<DateTime, string>>(StringComparer.OrdinalIgnoreCase);
-        Action afterStop;
+        readonly List<Action> afterStop = new List<Action>();
 
         public event EventHandler NotesClicked, BrowserClicked, ChatsChanged, StateChanged;
 
@@ -463,7 +463,7 @@ namespace MinGent
             {
                 settings.AiPlanExplained = true;
                 settings.Save();
-                Notice("Plan is on: the agent reads and researches, then shows you a plan for every task. Nothing changes until you approve it. With Plan off, the agent decides by itself when a job is big or risky enough to show you a plan first. Shift+Tab in the message box turns Plan on or off.", 0);
+                Notice("Plan is on: the agent researches, then shows you a plan before it changes anything. With Plan off, it decides by itself when a task needs one. Shift+Tab turns Plan on or off.", 0);
             }
         }
 
@@ -471,7 +471,7 @@ namespace MinGent
 
         void SetAuto(bool on) { SetLevel(on ? "auto" : "ask"); }
 
-        const string LocalFullAutoNote = "With a local model this is riskier: smaller models are easier for a web page to trick and make more mistakes. For Full auto, a frontier model such as Claude, GPT or Gemini is the safer choice.";
+        const string LocalFullAutoNote = "With a local model this is riskier: smaller models make more mistakes and are easier for a web page to trick. A cloud model such as Claude, GPT or Gemini is the safer choice.";
 
         bool LocalModelPicked()
         {
@@ -489,9 +489,9 @@ namespace MinGent
             if (lv == "full" && level != "full" && !settings.AiFullExplained)
             {
                 Form f = FindForm();
-                bool yes = Alert.Ask(f, th, "Full auto asks you nothing. The agent can install software, delete files, change settings, press buy buttons and run any command without your OK, also when a web page tries to trick it.\n\n" +
+                bool yes = Alert.Ask(f, th, "Full auto asks you nothing. The agent can install software, delete files, change settings, press buy buttons and run any command without your OK, even when a web page tries to trick it.\n\n" +
                                             (LocalModelPicked() ? LocalFullAutoNote + "\n\n" : "") +
-                                            "Its file tools still never write into Windows, Program Files or MinGent's own data, and it never sends your saved API keys to a website. Full auto goes back to Auto when you close MinGent.\n\nOnly use it for work you trust.",
+                                            "Its file tools still never write into Windows, Program Files or MinGent's own data, and it never sends your API keys to a website. Full auto turns back into Auto when MinGent closes.\n\nOnly use it for work you trust.",
                                      Program.AppName, "Turn on Full auto");
                 if (!yes) { composer.Level = level; return; }
                 settings.AiFullExplained = true;
@@ -507,18 +507,15 @@ namespace MinGent
             {
                 settings.AiAutoExplained = true;
                 settings.Save();
-                Notice("Auto is on: the agent edits files, runs commands and browses without asking. It still asks before risky actions (installing software, starting other programs, wide deletes, system changes, passwords and payments), " +
-                       (settings.AiWebGuard ? "and before commands once it has read web content. " : "") + "You can choose what Auto asks about in Settings > Safety. Ctrl+Z or the Undo link reverts file changes.", 0);
+                Notice("Auto is on: the agent edits files, runs commands and browses without asking. It still asks before risky steps like installing software, wide deletes, system changes, passwords and payments" +
+                       (settings.AiWebGuard ? ", and before commands once it has read web content" : "") + ". You choose what Auto asks about in Settings > Safety, and Undo under a reply reverts file changes.", 0);
             }
             if (lv == "full" && was != "full")
-                Notice("Full auto is on: the agent asks nothing until you switch it back (click the red switch). It goes back to Auto when you close MinGent." + (LocalModelPicked() ? " " + LocalFullAutoNote : ""), 2);
+                Notice("Full auto is on: the agent asks nothing. Click the red switch to turn it off; it also turns back into Auto when MinGent closes." + (LocalModelPicked() ? " " + LocalFullAutoNote : ""), 2);
             ChatItem pending = chat.PendingPermission();
             if (pending == null || lv == "ask" || pending.Ask.EvenInFull) return;
             if (lv == "full") { chat.Resolve(pending, pending.Ask.Never ? PermissionDecision.Deny : PermissionDecision.Allow); return; }
-            bool allowedCategory = !pending.Ask.Never && session.Perms.AutoAllows(pending.Ask.Category);
-            if (allowedCategory || (!pending.Ask.High && pending.Ask.Kind != "read" && pending.Ask.Kind != "web" && pending.Ask.Kind != "console" &&
-                !(session.Perms.WebGuard && session.Perms.Tainted && (pending.Ask.Kind == "command" || pending.Ask.Kind == "write"))))
-                chat.Resolve(pending, PermissionDecision.Allow);
+            if (session.Perms.AutoWouldAllow(pending.Ask)) chat.Resolve(pending, PermissionDecision.Allow);
         }
 
         void Notice(string text, int level)
@@ -881,8 +878,8 @@ namespace MinGent
                 r = AutoRef(snap);
                 if (r.Length == 0)
                     return Engine.Instance.Installed
-                        ? "No model is set up yet. Open the model library to download one that runs on this PC, or add an API key in Settings."
-                        : "No model is set up yet. Open the model library to set up the built-in engine and download a model (free, runs on this PC), or add an API key in Settings.";
+                        ? "No model is set up yet. Download one from the model library, or add an API key in Settings."
+                        : "No model is set up yet. Download a free model from the model library, or add an API key in Settings.";
             }
             string provider = r.Substring(0, r.IndexOf(':') > 0 ? r.IndexOf(':') : r.Length);
             bool cloud = ModelEntry.IsCloud(provider);
@@ -898,7 +895,7 @@ namespace MinGent
             if (provider == "lmstudio")
             {
                 if (!ps.Reachable)
-                    return "LM Studio's server is not running. Open LM Studio, go to the Developer tab and start the server - or pick another model.";
+                    return "LM Studio's server isn't running. Start it in LM Studio's Developer tab, or pick another model.";
                 if (ps.NeedsKey) return "LM Studio asks for an API token. Add it in Settings (Models > LM Studio API token).";
                 ModelEntry m = snap.Find(r);
                 if (m == null && r == "lmstudio:")
@@ -911,7 +908,7 @@ namespace MinGent
                         foreach (ModelEntry e in snap.Models) if (e.Provider == "lmstudio") { count++; if (count == 1) m = e; }
                         if (count != 1) m = null;
                     }
-                    if (m == null) return "No model is loaded in LM Studio. Choose one from the model menu at the top of this panel and MinGent will load it.";
+                    if (m == null) return "No model is loaded in LM Studio. Pick one from the model menu at the top and MinGent loads it.";
                 }
                 if (m == null) return "That model is no longer in LM Studio. Choose another one from the model menu.";
                 if (!m.Loaded)
@@ -1524,7 +1521,7 @@ namespace MinGent
                         sess.FrozenKey = key;
                     }
                     string system = sess.FrozenSystem;
-                    if (cfg.ContextTokens < 16000 && m.Provider == "lmstudio") ui.Notice("This model is loaded with a small context window (" + (cfg.ContextTokens / 1024) + "K tokens), so the agent can only keep a little of the conversation in mind and the browser tools are off. Load it with 32K or more for agent work (Settings > Models).", 1);
+                    if (cfg.ContextTokens < 16000 && m.Provider == "lmstudio") ui.Notice("This model is loaded with a small context (" + (cfg.ContextTokens / 1024) + "K tokens), so the agent keeps little of the chat in mind and the browser tools are off. Load it with 32K or more for agent work (Settings > Models).", 1);
                     ui.Model(m);
                     if (!cfg.Vision && msg.Images != null && msg.Images.Count > 0)
                         ui.Notice(m.Display + " can't see pictures, so " + (msg.Images.Count == 1 ? "the picture" : "the pictures") + " in your message did not reach it. Pick a model that can (marked with an eye in the model list), or describe what it shows.", 1);
@@ -1663,14 +1660,9 @@ namespace MinGent
             PerformLayout();
             Form f = FindForm();
             if (f != null && Form.ActiveForm != f) FlashTaskbar(f);
-            FlushQueue(!failed && !stopped && afterStop == null);
+            FlushQueue(!failed && !stopped && afterStop.Count == 0);
             if (StateChanged != null) StateChanged(this, EventArgs.Empty);
-            if (afterStop != null && !running)
-            {
-                Action a = afterStop;
-                afterStop = null;
-                a();
-            }
+            if (!running) RunAfterStop();
         }
 
         void Retry(Msg msg, string why)
@@ -2228,7 +2220,7 @@ namespace MinGent
             if (t.Length < 80 || t.EndsWith("?") || PlanStep.Matches(t).Count < 2) return;
             UserQuestion q = new UserQuestion();
             q.Title = "Ready to start?";
-            q.Detail = composer.Auto ? "Nothing has been changed yet. Auto is on, so the agent will only ask before risky steps." : "Nothing has been changed yet. Start keeps asking before commands and web access; Auto only asks before risky steps.";
+            q.Detail = composer.Auto ? "Nothing has been changed yet. Auto is on, so the agent will only ask before risky steps." : "Nothing has been changed yet. Start still asks before commands and web access; Auto only asks before risky steps.";
             q.PlanApproval = true;
             q.Options.Add(PresentPlanTool.Start);
             if (!composer.Auto) q.Options.Add(PresentPlanTool.StartAuto);
@@ -2362,6 +2354,7 @@ namespace MinGent
                 Directory.CreateDirectory(ChatDir);
                 string target = FreeName(ChatDir, Path.GetFileName(path));
                 File.Move(path, target);
+                try { File.SetLastWriteTimeUtc(target, DateTime.UtcNow); } catch { }
                 titleCache.Remove(path);
                 NotesChanged();
                 Changed();
@@ -2416,10 +2409,11 @@ namespace MinGent
                 liveRun = -1;
                 composer.Running = false;
             }
+            compacting = false;
             AppHighlight.Hide();
             lock (qGate) queue.Clear();
             queued.Clear();
-            afterStop = null;
+            if (afterStop.Count > 0 && IsHandleCreated) BeginInvoke((MethodInvoker)RunAfterStop);
             curActivity = null;
             session = new AgentSession();
             approveNext = false;
@@ -2453,7 +2447,6 @@ namespace MinGent
             UpdateTemporaryUi();
             curTurn = turnCounter = 0;
             composer.ClearUsage();
-            composer.ClearAttachments();
             composer.Prompt = null;
             afterRunHint = null;
             composer.Invalidate();
@@ -2476,15 +2469,25 @@ namespace MinGent
                 new string[] { "Stop it", "Keep working" }, new DialogResult[] { DialogResult.Yes, DialogResult.No }, 0, 1);
             if (r != DialogResult.Yes) return;
             if (!running) { act(); return; }
-            afterStop = act;
+            afterStop.Add(act);
             Stop();
         }
 
         public void StopThen(Action act)
         {
             if (!running) { act(); return; }
-            afterStop = act;
+            afterStop.Add(act);
             Stop();
+        }
+
+        void RunAfterStop()
+        {
+            while (afterStop.Count > 0 && !running)
+            {
+                Action a = afterStop[0];
+                afterStop.RemoveAt(0);
+                a();
+            }
         }
 
         public void NewChat()
@@ -2503,20 +2506,33 @@ namespace MinGent
         public void OpenChat(string path)
         {
             if (string.Equals(path, chatFile, StringComparison.OrdinalIgnoreCase)) { composer.FocusInput(); return; }
+            WhenIdle("open the other chat", delegate { Open(path); });
+        }
+
+        public void OpenArchived(string path, Action restored)
+        {
             WhenIdle("open the other chat", delegate
             {
-                SaveChat();
-                if (!File.Exists(path)) { Changed(); return; }
-                LoadChat(path);
-                settings.AiLastChat = Path.GetFileName(path);
-                settings.Save();
-                host.ResetBrowser();
-                UpdateEmptyState();
-                PerformLayout();
-                Invalidate();
-                Changed();
-                composer.FocusInput();
+                string back = RestoreChat(path);
+                if (back == null) { Changed(); return; }
+                if (restored != null) restored();
+                Open(back);
             });
+        }
+
+        void Open(string path)
+        {
+            SaveChat();
+            if (!File.Exists(path)) { Changed(); return; }
+            LoadChat(path);
+            settings.AiLastChat = Path.GetFileName(path);
+            settings.Save();
+            host.ResetBrowser();
+            UpdateEmptyState();
+            PerformLayout();
+            Invalidate();
+            Changed();
+            composer.FocusInput();
         }
 
         public string ChatTitleOf(string path)
@@ -3487,7 +3503,7 @@ namespace MinGent
             chat.Add(curActivity);
             chat.ScrollToEnd();
             composer.Running = true;
-            composer.Prompt = "Compacting - a message you send now goes out when it finishes";
+            composer.Prompt = "Compacting the chat. A message you send now goes out when it's done";
             compacting = true;
             UpdateQueueNotes();
             SetPhase("Compacting the conversation");
@@ -3563,14 +3579,9 @@ namespace MinGent
             else if (!did) Notice("There's nothing older to summarize yet.", 0);
             SaveChat();
             PerformLayout();
-            FlushQueue(!stopped && afterStop == null);
+            FlushQueue(!stopped && afterStop.Count == 0);
             if (StateChanged != null) StateChanged(this, EventArgs.Empty);
-            if (afterStop != null && !running)
-            {
-                Action a = afterStop;
-                afterStop = null;
-                a();
-            }
+            if (!running) RunAfterStop();
         }
 
         public void SettingsChanged()
@@ -3588,6 +3599,12 @@ namespace MinGent
         public void Shutdown()
         {
             if (running && cancel != null) cancel.Cancel();
+            while (afterStop.Count > 0)
+            {
+                Action a = afterStop[0];
+                afterStop.RemoveAt(0);
+                try { a(); } catch { }
+            }
             pump.Stop();
             try { DiscardTemporary(); } catch { }
         }
@@ -4089,8 +4106,8 @@ namespace MinGent
         public int FileCount { get { return attachments.Count - PictureCount; } }
         public bool ShowEffort;
         const string IdleCue = "Ask anything, or describe a task";
-        const string PlanCue = "Describe the task - the agent researches and shows you a plan first";
-        const string BusyCue = "Send a message - the agent reads it at its next step";
+        const string PlanCue = "Describe the task, and the agent shows you a plan first";
+        const string BusyCue = "Send a message, and the agent reads it at its next step";
         string prompt;
 
         public string Prompt
@@ -4136,8 +4153,8 @@ namespace MinGent
             auto.DangerText = "Full auto";
             auto.MenuRequested += delegate { ShowLevelMenu(); };
             auto.MouseUp += delegate { if (menuClosedByAuto) BeginInvoke(new Action(delegate { menuClosedByAuto = false; })); };
-            tip.SetToolTip(auto, "Auto: the agent acts without asking, except for what you chose in Settings > Safety.\nOff: it asks before commands, web access and changes outside the workspace.\nThe arrow opens Full auto, which asks nothing.");
-            tip.SetToolTip(plan, "Plan first: the agent only reads and researches, then shows you a plan.\nNothing changes until you approve it. Shift+Tab turns it on or off.");
+            tip.SetToolTip(auto, "Auto: the agent acts without asking, except for what you chose in Settings > Safety.\nOff: it asks before commands, web access and changes outside the work folder.\nThe arrow has Full auto, which asks nothing.");
+            tip.SetToolTip(plan, "Plan first: the agent researches and shows you a plan before it changes anything.\nShift+Tab turns it on or off.");
             tip.SetToolTip(Model, "Choose the model");
             auto.Changed += delegate { if (AutoChanged != null) AutoChanged(auto.On); };
             plan.Changed += delegate { UpdateCue(); PerformLayout(); if (PlanChanged != null) PlanChanged(plan.On); };
@@ -4177,7 +4194,7 @@ namespace MinGent
             ContextMenuStrip m = Menus.Create(th);
             m.Items.Add(Menus.Detail("Ask", "asks before commands, web and outside changes", cur == "ask", delegate { if (LevelChosen != null) LevelChosen("ask"); }));
             m.Items.Add(Menus.Detail("Auto", "asks only about what you chose", cur == "auto", delegate { if (LevelChosen != null) LevelChosen("auto"); }));
-            ToolStripMenuItem full = Menus.Detail("Full auto", "asks nothing - dangerous", cur == "full", delegate { if (LevelChosen != null) LevelChosen("full"); });
+            ToolStripMenuItem full = Menus.Detail("Full auto", "asks nothing, risky", cur == "full", delegate { if (LevelChosen != null) LevelChosen("full"); });
             full.ForeColor = th.HighContrast ? th.Fore : th.Error;
             m.Items.Add(full);
             m.Items.Add(new ToolStripSeparator());
@@ -4278,14 +4295,6 @@ namespace MinGent
             DropThumbs();
             Relayout();
             return l;
-        }
-
-        public void ClearAttachments()
-        {
-            if (attachments.Count == 0) return;
-            attachments.Clear();
-            DropThumbs();
-            Relayout();
         }
 
         public void RemoveAttachment(int i)

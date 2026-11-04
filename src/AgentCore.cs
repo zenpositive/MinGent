@@ -11,7 +11,7 @@ namespace MinGent
     class TabInfo
     {
         public string Key = "", Title = "", Path;
-        public bool Modified, Active, Untitled;
+        public bool Modified, Active, Untitled, TooLarge;
         public long Version;
         public string Text, Eol = "\r\n";
         public int Lines;
@@ -80,6 +80,7 @@ namespace MinGent
         string OpenSearch(string url, CancelToken ct, out string html, out string finalUrl);
         string ClickElement(string refId, MouseSpec mouse, CancelToken ct, out string summary);
         string ClickAt(double x, double y, MouseSpec mouse, CancelToken ct, out string summary);
+        string CaptchaClick(List<double[]> points, MouseSpec mouse, CancelToken ct, out string summary, out bool submitted);
         string Hover(string refId, double x, double y, CancelToken ct, out string summary);
         string Drag(string fromRef, double fromX, double fromY, string toRef, double toX, double toY, CancelToken ct, out string summary);
         string TypeText(string refId, string text, bool submit, bool clear, CancelToken ct, out string summary);
@@ -145,14 +146,14 @@ namespace MinGent
             {
                 case Install: return "pip, npm, winget, dotnet tools, installers, npx and docker run, and downloads of programs or runtimes.";
                 case Launch: return "Opening apps, files and web pages in other programs, and controlling programs that aren't part of the work.";
-                case Delete: return "Recursive deletes outside the work folder, emptying folders, links to other folders, mirroring with robocopy.";
-                case System: return "Registry, services, scheduled tasks, firewall and antivirus settings, user accounts, admin rights, encoded or generated code.";
-                case Credentials: return "Reading key and password files, credential stores, pasting your clipboard into web pages, MinGent's settings and chats.";
+                case Delete: return "Deleting, replacing or moving files outside the work folder, emptying the work folder, throwing away git changes, links to other folders, robocopy /MIR.";
+                case System: return "Registry, services, scheduled tasks, firewall and antivirus settings, user accounts, admin rights, and commands hidden in encoded or generated text.";
+                case Credentials: return "Reading or changing key and password files and credential stores, pasting your clipboard into web pages, MinGent's settings and chats.";
                 case Publish: return "Uploading files, publishing packages, force-pushing and resetting git history.";
                 case Remote: return "Commands that may change a server the agent reached with ssh, or Linux in WSL. Commands that only look around (ls, cat, logs, status) don't ask.";
                 case BrowserSensitive: return "Buy, pay and delete-account buttons, and password or payment fields, in the browser and in programs.";
                 case Downloads: return "Files the browser would save that can run code: programs, scripts and archives.";
-                case Console: return "JavaScript the agent runs in a page to look into it or debug it, like code typed into the developer tools. On a website that code can do anything you can do there.";
+                case Console: return "JavaScript the agent runs in a page to debug it, like code typed into the developer tools. On a website it can do anything you can do there.";
             }
             return "";
         }
@@ -279,7 +280,7 @@ namespace MinGent
         [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
         static extern uint GetLongPathName(string shortPath, StringBuilder longPath, uint size);
 
-        static string LongForm(string full)
+        internal static string LongForm(string full)
         {
             if (!IsWindows || full.IndexOf('~') < 0) return full;
             try
@@ -579,6 +580,15 @@ namespace MinGent
         public bool Full { get { return Mode == "full"; } }
         volatile string[] autoAllows = new string[0];
         public void SetAutoAllows(IEnumerable<string> categories) { autoAllows = new List<string>(categories ?? new string[0]).ToArray(); }
+        public bool AutoWouldAllow(PermissionAsk ask)
+        {
+            if (ask == null || ask.Never || ask.EvenInFull || !Auto) return false;
+            if (AutoAllows(ask.Category)) return true;
+            string k = ask.Kind;
+            return string.IsNullOrEmpty(ask.Category) && !ask.High && (k == "command" || k == "write" || k == "browser" || k == "download") &&
+                !(WebGuard && Tainted && (k == "command" || k == "write"));
+        }
+
         public bool AutoAllows(string category)
         {
             if (string.IsNullOrEmpty(category)) return false;
@@ -770,6 +780,20 @@ namespace MinGent
             bool linked = !string.Equals(real, full, StringComparison.OrdinalIgnoreCase);
             if (blocked == null && linked) blocked = AgentPaths.WriteBlocked(real);
             if (blocked != null) return "Not allowed: " + blocked + ".";
+            string sensitive = AgentPaths.SensitiveReal(full);
+            if (sensitive != null)
+            {
+                PermissionAsk k = new PermissionAsk();
+                k.Kind = "write";
+                k.Category = Guarded(PermissionCategory.Credentials);
+                k.Title = what + " in a sensitive location";
+                k.Detail = linked ? full + " (really " + real + ")" : full;
+                k.High = true;
+                k.Key = "write:" + full;
+                k.Reason = "This is a sensitive location: " + sensitive + ".";
+                if (!Approve(k)) return "The user did not allow changing " + full + " (" + sensitive + "). Do not try another way; ask the user if you need it.";
+                return null;
+            }
             string dir = Directory.Exists(full) ? full : System.IO.Path.GetDirectoryName(full);
             bool inside = AgentPaths.IsInside(full, Cfg.Workspace) && (!linked || AgentPaths.IsInside(real, AgentPaths.Real(Cfg.Workspace)));
             if (inside) return null;
@@ -781,7 +805,7 @@ namespace MinGent
             a.Title = what + " outside the workspace";
             a.Detail = full;
             a.Key = "write:" + (dir ?? full);
-            a.Reason = guard ? "This chat has read web content, so writes outside the workspace need your OK (prompt-injection guard)." : "Writing outside " + Cfg.Workspace + ".";
+            a.Reason = guard ? "This chat has read web content, so writing outside the work folder needs your OK (prompt-injection guard)." : "Writing outside " + Cfg.Workspace + ".";
             if (!Approve(a)) return "The user did not allow writing to " + full + ". Do not try another way; ask the user if you need it.";
             return null;
         }
@@ -895,7 +919,7 @@ namespace MinGent
         public string LastTabs;
         public RunCoach LastCoach;
         public int CaptchaTries;
-        public bool CaptchaActed, GoogleHanded, StopAsked, ReviewDeclined;
+        public bool CaptchaActed, CaptchaSubmitted, GoogleHanded, StopAsked, ReviewDeclined;
         public string CaptchaHost;
         public readonly List<string> Remembered = new List<string>();
         public readonly Dictionary<string, string> DocSources = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -1468,7 +1492,7 @@ namespace MinGent
         {
             if (!IsHelper) lock (Perms.AskLock) Perms.DeniedKeys.Clear();
             if (!IsHelper) RepairHistory(History);
-            if (!IsHelper && !FinalTurn) { PlanApproved = userMsg.PlanApproved; CaptchaTries = 0; CaptchaActed = false; GoogleHanded = false; StopAsked = StopWords.Says(userMsg.Compact ?? userMsg.Text); ReviewDeclined = StopWords.SkipsReview(userMsg.Compact ?? userMsg.Text); }
+            if (!IsHelper && !FinalTurn) { PlanApproved = userMsg.PlanApproved; CaptchaTries = 0; CaptchaActed = false; CaptchaSubmitted = false; GoogleHanded = false; StopAsked = StopWords.Says(userMsg.Compact ?? userMsg.Text); ReviewDeclined = StopWords.SkipsReview(userMsg.Compact ?? userMsg.Text); }
             History.Add(userMsg);
             if (!IsHelper) RunMessage = userMsg;
             Dictionary<string, AgentTool> byName = new Dictionary<string, AgentTool>();
@@ -1488,7 +1512,8 @@ namespace MinGent
             bool canPlan = !IsHelper && byName.ContainsKey(PlanMode.Tool);
             PlanningSeen = canPlan && Perms.Planning;
             List<string> visible = PlanningSeen ? planVisible : fullVisible;
-            foreach (AgentTool t in AgentToolbox.Hidden()) if (!byName.ContainsKey(t.Name)) byName[t.Name] = t;
+            if (byName.ContainsKey("edit_file") && byName.ContainsKey("write_file") && byName.ContainsKey("delete_file"))
+                foreach (AgentTool t in AgentToolbox.Hidden()) if (!byName.ContainsKey(t.Name)) byName[t.Name] = t;
             ToolContext tc = new ToolContext();
             tc.Cfg = cfg; tc.Session = this; tc.Ui = ui; tc.Editor = ed; tc.Browser = br; tc.Ct = ct; tc.Changes = changes;
             RunCoach coach = new RunCoach();
@@ -1648,7 +1673,7 @@ namespace MinGent
                 }
                 if (r.ToolCalls.Count > 0)
                 {
-                    ToolAliases.ExpandParallel(r.ToolCalls);
+                    bool expanded = ToolAliases.ExpandParallel(r.ToolCalls);
                     foreach (ToolCall call in r.ToolCalls)
                     {
                         if (byName.ContainsKey(call.Name)) continue;
@@ -1656,6 +1681,7 @@ namespace MinGent
                         string canon = ToolAliases.Resolve(call.Name, byName.Keys, call.Args, coach.PreferApp, out imp);
                         if (canon != null) { call.Name = canon; call.Implied = imp; }
                     }
+                    if (expanded && r.RawBlocks != null) r.RawBlocks = ToolAliases.RawAfterExpand(r.RawBlocks, r.RawProvider, r.ToolCalls);
                 }
                 if (r.Truncated && r.ToolCalls.Count == 0 && r.Text.Trim().Length == 0 && r.Reasoning.Length > 0 && cfg.Backend is OpenAiChatBackend && continues < 3)
                 {
@@ -1712,7 +1738,7 @@ namespace MinGent
                     if (r.Stop == "pause" && pauses < 3) { pauses++; continue; }
                     if (!IsHelper && !ct.IsCancelled && DeliverInbox(true)) continue;
                     if (!IsHelper && !ct.IsCancelled && !StopAsked && AwaitHelpers(ui, ct)) continue;
-                    string coachNote = StopAsked ? null : coach.EndOfTurn(r.Text, canPlan && Perms.Planning ? null : Todos);
+                    string coachNote = StopAsked ? null : coach.EndOfTurn(r.Text, canPlan && Perms.Planning || !coach.Listed ? null : Todos);
                     if (coachNote != null && !ct.IsCancelled)
                     {
                         Msg cn = new Msg("user", coachNote);
@@ -2654,7 +2680,7 @@ namespace MinGent
             sb.Append("  then fix what is wrong and test again.\n");
             sb.Append("- When something fails, read the error, find the cause and change your approach. Don't repeat a call that failed the same way.\n");
             sb.Append("- If a site blocks automated access (HTTP 403 or 429, a \"Just a moment...\" page, a CAPTCHA), requests from curl or scripts usually get the same answer: ").Append(browser ? "open it in the built-in browser, use another source" : "use another source").Append(", or tell the user. If two tries fail the same way or return the same result, change your approach instead of rewording and trying again.\n");
-            if (browser && cfg.TryCaptchas) sb.Append("- CAPTCHA mode is on (the user turned it on in Settings for fun, to see what you can do): when a page in the built-in browser shows a CAPTCHA you need to get past, you may try to solve it yourself").Append(vision ? " - take browser_screenshot (MinGent zooms in on the CAPTCHA), look carefully, then click by position; for a picture grid, click all the tiles you are sure of in one browser_click with points, and MinGent shows you the CAPTCHA again right after" : " by clicking its captcha ref").Append(". You get five tries; after that MinGent stops you, and you ask the user to solve it with ask_user.\n");
+            if (browser && cfg.TryCaptchas) sb.Append("- CAPTCHA mode is on (the user turned it on in Settings for fun, to see what you can do): when a page in the built-in browser shows a CAPTCHA you need to get past, you may try to solve it yourself").Append(vision ? " - take browser_screenshot (MinGent zooms in on the CAPTCHA), look carefully, then click by position; for a picture grid, click all the tiles you are sure of in one browser_click with points, with Verify as the last point once your picks are complete (not on puzzles that say to click verify once there are none left: new pictures appear in the tiles you pick). After every click in a CAPTCHA, MinGent shows you the CAPTCHA again" : " by clicking its captcha ref").Append(". You get five tries; after that MinGent stops you, and you ask the user to solve it with ask_user.\n");
             sb.Append("- Tool results can end with lines that start with \"[MinGent note]\". MinGent adds these after the tool runs: they say what happened and suggest a next step, and they are not part of the tool's output. A tool result can also end with a message the user sent while you were working; take it into account.\n");
             sb.Append("- Finish with a short summary: what you changed (file paths), how you checked it, and anything the user still needs to do. Be honest: if you could not test something, or it does not work, say so.\n\n");
 

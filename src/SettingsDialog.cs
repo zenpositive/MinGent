@@ -176,7 +176,7 @@ namespace MinGent
         string ThemeChoice { get { return themeBox.SelectedIndex == 1 ? "light" : themeBox.SelectedIndex == 2 ? "dark" : "system"; } }
         string AccentChoice { get { return accentBox.SelectedIndex == 1 ? "windows" : "green"; } }
 
-        public const string ResetPrompt = "Reset every setting to its default?\n\nThe theme, tools, what Auto asks about, the agent's folder and everything else on these pages go back to how MinGent comes. Your chats, memory, API keys, instructions, models and offline mode stay.";
+        public const string ResetPrompt = "Reset every setting to its default?\n\nEverything on these pages goes back to how MinGent comes. Your chats, memory, API keys, instructions, models and offline mode stay.";
         SwitchRow offline, netLog, errorLog, lmUnload, engineUpdates, autoSave, openFiles, showThinking, sendContext, web, browserOn, guard, appsOn, sideBySide, memoryOn, helpersOn, autoReview, captcha, sandbox, otherApps;
         readonly Dictionary<string, SwitchRow> autoAsk = new Dictionary<string, SwitchRow>();
         readonly List<string> pageTitles = new List<string>();
@@ -385,11 +385,11 @@ namespace MinGent
                 reg.Text = now ? "Remove" : "Add";
                 defaults.Enabled = now;
                 if (err != null) Alert.Show(this, Th, "Windows did not accept the change.\n\n" + err, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                else if (now && !was) Alert.Show(this, Th, "MinGent is now in the Open with menu for text and code files.\n\nRight-click a file and choose Open with > MinGent. To open them with a double-click, use Open Windows Settings below.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                else if (now && !was) Alert.Show(this, Th, "MinGent is now in the Open with menu for text and code files: right-click a file and choose Open with.\n\nTo open them with a double-click, use Open Windows Settings below.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
             };
             defaults.Click += delegate { FileTypes.OpenDefaultApps(); };
             Row(c, "Show MinGent in Open with", "For text and code files such as .txt, .md, .json, .log and .py. They open in Notes.", reg, reg.Width);
-            Row(c, "Open files with a double-click", "Windows lets only you choose default apps. This opens Windows Settings, where you pick MinGent for the file types you want.", defaults, defaults.Width);
+            Row(c, "Open files with a double-click", "In Windows Settings, pick MinGent for the file types you want. Apps can't do this for you.", defaults, defaults.Width);
             Place(p, c);
 
             Section(p, "Keyboard shortcuts", null);
@@ -418,11 +418,11 @@ namespace MinGent
                 UpdateFlow.Run(this, Th, delegate (string version)
                 {
                     if (UpdateReady != null) UpdateReady(version);
-                    DialogResult = DialogResult.Cancel;
+                    DialogResult = Apply() ? DialogResult.OK : DialogResult.Cancel;
                     Close();
                 });
             };
-            Row(c, "MinGent " + ReleaseVersion.Display(Updater.Current), "Installs a newer release from GitHub only when you say so, and only if it carries two signatures from the developer's release keys. MinGent then restarts as the new version, in the same folder.", check, check.Width);
+            Row(c, "MinGent " + ReleaseVersion.Display(Updater.Current), "Installs a newer version from GitHub when you click, only if both of the developer's keys signed it. MinGent then restarts as the new version.", check, check.Width);
             Place(p, c);
 
             Section(p, "Reset", null);
@@ -443,7 +443,7 @@ namespace MinGent
         void BuildModels()
         {
             ScrollHost p = AddPage("Models", "library");
-            Section(p, "Built-in engine", "Runs GGUF models on this PC with llama.cpp " + Engine.BuildVersion + ", checked against SHA-256 checksums built into MinGent. It only listens on this PC. Set it up and download models from Models in the sidebar.");
+            Section(p, "Built-in engine", "Runs models on this PC with llama.cpp " + Engine.BuildVersion + ", checked against checksums built into MinGent. Set it up and download models from Models in the sidebar.");
             Card c = NewCard(p);
             c.Add(new FieldRow(Th, "Status", Engine.Instance.StatusText, null, 0, 0, false, null));
             int[] ctxVals = { 0, 8192, 16384, 32768, 49152, 65536, 98304, 131072, 196608, 262144 };
@@ -471,10 +471,10 @@ namespace MinGent
                 else if (err != null) Alert.Show(this, Th, err, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             };
             Row(c, "Model folder", "Where downloaded models are saved. Models already in other folders stay there and keep working.", folder, UI.S(300));
-            engineUpdates = Switch(c, "Offer newer llama.cpp releases", "Off: MinGent only installs the release it was tested with. On: it also looks on GitHub for newer releases, with the CUDA runtime they come with, and offers them in Models. Those are only checked against the checksums GitHub lists for them.", s.OfferEngineUpdates);
+            engineUpdates = Switch(c, "Offer newer llama.cpp releases", "MinGent installs the llama.cpp release it was tested with. On: Models also offers newer releases from GitHub, checked only against GitHub's own checksums.", s.OfferEngineUpdates);
             Place(p, c);
 
-            Section(p, "Cloud models", "With a cloud model, your messages and the files the agent reads go to that provider. Keys are encrypted with your Windows account (DPAPI) and only sent to their own provider. MinGent checks a key when you paste it.");
+            Section(p, "Cloud models", "With a cloud model, your messages and the files the agent reads go to that provider. Keys are encrypted with your Windows account and only sent to their own provider.");
             c = NewCard(p);
             anthropicKey = KeyRow(c, "Claude API key", "From platform.claude.com", "anthropic", "https://platform.claude.com/settings/keys", s.KeyAnthropic);
             openaiKey = KeyRow(c, "OpenAI API key", "From platform.openai.com", "openai", "https://platform.openai.com/api-keys", s.KeyOpenAi);
@@ -523,29 +523,29 @@ namespace MinGent
             c.Add(new FieldRow(Th, "Default folder", null, workspace, 0, UI.S(32), true, browse));
             Place(p, c);
 
-            Section(p, "Your instructions", "Sent with every chat: how you like answers, your coding style, or facts about your setup. For notes about one project, ask the agent to keep them in MINGENT.md in that folder; it reads that file by itself.");
+            Section(p, "Your instructions", "Sent with every chat, like how you want answers or facts about your setup. For one project, ask the agent to keep notes in MINGENT.md in its folder.");
             c = NewCard(p);
             instructions = MakeField(s.AiInstructions, false, true);
             instructions.Box.AccessibleName = "Your instructions";
             c.Add(new FieldRow(Th, null, null, instructions, 0, UI.S(120), true, null));
             Place(p, c);
 
-            Section(p, "Tools", "Every tool is part of MinGent's own C# code: no plugins, no MCP servers, nothing downloaded. Each group you switch on takes room in the model's context, so with a small local model, switch off what you don't use. Reading and changing files, running commands and planning are always on (" + Tokens(AgentToolbox.Create(false, false, false, 32768, false, false, false, false)) + ").");
+            Section(p, "Tools", "Each group you switch on takes room in the model's context, so with a small local model, switch off what you don't use. Files, commands and planning are always on (" + Tokens(AgentToolbox.Create(false, false, false, 32768, false, false, false, false)) + ").");
             c = NewCard(p);
-            web = Switch(c, "Web search and web pages", "Search the web and read pages and YouTube videos. With the built-in browser on, searches open there so you can see them. When this is off, the agent still opens addresses on this PC or your local network. " + Cap(Tokens(new WebSearchTool())) + ".", s.AiWeb);
-            browserOn = Switch(c, "Built-in browser", "Open pages, click, type and scroll in MinGent's own browser, which has its own sign-ins. Each chat starts on a new page. " + Cap(Tokens(AgentToolbox.BrowserTools(true))) + "; off by itself when the model's context is under 16K.", s.AiBrowser);
-            captcha = Switch(c, "Let the agent try CAPTCHAs (experimental)", "Off (the default): CAPTCHAs are left to you. On: the agent may try to solve them in its own browser, just to see what the model can do; after five failed tries it hands the CAPTCHA to you. A reCAPTCHA logo on a page is never treated as a check.", s.AiCaptcha);
-            appsOn = Switch(c, "Programs it starts itself", "Read their windows, click, type and scroll in them. Programs that were already open stay off limits. Store apps and other programs that Windows opens for it need your OK first (except in Full auto). " + Cap(Tokens(AgentToolbox.AppTools(true))) + "; off by itself under 24K.", s.AiApps);
-            otherApps = Switch(c, "Programs you opened yourself", "The agent can ask to use a program that was already open. You decide for each program, once in each chat, also in Full auto. Browsers, File Explorer, terminals and code editors can only be looked at. Mail, chat, AI chat apps, password managers, money and remote-access programs are never offered. Needs \"Programs it starts itself\". " + Cap(Tokens(new AppAccessTool())) + ".", s.AiOtherApps);
-            sideBySide = Switch(c, "Put MinGent and the program side by side", "When the agent starts working in a program that covers MinGent, MinGent takes one half of the screen and the program the other. MinGent gets its old size back when the program closes.", s.AiSideBySide);
-            helpersOn = Switch(c, "Helper agents", "Hands focused tasks to helpers, each with a fresh context, which keeps the agent's own context small and gives its work an independent check. On a local model they run one after another, so they take extra time; with a cloud model they can run at the same time. " + Cap(Tokens(new DelegateTool(false))) + ".", s.AiHelpers);
+            web = Switch(c, "Web search and web pages", "Search the web and read pages and YouTube videos. With the built-in browser on, you can watch the searches there. Off: the agent can still open addresses on this PC and your network. " + Cap(Tokens(new WebSearchTool())) + ".", s.AiWeb);
+            browserOn = Switch(c, "Built-in browser", "Open pages, click, type and scroll in MinGent's own browser, which keeps its own sign-ins. " + Cap(Tokens(AgentToolbox.BrowserTools(true))) + "; off by itself when the model's context is under 16K.", s.AiBrowser);
+            captcha = Switch(c, "Let the agent try CAPTCHAs (experimental)", "The agent tries to solve CAPTCHAs in its own browser and hands them to you after five failed tries. Off: CAPTCHAs are left to you.", s.AiCaptcha);
+            appsOn = Switch(c, "Programs it starts itself", "Read, click, type and scroll in programs the agent starts. Store apps and programs Windows opens for it need your OK first, except in Full auto. " + Cap(Tokens(AgentToolbox.AppTools(true))) + "; off by itself under 24K.", s.AiApps);
+            otherApps = Switch(c, "Programs you opened yourself", "The agent can ask to use a program you already have open; you decide for each one, in each chat, even in Full auto. Browsers, File Explorer, terminals and code editors are look-only, and mail, chat, password managers, money and remote-access programs are never offered. Needs \"Programs it starts itself\". " + Cap(Tokens(new AppAccessTool())) + ".", s.AiOtherApps);
+            sideBySide = Switch(c, "Put MinGent and the program side by side", "When a program the agent uses would cover MinGent, each gets half the screen until the program closes.", s.AiSideBySide);
+            helpersOn = Switch(c, "Helper agents", "The agent hands focused tasks to helpers with a fresh context, which keeps its own context small. On a local model they run one at a time, which takes longer. " + Cap(Tokens(new DelegateTool(false))) + ".", s.AiHelpers);
             autoReview = Switch(c, "Review big changes", "When the agent changes a lot of code, a helper reviews the work before it answers.", s.AiAutoReview);
             Place(p, c);
 
             Section(p, "Behavior", null);
             c = NewCard(p);
             autoSave = Switch(c, "Save files after the agent changes them", "Ctrl+Z still undoes each change.", s.AiAutoSave);
-            openFiles = Switch(c, "Show the files the agent writes", "Opens the files it creates or edits in tabs. Turn this off when you only watch the result, like a website in the browser. Files you open yourself still update.", s.AiOpenFiles);
+            openFiles = Switch(c, "Show the files the agent writes", "Opens the files it creates or edits in tabs. Files you opened yourself always update.", s.AiOpenFiles);
             showThinking = Switch(c, "Show the model's thinking", "See its reasoning while it works.", s.AiShowThinking);
             sendContext = Switch(c, "Share the open notes tab", "Tells the agent which notes tab is open and sends the text you selected with each message.", s.AiSendContext);
             Place(p, c);
@@ -557,10 +557,10 @@ namespace MinGent
         {
             ScrollHost p = AddPage("Memory", "bookmark");
             Card c = NewCard(p);
-            memoryOn = Switch(c, "Remember things between chats", "Facts like your hardware, the tools you have installed, where your projects are and how you like things done. Never passwords or keys. The memory tool takes about " + Round(AgentToolbox.Tokens(new MemoryTool())) + " tokens of the model's context, plus the facts themselves.", s.AiMemory);
+            memoryOn = Switch(c, "Remember things between chats", "Facts like your hardware, your tools, where your projects are and how you like things done, never passwords or keys. Uses about " + Round(AgentToolbox.Tokens(new MemoryTool())) + " tokens of context, plus the facts.", s.AiMemory);
             Place(p, c);
 
-            Section(p, "Saved facts", "One fact per line. Edit or delete anything you like; changes apply when you press Save.");
+            Section(p, "Saved facts", "One fact per line. Changes apply when you press Save.");
             c = NewCard(p);
             List<string> items = MemoryStore.Load();
             memoryOriginal = string.Join("\r\n", items.ToArray());
@@ -581,12 +581,12 @@ namespace MinGent
         {
             ScrollHost p = AddPage("Safety", "shield");
             Card c;
-            Section(p, "Auto mode", "Auto (the switch under the message box) lets the agent edit files, run commands and browse without asking. The arrow next to it has Full auto, which asks nothing at all and goes back to Auto when you close MinGent.");
+            Section(p, "Auto mode", "Auto, the switch under the message box, lets the agent edit files, run commands and browse without asking. Full auto, in the menu next to it, asks nothing and turns back into Auto when MinGent closes.");
             c = NewCard(p);
-            guard = Switch(c, "Prompt-injection guard (recommended)", "Once the agent has read web content, Auto asks again before commands, writes outside the workspace, addresses that carry a lot of data and everything listed below, also rows you switched off.", s.AiWebGuard);
+            guard = Switch(c, "Prompt-injection guard (recommended)", "After the agent reads anything from the web, Auto asks again before commands, writing outside the work folder, sending a lot of data to an address, and everything below, even rows you switched off.", s.AiWebGuard);
             Place(p, c);
 
-            Section(p, "What Auto still asks about", "Switched on, Auto stops and asks you first. Switch a row off to let Auto do it without asking. Ask mode always asks; Full auto never does.");
+            Section(p, "What Auto still asks about", "Auto asks you first about the rows switched on here. Ask mode always asks; Full auto never does.");
             c = NewCard(p);
             List<string> allowed = s.AutoAllowList;
             foreach (string cat in PermissionCategory.All)
@@ -597,18 +597,18 @@ namespace MinGent
 
             Section(p, "Sandbox", null);
             c = NewCard(p);
-            sandbox = Switch(c, "Run the agent's commands in a sandbox (experimental)", "Commands run with low rights: they can read files and use the internet, but they can change files only in the work folder, not in its .git folder, and can't change other programs, settings or your saved sign-ins. A command runs outside the sandbox only when you allow it, or in Full auto. To let commands work in a folder, MinGent allows low-rights programs to change files there, and that stays when you turn this off. Turn this off if a tool stops working.", s.AiSandbox);
+            sandbox = Switch(c, "Run the agent's commands in a sandbox (experimental)", "Commands can read files and use the internet, but change files only in the work folder (not its .git folder), and can't change other programs, settings or your sign-ins. A command runs outside the sandbox only when you allow it, or in Full auto. MinGent lets low-rights programs change files in the folders the agent works in, and that stays after you turn this off. Turn it off if a tool stops working.", s.AiSandbox);
             Place(p, c);
 
-            Section(p, "Always on", "These limits apply in every mode, also in Full auto.");
+            Section(p, "Always on", "These limits apply in every mode, even in Full auto.");
             c = NewCard(p);
             c.Dividers = false;
             string[] rules = {
-                "The agent's file tools never write into Windows, Program Files or MinGent's own data, also not through links. Commands are limited by Windows permissions instead.",
+                "The agent's file tools never write into Windows, Program Files or MinGent's own data, not even through links. Commands are limited by Windows permissions instead.",
                 "Sending one of your saved API keys to a website or over the internet asks you first, and Full auto refuses it.",
-                "The agent controls only programs it started, and programs you opened yourself only after you allow each one in that chat. It never controls mail, chat, password managers, money or remote-access programs, and it can only look at a browser, File Explorer, terminal or code editor you opened.",
+                "The agent controls only programs it started, and programs you opened only after you allow each one. It never controls mail, chat, password managers, money or remote-access programs.",
                 "Web pages and documents reach the model marked as untrusted data, with a note not to follow them.",
-                "Changes made with the agent's file tools can be undone with the Undo link under the reply, or Ctrl+Z in the notes tab. Changes made by commands can't.",
+                "Changes made with the agent's file tools can be undone with Undo under the reply, or Ctrl+Z in the notes tab. Changes made by commands can't.",
                 "Commands run with MinGent's rights, so start MinGent normally, not as administrator. Closing MinGent stops everything it started: commands, the built-in engine, and models it loaded in LM Studio." };
             foreach (string r in rules) c.Add(new BulletRow(Th, "check", r));
             Place(p, c);
@@ -634,16 +634,16 @@ namespace MinGent
             ScrollHost p = AddPage("Privacy", "lock");
             Section(p, "Offline mode", null);
             Card c = NewCard(p);
-            offline = Switch(c, "Work offline", "MinGent makes no internet connections: no cloud models, web search, web pages or downloads. Local models and everything on this PC keep working, and the agent may not run commands that need the internet. It is not a firewall: a program that goes online by itself still can.", s.Offline);
+            offline = Switch(c, "Work offline", "No cloud models, web search, web pages or downloads, and the agent won't run commands that need the internet. Local models and everything on this PC keep working. It isn't a firewall: other programs can still go online.", s.Offline);
             Place(p, c);
 
             Section(p, "Logs", "MinGent sends nothing about you anywhere: no telemetry, no crash reports, and no update checks except when you click Check for updates or switch on newer llama.cpp releases in Models.");
             c = NewCard(p);
             PillButton show = new PillButton("Show...", Th, false);
             show.Click += delegate { using (ConnectionsDialog d = new ConnectionsDialog(Th)) d.ShowDialog(this); };
-            Row(c, "Connections", "Every internet address MinGent connected to since it started, and why. The list lives in memory and is gone when MinGent closes.", show, show.Width);
+            Row(c, "Connections", "Every internet address MinGent connected to since it started, and why. The list is gone when MinGent closes.", show, show.Width);
             netLog = Switch(c, "Keep a connection log file", "Also writes each connection to connections.log in MinGent's data folder.", s.KeepNetLog);
-            errorLog = Switch(c, "Keep an error log", "When something goes wrong, the details go to error.log in MinGent's data folder, for a bug report. Off: nothing is written.", s.KeepErrorLog);
+            errorLog = Switch(c, "Keep an error log", "Writes what went wrong to error.log in MinGent's data folder, for a bug report.", s.KeepErrorLog);
             Place(p, c);
 
             Section(p, "Your data", "MinGent keeps everything it stores in one folder. The files the agent saves for you go to your own folders, not this one.");
@@ -685,9 +685,9 @@ namespace MinGent
                 Close();
             };
             Row(c, "Data folder", Program.DataDir ?? "", open, open.Width);
-            Row(c, "Saved chats", "Right-click a chat in the sidebar to rename or delete it. Deleting erases it for good.", del, del.Width);
-            Row(c, "Browser data", "The built-in browser's sign-ins, history, cache and site data. Deleting a chat clears the history and cache; wiping signs you out of every site and erases it all.", wipe, wipe.Width);
-            Row(c, "Erase everything", "Overwrites and deletes your chats, memory, API keys, browser data, logs and backups of your notes tabs, then closes MinGent so it starts like new. You choose whether the agent's saved files, the engine and the models go too.", erase, erase.Width);
+            Row(c, "Saved chats", "Rename, archive or delete a chat from its \"...\" menu in the sidebar. Deleting erases it for good.", del, del.Width);
+            Row(c, "Browser data", "The built-in browser's sign-ins, history, cache and site data. Wiping signs you out of every site in it.", wipe, wipe.Width);
+            Row(c, "Erase everything", "Overwrites and deletes your chats, memory, API keys, browser data, logs and notes backups, then closes MinGent so it starts like new. You choose whether the agent's saved files, the engine and the models go too.", erase, erase.Width);
             Place(p, c);
             Finish(p);
         }

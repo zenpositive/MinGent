@@ -280,7 +280,7 @@ namespace MinGent
             try { return e.GetString(b, start, b.Length - start); }
             catch (DecoderFallbackException) { lossy = true; }
             Encoding loose = (Encoding)e.Clone();
-            loose.DecoderFallback = DecoderFallback.ReplacementFallback;
+            loose.DecoderFallback = new DecoderReplacementFallback("\uFFFD");
             return loose.GetString(b, start, b.Length - start);
         }
 
@@ -307,6 +307,7 @@ namespace MinGent
                 return s;
             }
             catch (DecoderFallbackException) { }
+            if (MostlyUtf8(b)) { enc = 0; return Strict(new UTF8Encoding(false, true), b, 0, out lossy); }
             Encoding def = Encoding.Default;
             if (def.IsSingleByte && def.CodePage != 65001) { enc = 4; return def.GetString(b); }
             try
@@ -318,6 +319,24 @@ namespace MinGent
             catch { }
             enc = 5;
             return Encoding.GetEncoding(28591).GetString(b);
+        }
+
+        static bool MostlyUtf8(byte[] b)
+        {
+            int good = 0, bad = 0;
+            for (int i = 0; i < b.Length; i++)
+            {
+                int c = b[i];
+                if (c < 0x80) continue;
+                int n = c >= 0xC2 && c <= 0xDF ? 1 : c >= 0xE0 && c <= 0xEF ? 2 : c >= 0xF0 && c <= 0xF4 ? 3 : 0;
+                bool ok = n > 0 && i + n < b.Length;
+                for (int k = 1; ok && k <= n; k++) ok = (b[i + k] & 0xC0) == 0x80;
+                if (ok && n == 2 && (c == 0xE0 && b[i + 1] < 0xA0 || c == 0xED && b[i + 1] >= 0xA0)) ok = false;
+                if (ok && n == 3 && (c == 0xF0 && b[i + 1] < 0x90 || c == 0xF4 && b[i + 1] >= 0x90)) ok = false;
+                if (ok) { good++; i += n; }
+                else bad++;
+            }
+            return good >= 4 && bad * 20 <= good;
         }
 
         public static byte[] Encode(string text, int enc)

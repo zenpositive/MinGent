@@ -87,6 +87,53 @@ namespace MinGent
             return true;
         }
 
+        public static string Shape(string f, out string result)
+        {
+            result = f;
+            bool semis = false;
+            char q0 = '\0';
+            int b0 = 0;
+            foreach (char ch in f)
+            {
+                if (q0 != '\0') { if (ch == q0) q0 = '\0'; continue; }
+                if (ch == '"' || ch == '\'') q0 = ch;
+                else if (ch == '{') b0++;
+                else if (ch == '}') b0--;
+                else if (ch == ';' && b0 == 0) semis = true;
+            }
+            StringBuilder sb = new StringBuilder();
+            int paren = 0, brace = 0;
+            char q = '\0';
+            for (int i = 0; i < f.Length; i++)
+            {
+                char ch = f[i];
+                if (q != '\0')
+                {
+                    sb.Append(ch);
+                    if (ch == q) { if (i + 1 < f.Length && f[i + 1] == q) { sb.Append(q); i++; } else q = '\0'; }
+                    continue;
+                }
+                if (ch == '"' || ch == '\'') { q = ch; sb.Append(ch); continue; }
+                if (ch == '(') paren++;
+                else if (ch == ')' && --paren < 0) return "has a ) without a matching (";
+                else if (ch == '{') brace++;
+                else if (ch == '}' && --brace < 0) return "has a } without a matching {";
+                else if (ch == ';' && brace == 0) { sb.Append(','); continue; }
+                else if (ch == ',' && semis && brace == 0 && i > 0 && i + 1 < f.Length && char.IsDigit(f[i - 1]) && char.IsDigit(f[i + 1])) { sb.Append('.'); continue; }
+                sb.Append(ch);
+            }
+            if (q == '"') return "has text without its closing quote";
+            if (q != '\0') return "has a sheet name without its closing quote";
+            if (paren > 0) return "has a ( without a matching )";
+            if (brace > 0) return "has a { without a matching }";
+            string t = sb.ToString().Trim();
+            if (t.Length == 0) return "is empty";
+            if ("+-*/^&=<>,:".IndexOf(t[t.Length - 1]) >= 0) return "ends with " + t[t.Length - 1];
+            if ("*/^),:".IndexOf(t[0]) >= 0) return "starts with " + t[0];
+            result = sb.ToString();
+            return null;
+        }
+
         static string Stored(string f)
         {
             List<string> saved = new List<string>();
@@ -110,14 +157,15 @@ namespace MinGent
             if (s.Length > 1 && s[0] == '=')
             {
                 string f = s.Substring(1);
-                string bad;
-                if (SafeFormula(f, out bad))
+                string bad, sound = f;
+                string flaw = SafeFormula(f, out bad) ? Shape(f, out sound) : null;
+                if (bad == null && flaw == null)
                 {
                     c.Kind = XlsxCell.Formula;
-                    c.Value = Stored(f);
+                    c.Value = Stored(sound);
                     return c;
                 }
-                string note = (where != null ? where + ": " : "") + "the formula uses " + bad + ", which MinGent does not put in spreadsheets, so it was saved as text";
+                string note = (where != null ? where + ": " : "") + (bad != null ? "the formula uses " + bad + ", which MinGent does not put in spreadsheets, so it was saved as text" : "the formula " + flaw + ", so it was saved as text");
                 if (problems != null && problems.Count < 20 && !problems.Contains(note)) problems.Add(note);
                 c.Kind = XlsxCell.Text;
                 c.Value = t;
