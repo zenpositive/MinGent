@@ -1,6 +1,26 @@
 MinGent - what changed
 ======================
 
+Version 1.0.7 beta
+- Check for updates: "What's new" opens the release notes and keeps the
+  update window open, so Install is still there when you come back.
+- A command the agent types in a terminal, also in a session on a server
+  ("Run a command on example.com"), says what it is for in the agent's own
+  words, like the commands it runs itself. When the agent gives no
+  description, MinGent now writes one for many more server commands:
+  docker and docker compose, databases (mysql, psql, sqlite3), the firewall
+  (ufw), certbot, pm2, nginx, crontab, users and passwords, reboot and
+  shutdown. "exit" in a session on a server says that it disconnects.
+- Stopping the independent review works. "Stop the reviewer", "skip the
+  review", "no need for a review" and the like stop a review that is
+  running, or keep one from starting. Asked in other words, the agent can
+  now stop it for you. It can't stop the automatic review on its own.
+- CAPTCHA mode: picking several picture tiles in one step also works on
+  Google's own CAPTCHA page, the one Google shows instead of search results,
+  and the clicks there count toward the five tries.
+- A chat's "..." menu no longer has "Delete all chats". It is in
+  Settings > Privacy, where it also deletes archived chats.
+
 Version 1.0.6 beta
 - The Auto switch: only the switch itself turns Auto on or off. Clicking
   its name or the arrow opens the menu of Auto modes, and the pointer is a

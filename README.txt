@@ -20,7 +20,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.0.6 beta: it works, and it still has rough edges. Report
+This is version 1.0.7 beta: it works, and it still has rough edges. Report
 problems at https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -87,7 +87,7 @@ sign-ins. MinGent has none of that.
   Full auto asks nothing. The check reads the command; it can't see what a
   script does once it runs.
 To check a download, compare its SHA-256 with the one on the release page.
-In PowerShell: Get-FileHash .\MinGent-1.0.6-beta.zip
+In PowerShell: Get-FileHash .\MinGent-1.0.7-beta.zip
 
 
 YOUR OWN ICON
@@ -115,8 +115,8 @@ THE WINDOW
   when the window gets too narrow.
 - Each chat's "..." button has Rename, Archive and Delete. Archived chats
   leave the list but stay on your PC; "Archived chats" at the bottom of the
-  list shows them, and opening one moves it back. "Delete all chats" deletes
-  archived chats too.
+  list shows them, and opening one moves it back. "Delete all chats" in
+  Settings > Privacy deletes archived chats too.
 - Middle: the chat and the message box.
 - Right, when you or the agent need them: Notes (a full text editor with tabs;
   each chat keeps its own) and the browser. The two buttons at the top right
