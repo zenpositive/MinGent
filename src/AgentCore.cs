@@ -895,7 +895,7 @@ namespace MinGent
         public string LastTabs;
         public RunCoach LastCoach;
         public int CaptchaTries;
-        public bool CaptchaActed, GoogleHanded, StopAsked;
+        public bool CaptchaActed, GoogleHanded, StopAsked, ReviewDeclined;
         public string CaptchaHost;
         public readonly List<string> Remembered = new List<string>();
         public readonly Dictionary<string, string> DocSources = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -1266,8 +1266,12 @@ namespace MinGent
             }
             Action<List<int>> read = InboxRead;
             if (read != null) { try { read(ids); } catch { } }
-            bool stop = false;
-            foreach (string t in msgs) if (StopWords.Says(t)) stop = true;
+            bool stop = false, noReview = false;
+            foreach (string t in msgs)
+            {
+                if (StopWords.Says(t)) stop = true;
+                else if (StopWords.SkipsReview(t)) noReview = true;
+            }
             string body = string.Join("\n\n", msgs.ToArray());
             string stopNote = stop && !IsHelper ? "\n\n" + StopNote : "";
             Msg last = History.Count > 0 ? History[History.Count - 1] : null;
@@ -1297,7 +1301,68 @@ namespace MinGent
                     tail.Text = (tail.Text ?? "") + "\n\n" + sn;
                 }
             }
+            else if (noReview && !IsHelper)
+            {
+                ReviewDeclined = true;
+                List<HelperJob> reviews = TakeJobs(delegate (HelperJob j) { return j.Kind == "review"; });
+                if (reviews.Count > 0)
+                {
+                    DropJobs(reviews, "stopped because you asked");
+                    Msg tail = History[History.Count - 1];
+                    tail.Text = (tail.Text ?? "") + "\n\n[MinGent] The user asked to stop the review, so MinGent stopped the reviewer. Don't start another review unless the user asks; answer the user without it.";
+                }
+            }
             return true;
+        }
+
+        List<HelperJob> TakeJobs(Predicate<HelperJob> match)
+        {
+            List<HelperJob> hit = new List<HelperJob>();
+            lock (jobGate)
+            {
+                foreach (HelperJob j in jobs) if (!j.Done && match(j)) hit.Add(j);
+                foreach (HelperJob j in hit) jobs.Remove(j);
+            }
+            return hit;
+        }
+
+        static void DropJobs(List<HelperJob> left, string why)
+        {
+            foreach (HelperJob j in left) j.Drop(why);
+            DateTime until = DateTime.UtcNow.AddSeconds(3);
+            foreach (HelperJob j in left) j.Settle(until);
+        }
+
+        public ToolOutcome StopBackground(string which)
+        {
+            if (IsHelper) return ToolOutcome.Fail("a helper can't stop other helpers");
+            string w = (which ?? "").Trim().ToLowerInvariant();
+            bool all = w == "all" || w == "*" || w == "everything";
+            int heard = InboxDelivered;
+            bool locked = false, any = false;
+            List<HelperJob> hit = TakeJobs(delegate (HelperJob j)
+            {
+                string about = (j.Kind + " " + j.Who + " " + j.Label).ToLowerInvariant();
+                if (!all && about.IndexOf(w, StringComparison.Ordinal) < 0 && !(j.Kind == "review" && w.StartsWith("review", StringComparison.Ordinal))) return false;
+                any = true;
+                if (j.Auto && heard <= j.InboxMark) { locked = true; return false; }
+                return true;
+            });
+            if (hit.Count == 0)
+            {
+                if (locked) return ToolOutcome.Fail("the automatic independent review is checking your work on its own, and only stops when the user asks for that. Wait for its report.");
+                return ToolOutcome.Ok(any ? "Nothing to stop." : "No helper matching \"" + which + "\" is working in the background.", "Nothing to stop");
+            }
+            DropJobs(hit, "stopped by the agent because you asked");
+            if (hit.Exists(delegate (HelperJob j) { return j.Kind == "review"; })) ReviewDeclined = true;
+            StringBuilder sb = new StringBuilder("Stopped ");
+            for (int i = 0; i < hit.Count; i++)
+            {
+                if (i > 0) sb.Append(i == hit.Count - 1 ? " and " : ", ");
+                sb.Append("the ").Append(hit[i].Who).Append(hit[i].Label.Length > 0 ? " (" + hit[i].Label + ")" : "");
+            }
+            sb.Append(hit.Count == 1 ? ". Its report won't come." : ". Their reports won't come.");
+            return ToolOutcome.Ok(sb.ToString(), hit.Count == 1 ? "Stopped the " + hit[0].Who : "Stopped " + hit.Count + " helpers");
         }
 
         public string StopWork()
@@ -1403,7 +1468,7 @@ namespace MinGent
         {
             if (!IsHelper) lock (Perms.AskLock) Perms.DeniedKeys.Clear();
             if (!IsHelper) RepairHistory(History);
-            if (!IsHelper && !FinalTurn) { PlanApproved = userMsg.PlanApproved; CaptchaTries = 0; CaptchaActed = false; GoogleHanded = false; StopAsked = StopWords.Says(userMsg.Compact ?? userMsg.Text); }
+            if (!IsHelper && !FinalTurn) { PlanApproved = userMsg.PlanApproved; CaptchaTries = 0; CaptchaActed = false; GoogleHanded = false; StopAsked = StopWords.Says(userMsg.Compact ?? userMsg.Text); ReviewDeclined = StopWords.SkipsReview(userMsg.Compact ?? userMsg.Text); }
             History.Add(userMsg);
             if (!IsHelper) RunMessage = userMsg;
             Dictionary<string, AgentTool> byName = new Dictionary<string, AgentTool>();
@@ -1655,7 +1720,7 @@ namespace MinGent
                         History.Add(cn);
                         continue;
                     }
-                    if (AutoReview && !IsHelper && !StopAsked && !Perms.Planning && !reviewed && !coach.Reviewed && (coach.FilesChanged || (tc.Changes != null && (tc.Changes.Created.Count > 0 || tc.Changes.Originals.Count > 0))) && byName.ContainsKey("delegate") && !ct.IsCancelled && !RunCoach.IsQuestion(r.Text))
+                    if (AutoReview && !IsHelper && !StopAsked && !ReviewDeclined && !Perms.Planning && !reviewed && !coach.Reviewed && (coach.FilesChanged || (tc.Changes != null && (tc.Changes.Created.Count > 0 || tc.Changes.Originals.Count > 0))) && byName.ContainsKey("delegate") && !ct.IsCancelled && !RunCoach.IsQuestion(r.Text))
                     {
                         reviewed = true;
                         string review = Helpers.AutoReview(this, tc, ui, r.Text);
@@ -2637,7 +2702,7 @@ namespace MinGent
                 sb.Append("- close_pane closes the browser, its console or the notes pane: when the user asks (set user_asked), or when you are done with a pane and it shows nothing the user needs.\n");
                 if (apps) sb.Append("- Desktop programs: app_read lists a window's controls with refs like a5 for app_click and app_type. It works for programs you started in this chat, including ones Windows opened for your command (Store apps such as Calculator). app_click also does right, middle and double clicks and clicks with Ctrl or Shift held; app_scroll, app_hover and app_drag cover the rest of the mouse, and app_key presses any key or shortcut.\n");
                 if (apps && cfg.OtherApps) sb.Append("- Programs the user opened: only when the task needs one, ask for it with app_access (without app it lists them). Once the user allows it, its windows show up in app_read. Their browsers, File Explorer, terminals and code editors can only be looked at.\n");
-                if (apps) sb.Append("- Terminals: use run_command for commands. Only when the user wants to watch, or for an interactive ssh session, open your own terminal window with run_command (Start-Process wt -ArgumentList '-w','new', or Start-Process powershell where Windows Terminal is missing) and work in it with app_read, app_type (enter=true) and app_key. MinGent checks each command before Enter runs it.\n");
+                if (apps) sb.Append("- Terminals: use run_command for commands. Only when the user wants to watch, or for an interactive ssh session, open your own terminal window with run_command (Start-Process wt -ArgumentList '-w','new', or Start-Process powershell where Windows Terminal is missing) and work in it with app_read, app_type (enter=true) and app_key. MinGent checks each command before Enter runs it; give description, as with run_command, so the user sees what the command is for.\n");
                 sb.Append("- system_info describes this PC (Windows version, hardware, installed developer tools) without running anything.\n");
             }
             sb.Append('\n');

@@ -263,6 +263,8 @@ namespace MinGent
         public readonly bool Browser;
         public readonly CancelToken Ct = new CancelToken();
         public Func<ToolOutcome, string> Framing;
+        public bool Auto;
+        public int InboxMark;
         readonly IAgentUi ui;
         readonly CancelToken outer;
         readonly Action relay;
@@ -336,6 +338,7 @@ namespace MinGent
             sb.Append("The ").Append(Who).Append(" is still working on this in the background. When it is done, MinGent adds its report to the conversation, so don't start the same task again.");
             if (Kind == "general") sb.Append(" It may still be changing files: leave the files it works on alone until its report is in.");
             if (Browser) sb.Append(" It is using the built-in browser, so the browser tools are off for you until then.");
+            sb.Append(" If the user asks you to stop it, call delegate with stop=\"").Append(Kind == "review" ? "review" : "all").Append("\".");
             ToolOutcome o = ToolOutcome.Ok(sb.ToString(), "Working in the background");
             o.Background = true;
             return o;
@@ -463,6 +466,8 @@ namespace MinGent
             if (ctx.Session.IsHelper) return ToolOutcome.Fail("a helper can't start other helpers. Do this part yourself.");
             HelperJob job = new HelperJob(ctx, call, kind, BrowserFor(kind, ctx));
             job.Framing = framing;
+            job.Auto = framing != null;
+            job.InboxMark = ctx.Session.InboxDelivered;
             job.Start(ctx, task);
             while (!job.Wait(150))
             {
@@ -681,7 +686,7 @@ namespace MinGent
             ui.ToolStart(rc, "Independent review of the changes");
             ToolOutcome o = Run(own, rc, "review", task, delegate (ToolOutcome x) { return ReviewNote(x, main.StopAsked); });
             ui.ToolEnd(rc, o);
-            if (o.Background) return "[MinGent] An independent reviewer (a helper that did not see your reasoning) is checking your changes in the background. When it is done, MinGent adds its report to the conversation: then check its points and give the user your final answer.";
+            if (o.Background) return "[MinGent] An independent reviewer (a helper that did not see your reasoning) is checking your changes in the background. When it is done, MinGent adds its report to the conversation: then check its points and give the user your final answer. If the user asks you to stop the review, call delegate with stop=\"review\".";
             if (tc.Ct.IsCancelled) return null;
             return ReviewNote(o, main.StopAsked);
         }
@@ -780,7 +785,7 @@ namespace MinGent
         {
             get
             {
-                return "Give a focused task to a helper agent. It starts with a fresh, empty context, works on its own with its own tools, and returns a report. " +
+                return "Give a focused task to a helper agent, or stop helpers that work in the background (stop). It starts with a fresh, empty context, works on its own with its own tools, and returns a report. " +
                        "kind \"explore\": research code or the web and report findings (read-only). kind \"review\": check finished work independently - it reads the files and runs tests, and changes nothing. kind \"general\": do a self-contained piece of work. " +
                        "The helper can't see this conversation, so write a complete task: the goal, the files or addresses involved, and what to report back." +
                        (parallel ? " Several explore helpers in one turn run at the same time; review and general helpers run one at a time." : " Helpers run one at a time.");
@@ -794,7 +799,8 @@ namespace MinGent
                 k["enum"] = Json.A("explore", "review", "general");
                 return Obj("task", P("string", "Complete instructions for the helper, including what to report back"), true,
                            "kind", k, false,
-                           "title", P("string", "A few words describing the task, shown to the user"), false);
+                           "title", P("string", "A few words describing the task, shown to the user"), false,
+                           "stop", P("string", "Instead of starting a helper, stop ones working in the background: \"all\", or a word from their title or kind, like \"review\". The automatic independent review stops only when the user asked for that."), false);
             }
         }
 
@@ -824,6 +830,8 @@ namespace MinGent
 
         public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
         {
+            string stop = (S(a, "stop") ?? "").Trim();
+            if (stop.Length > 0) return ctx.Session.StopBackground(stop);
             string task = (S(a, "task") ?? "").Trim();
             if (task.Length < 25) return ToolOutcome.Fail("task is too short. Write complete instructions: what to do, which files or addresses are involved, and what to report back.");
             return Helpers.Run(ctx, ctx.Call, KindArg(a), task);

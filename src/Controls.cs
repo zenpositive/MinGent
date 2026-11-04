@@ -2010,7 +2010,7 @@ namespace MinGent
         readonly string message;
         readonly MessageBoxIcon icon;
 
-        Alert(Theme t, string text, string caption, MessageBoxIcon icon, string[] labels, DialogResult[] results, int def, int danger, int cancel)
+        Alert(Theme t, string text, string caption, MessageBoxIcon icon, string[] labels, DialogResult[] results, int def, int danger, int cancel, Action[] keep)
             : base(t, string.IsNullOrEmpty(caption) ? Program.AppName : caption, 460, 200)
         {
             message = text ?? "";
@@ -2049,7 +2049,9 @@ namespace MinGent
                 Button b = Dialogs.MakeButton(labels[i], Th, i == def && danger < 0);
                 PillButton pb = b as PillButton;
                 if (pb != null && i == danger) pb.Danger = true;
-                b.DialogResult = results[i];
+                Action stay = keep != null && i < keep.Length ? keep[i] : null;
+                b.DialogResult = stay != null ? DialogResult.None : results[i];
+                if (stay != null) b.Click += delegate { stay(); };
                 b.TabIndex = 100 + i;
                 x -= b.Width;
                 b.Location = new Point(x, y);
@@ -2185,6 +2187,11 @@ namespace MinGent
             return Run(owner, t, text, caption, icon, labels, results, def, danger, cancel);
         }
 
+        public static DialogResult Choose(IWin32Window owner, Theme t, string text, string caption, MessageBoxIcon icon, string[] labels, DialogResult[] results, int def, int cancel, Action[] keep)
+        {
+            return Run(owner, t, text, caption, icon, labels, results, def, -1, cancel, keep);
+        }
+
         public static bool Ask(IWin32Window owner, Theme t, string text, string caption, string action)
         {
             DialogResult r = Run(owner, t, text, caption, MessageBoxIcon.Question,
@@ -2201,8 +2208,13 @@ namespace MinGent
 
         static DialogResult Run(IWin32Window owner, Theme t, string text, string caption, MessageBoxIcon icon, string[] labels, DialogResult[] results, int def, int danger, int cancel)
         {
+            return Run(owner, t, text, caption, icon, labels, results, def, danger, cancel, null);
+        }
+
+        static DialogResult Run(IWin32Window owner, Theme t, string text, string caption, MessageBoxIcon icon, string[] labels, DialogResult[] results, int def, int danger, int cancel, Action[] keep)
+        {
             if (t == null) t = Theme.Light(Theme.SystemAccent(false));
-            using (Alert a = new Alert(t, text, caption, icon, labels, results, def, danger, cancel))
+            using (Alert a = new Alert(t, text, caption, icon, labels, results, def, danger, cancel, keep))
             {
                 IWin32Window o = OwnerOf(owner);
                 if (o == null) a.StartPosition = FormStartPosition.CenterScreen;

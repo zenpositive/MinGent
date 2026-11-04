@@ -1916,6 +1916,19 @@ namespace MinGent
             new Regex(@"\bno\s+more\s+(?:changes|work|edits|fixes)\b", Opt)
         };
         static readonly Regex Conditional = new Regex(@"\b(?:if|when|whenever|unless|once|until|after|before|in\s+case)\b", Opt);
+        static readonly Regex Review = new Regex(
+            @"(?<!\b(?:don'?t|dont|do\s+not|not|never|no\s+need\s+to)\s+)\b(?:stop|cancel|kill|abort|skip|halt|quit)\s+(?:the\s+|that\s+|this\s+|your\s+|its\s+|it'?s\s+)?(?:independent\s+|automatic\s+|auto\s+)?review(?:er|ing)?\b" +
+            @"(?!\s+(?:tables?|columns?|rows?|fields?|pages?|sections?|buttons?|forms?|screens?|steps?|tabs?|cards?|widgets?|features?|components?|modals?|dialogs?|links?|api|endpoints?|models?|scores?|counts?|text|data|queues?|lists?|comments?|requests?|stars?|ratings?|dates?)\b)" +
+            @"|\b(?:don'?t|dont|do\s+not|no\s+need\s+to)\s+(?:run|start|do|bother\s+with)\s+(?:a|an|the|any)\s+(?:independent\s+|automatic\s+)?review\b" +
+            @"|\bno\s+need\s+for\s+(?:a\s+|an\s+|the\s+)?(?:independent\s+|automatic\s+)?review\b" +
+            @"|\bwithout\s+(?:a\s+|an\s+|the\s+)?(?:independent|automatic)\s+review\b" +
+            @"|\b(?:turn|switch)\s+off\s+the\s+(?:independent\s+|automatic\s+)?review(?:er)?\b", Opt);
+
+        public static bool SkipsReview(string text)
+        {
+            string t = (text ?? "").Trim();
+            return t.Length > 0 && t.Length <= 2000 && Review.IsMatch(t);
+        }
         static readonly Regex Work = new Regex(@"\b(?:add|fix|make|change|create|write|build|run|test|update|implement|set|remove|delete|deploy|install|open|use|try|rename|move|copy|put|edit|refactor|commit|push|merge|revert|undo|instead|then|button|shortcut|flag|option|setting|feature|function|method|step|limit)\b", Opt);
 
         public static bool Says(string text)

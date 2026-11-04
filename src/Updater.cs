@@ -881,9 +881,9 @@ namespace MinGent
                           "It carries two signatures from the developer's release keys. MinGent downloads it (" + SizeText(offer.ZipBytes) + ") from GitHub, checks it against the signature again and builds it with the C# compiler in Windows. " +
                           "Then MinGent closes, puts the new version in place of this one in " + Updater.AppDir + " and opens again.\n\n" +
                           "Your chats, notes and settings stay as they are.";
+            string page = offer.Page;
             DialogResult d = Alert.Choose(owner, th, text, caption, MessageBoxIcon.Information, new string[] { "Install", "What's new", "Not now" },
-                new DialogResult[] { DialogResult.Yes, DialogResult.Retry, DialogResult.Cancel }, 0, 2);
-            if (d == DialogResult.Retry) { OpenPage(offer.Page); return; }
+                new DialogResult[] { DialogResult.Yes, DialogResult.Retry, DialogResult.Cancel }, 0, 2, new Action[] { null, delegate { OpenPage(page); }, null });
             if (d != DialogResult.Yes) return;
             err = null;
             bool finished = BusyDialog.Run(owner, th, caption, "Starting\u2026", delegate (CancelToken ct, Action<string, double> say)

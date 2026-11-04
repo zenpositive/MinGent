@@ -42,7 +42,7 @@ namespace MinGent
         string activePath, filter = "";
         int scroll, contentH, hoverRow = -1, hoverZone, pressRow = -1, pressZone, phase, focusRow = -1;
 
-        public event EventHandler NewChatClicked, SettingsClicked, LibraryClicked, CollapseClicked, DeleteAllClicked;
+        public event EventHandler NewChatClicked, SettingsClicked, LibraryClicked, CollapseClicked;
         public event Action<string> OpenClicked, DeleteClicked, RenameClicked, ArchiveClicked, RestoreClicked;
         public event EventHandler ArchiveViewClicked;
 
@@ -558,8 +558,6 @@ namespace MinGent
                 m.Items.Add(Menus.Item("Rename chat...", false, delegate { if (RenameClicked != null) RenameClicked(c.Path); }));
                 m.Items.Add(Menus.Item("Archive chat", false, delegate { if (ArchiveClicked != null) ArchiveClicked(c.Path); }));
                 m.Items.Add(Menus.Item("Delete chat", false, delegate { Delete(c); }));
-                m.Items.Add(new ToolStripSeparator());
-                m.Items.Add(Menus.Item("Delete all chats...", false, delegate { if (DeleteAllClicked != null) DeleteAllClicked(this, EventArgs.Empty); }));
             }
             m.Closed += delegate { BeginInvoke(new Action(delegate { m.Dispose(); })); };
             m.Show(this, p);

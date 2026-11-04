@@ -2661,14 +2661,6 @@ namespace MinGent
             return null;
         }
 
-        static readonly Regex PayFrame = new Regex(
-            @"^https?://([^/?#]+\.)?(paypal\.com|paypalobjects\.com|stripe\.com|stripe\.network|braintreegateway\.com|braintree-api\.com|adyen\.com|adyenpayments\.com|checkout\.com|klarna\.com|klarnaservices\.com|squareup\.com|afterpay\.com|affirm\.com|razorpay\.com|mollie\.com|worldpay\.com|authorize\.net)([/?#:]|$)|^https?://(pay|payments)\.google\.com([/?#:]|$)",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
-        static readonly Regex CaptchaFrame = new Regex(
-            @"^https?://([^/?#]+\.)?(hcaptcha\.com|arkoselabs\.com|funcaptcha\.com|recaptcha\.net|captcha-delivery\.com|px-cloud\.net|perimeterx\.net)([/?#:]|$)|^https?://challenges\.cloudflare\.com([/?#:]|$)|^https?://(www\.)?google\.com/recaptcha/",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
         public string PointInfo(double x, double y, CancelToken ct, out string kind, out bool sensitive)
         {
             kind = "";
@@ -2690,14 +2682,15 @@ namespace MinGent
                 }
                 if (Json.Bool(v, "frame"))
                 {
-                    string src = Json.Str(v, "src") ?? "";
-                    if (PayFrame.IsMatch(src)) { sensitive = true; kind = "a payment box from " + HostOf(src); }
-                    else if (CaptchaFrame.IsMatch(src)) { sensitive = true; kind = "a CAPTCHA box from " + HostOf(src); }
+                    string boxed = FrameKind.Of(Json.Str(v, "src"));
+                    if (boxed != null) { sensitive = true; kind = boxed; }
+                    else FrameKind.Inside(v, ref kind, ref sensitive);
                     return null;
                 }
                 sensitive = Json.Bool(v, "sensitive");
                 kind = Clip(Json.Str(v, "name") ?? "", 60);
                 if (kind.Length == 0) kind = Clip((Json.Str(v, "tag") ?? "element").ToLowerInvariant(), 30);
+                FrameKind.Inside(v, ref kind, ref sensitive);
                 return null;
             }
         }
@@ -2864,6 +2857,7 @@ namespace MinGent
                 if (Json.Bool(v, "frame")) { kind = "a field inside a frame from another site"; sensitive = true; return null; }
                 kind = Json.Str(v, "kind") ?? "";
                 sensitive = Json.Bool(v, "sensitive");
+                FrameKind.Inside(v, ref kind, ref sensitive);
                 return null;
             }
         }
@@ -3544,6 +3538,46 @@ namespace MinGent
             string url = currentUrl;
             if (!consoleOn || !(ThisPc(url) || SameHost(HostOf(url), agentSite))) { consoleLog.SkipNews(); return null; }
             return consoleLog.News();
+        }
+    }
+
+    static class FrameKind
+    {
+        static readonly Regex Pay = new Regex(
+            @"^https?://([^/?#]+\.)?(paypal\.com|paypalobjects\.com|stripe\.com|stripe\.network|braintreegateway\.com|braintree-api\.com|adyen\.com|adyenpayments\.com|checkout\.com|klarna\.com|klarnaservices\.com|squareup\.com|afterpay\.com|affirm\.com|razorpay\.com|mollie\.com|worldpay\.com|authorize\.net)([/?#:]|$)|^https?://(pay|payments)\.google\.com([/?#:]|$)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        static readonly Regex Captcha = new Regex(
+            @"^https?://([^/?#]+\.)?(hcaptcha\.com|arkoselabs\.com|funcaptcha\.com|recaptcha\.net|captcha-delivery\.com|px-cloud\.net|perimeterx\.net)([/?#:]|$)|^https?://challenges\.cloudflare\.com([/?#:]|$)|^https?://(www\.)?google\.com/recaptcha/",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        public static string Of(string src)
+        {
+            if (string.IsNullOrEmpty(src)) return null;
+            if (Pay.IsMatch(src)) return "a payment box from " + Host(src);
+            if (Captcha.IsMatch(src)) return "a CAPTCHA box from " + Host(src);
+            return null;
+        }
+
+        public static void Inside(object info, ref string kind, ref bool sensitive)
+        {
+            List<object> via = Json.List(info, "via");
+            if (via == null) return;
+            string found = null;
+            foreach (object o in via)
+            {
+                string k = Of(o as string);
+                if (k != null && (found == null || k.StartsWith("a payment", StringComparison.Ordinal))) found = k;
+            }
+            if (found == null) return;
+            kind = found;
+            sensitive = true;
+        }
+
+        static string Host(string url)
+        {
+            Uri u;
+            return Uri.TryCreate(url, UriKind.Absolute, out u) ? u.Host : "";
         }
     }
 }

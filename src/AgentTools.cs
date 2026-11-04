@@ -3973,7 +3973,7 @@ namespace MinGent
                 ask.Category = ctx.Guarded(PermissionCategory.BrowserSensitive);
                 ask.High = true;
                 ask.AllowRemember = false;
-                ask.Title = "Type into a " + kind + " field";
+                ask.Title = kind.StartsWith("a ", StringComparison.Ordinal) ? "Type into " + kind : "Type into a " + kind + " field";
                 ask.Detail = ctx.Browser.CurrentUrl;
                 ask.Reason = "This field takes a password, payment or other sensitive information.";
                 if (!ctx.Approve(ask)) { ToolOutcome d = ToolOutcome.Fail("The user did not allow typing into this field."); d.Denied = true; return d; }

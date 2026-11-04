@@ -509,7 +509,6 @@ namespace MinGent
             sidebar.ArchiveViewClicked += delegate { showArchived = !showArchived; RefreshSidebar(); };
             sidebar.DeleteClicked += DeleteChat;
             sidebar.RenameClicked += RenameChat;
-            sidebar.DeleteAllClicked += delegate { DeleteAllChats(); };
             sidebar.SettingsClicked += delegate { ShowSettings(); };
             sidebar.LibraryClicked += delegate { ShowModelLibrary(); };
             sidebar.CollapseClicked += delegate { ToggleSidebar(); };
@@ -1167,12 +1166,6 @@ namespace MinGent
         {
             List<string> unsaved = UnsavedNotes(null);
             return DeleteAllText + (unsaved.Count > 0 ? "\n\nTheir notes close too, and unsaved changes in " + AiPanel.NoteNames(unsaved) + " are lost. Files saved on your PC stay." : "");
-        }
-
-        void DeleteAllChats()
-        {
-            if (!Alert.Confirm(this, theme, DeleteAllPrompt(), Program.AppName, "Delete all", true)) return;
-            aiPanel.StopThen(delegate { aiPanel.DeleteAllChats(); RefreshSidebar(); });
         }
 
         bool AskErase(IWin32Window owner, out bool downloads, out bool outputs)

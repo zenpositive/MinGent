@@ -126,10 +126,15 @@ namespace MinGent
 
         public static PermissionAsk Ask(string line, bool known, string why, string key, TerminalPlace place, PermissionState ps, string workspace, string window)
         {
-            if (place == null || place.Name == null) return One(line, known, why, key, null, ps, workspace, window);
-            PermissionAsk there = One(line, known, why, key, place.Name, ps, workspace, window);
+            return Ask(line, known, why, key, place, ps, workspace, window, null);
+        }
+
+        public static PermissionAsk Ask(string line, bool known, string why, string key, TerminalPlace place, PermissionState ps, string workspace, string window, string description)
+        {
+            if (place == null || place.Name == null) return One(line, known, why, key, null, ps, workspace, window, description);
+            PermissionAsk there = One(line, known, why, key, place.Name, ps, workspace, window, description);
             if (place.Sure && !place.Linux) return there;
-            PermissionAsk here = One(line, known, why, key, null, ps, workspace, window);
+            PermissionAsk here = One(line, known, why, key, null, ps, workspace, window, description);
             PermissionAsk a = Stricter(there, here);
             if (a != null && !place.Sure) a.Reason = ((a.Reason ?? "") + " MinGent isn't sure this terminal is still connected to " + place.Name + ", so it checked the command both ways.").Trim();
             return a;
@@ -154,7 +159,7 @@ namespace MinGent
             return s;
         }
 
-        static PermissionAsk One(string line, bool known, string why, string key, string place, PermissionState ps, string workspace, string window)
+        static PermissionAsk One(string line, bool known, string why, string key, string place, PermissionState ps, string workspace, string window, string description)
         {
             string cmd = (line ?? "").Trim();
             bool guard = ps.WebGuard && ps.Tainted;
@@ -176,7 +181,7 @@ namespace MinGent
             }
             if (cmd.Length == 0) return null;
             a.Detail = cmd;
-            a.Summary = CommandWords.Describe(cmd);
+            a.Summary = CommandWords.Explain(description, cmd);
             if (TerminalRules.Expands(cmd))
             {
                 a.Title = act == null ? "Run a command in the terminal" : act + " in the terminal";

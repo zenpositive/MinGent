@@ -1881,6 +1881,57 @@ namespace MinGent
             return null;
         }
 
+        static readonly string[] ComposeVerbs = { "up", "down", "pull", "logs", "ps", "restart", "build", "stop", "start", "exec", "run", "config", "rm" };
+
+        static string Docker(string tool, List<string> p, List<string> w, out int weight)
+        {
+            string sub = p.Count > 0 ? p[0].ToLowerInvariant() : "";
+            if (tool == "docker-compose" || sub == "compose")
+            {
+                string verb = "";
+                for (int i = tool == "docker-compose" ? 0 : 1; i < p.Count && verb.Length == 0; i++)
+                    if (Array.IndexOf(ComposeVerbs, p[i].ToLowerInvariant()) >= 0) verb = p[i].ToLowerInvariant();
+                switch (verb)
+                {
+                    case "ps": weight = 1; return "List the app's containers";
+                    case "logs": weight = 1; return "Show the logs of the app's containers";
+                    case "config": weight = 1; return "Show how the app's containers are set up";
+                    case "up": case "start": weight = 4; return "Start the app's containers";
+                    case "down": weight = 4; return "Stop and remove the app's containers";
+                    case "stop": weight = 4; return "Stop the app's containers";
+                    case "restart": weight = 4; return "Restart the app's containers";
+                    case "pull": weight = 3; return "Download new images for the app's containers";
+                    case "build": weight = 3; return "Build the app's container images";
+                    case "exec": case "run": weight = 3; return "Run a command in one of the app's containers";
+                    case "rm": weight = 5; return "Remove the app's stopped containers";
+                }
+                weight = 2; return "Run docker compose";
+            }
+            List<string> rest = new List<string>();
+            int at = sub.Length > 0 ? w.FindIndex(delegate (string x) { return x.Equals(sub, StringComparison.OrdinalIgnoreCase); }) : -1;
+            for (int i = at + 1; at >= 0 && i < w.Count; i++) if (w[i].Length > 0 && w[i][0] != '-') rest.Add(w[i]);
+            string them = Names(rest, 0);
+            string last = rest.Count > 0 ? Short(rest[rest.Count - 1]) : "";
+            switch (sub)
+            {
+                case "ps": weight = 1; return "List the running containers";
+                case "images": weight = 1; return "List the container images";
+                case "logs": weight = 1; return last.Length > 0 ? "Show the logs of the container " + last : "Show a container's logs";
+                case "inspect": case "stats": case "top": weight = 1; return last.Length > 0 ? "Show details of the container " + last : "Show details of the containers";
+                case "pull": weight = 3; return last.Length > 0 ? "Download the image " + last : "Download an image";
+                case "build": weight = 3; return "Build a container image";
+                case "run": weight = 3; return "Start a new container";
+                case "exec": weight = 3; return rest.Count > 0 ? "Run a command in the container " + Short(rest[0]) : "Run a command in a container";
+                case "start": weight = 3; return them.Length > 0 ? "Start the container " + them : "Start a container";
+                case "stop": case "kill": weight = 4; return them.Length > 0 ? "Stop the container " + them : "Stop a container";
+                case "restart": weight = 4; return them.Length > 0 ? "Restart the container " + them : "Restart a container";
+                case "rm": weight = 5; return them.Length > 0 ? "Delete the container " + them : "Delete a container";
+                case "rmi": weight = 5; return them.Length > 0 ? "Delete the image " + them : "Delete an image";
+            }
+            if (p.Count > 1 && p[1].ToLowerInvariant() == "prune") { weight = 5; return "Delete unused " + (sub == "system" ? "containers, images and networks" : sub + "s"); }
+            weight = 2; return "Run " + tool + (sub.Length > 0 && Regex.IsMatch(sub, @"^[a-z][\w-]{0,20}$") ? " " + sub : "");
+        }
+
         static string Names(List<string> items, int from)
         {
             List<string> l = new List<string>();
@@ -2102,6 +2153,8 @@ namespace MinGent
                 case "apt": case "apt-get": case "dnf": case "yum": case "pacman": case "brew": case "apk": case "zypper": case "snap":
                     if (sub == "install" || sub == "add" || (name == "pacman" && Has(w, "-S"))) { weight = 4; return "Install " + (p.Count > (name == "pacman" ? 0 : 1) ? Names(p, name == "pacman" ? 0 : 1) : "packages") + " with " + name; }
                     if (sub == "remove" || sub == "purge" || sub == "uninstall" || sub == "del" || (name == "pacman" && Has(w, "-R"))) { weight = 5; return "Uninstall " + (p.Count > 1 ? Names(p, 1) : "packages") + " with " + name; }
+                    if ((name == "apt" || name == "apt-get") && sub == "update") { weight = 3; return "Refresh the package lists with " + name; }
+                    if ((name == "apt" || name == "apt-get") && (sub == "upgrade" || sub == "full-upgrade" || sub == "dist-upgrade")) { weight = 4; return "Install package updates with " + name; }
                     if (sub == "update" || sub == "upgrade" || (name == "pacman" && Has(w, "-Syu"))) { weight = 4; return "Update the packages with " + name; }
                     weight = 1; return "Look up packages with " + name;
                 case "systemctl": case "service":
@@ -2176,7 +2229,55 @@ namespace MinGent
                 case "eslint": weight = 1; return "Check the code with ESLint";
                 case "prettier": weight = 4; return Has(w, "--write", "-w") ? "Format the code with Prettier" : "Check the formatting with Prettier";
                 case "black": case "ruff": case "mypy": weight = name == "black" ? 4 : 1; return name == "black" ? "Format the Python code with Black" : "Check the Python code with " + (name == "ruff" ? "Ruff" : "mypy");
-                case "docker": weight = sub == "run" || sub == "build" || sub == "compose" ? 3 : 1; return "Run docker " + sub;
+                case "docker": case "podman": case "docker-compose": return Docker(name, p, w, out weight);
+                case "mysql": case "mariadb": case "psql": case "sqlite3": weight = 3; return Has(w, "-e", "-c", "--execute", "--command") ? "Run an SQL query with " + name : "Open the " + name + " database shell";
+                case "free": weight = 1; return "Show how much memory is used";
+                case "uptime": weight = 1; return "Show how long the computer has been running";
+                case "crontab":
+                    if (Has(w, "-l")) { weight = 1; return "Show the scheduled jobs (crontab)"; }
+                    if (Has(w, "-r")) { weight = 5; return "Delete all scheduled jobs (crontab)"; }
+                    weight = 4; return "Change the scheduled jobs (crontab)";
+                case "ln": weight = 4; return p.Count > 1 ? "Link " + Short(p[1]) + " to " + Short(p[0]) : "Make a link to " + Target(p, "a file");
+                case "reboot": weight = 5; return "Restart the computer";
+                case "shutdown": case "poweroff": case "halt": weight = 5; return Has(w, "-r", "/r", "--reboot") ? "Restart the computer" : "Shut down the computer";
+                case "ufw":
+                    if (sub == "status" || sub == "show") { weight = 1; return "Show the firewall rules"; }
+                    weight = 5;
+                    if (sub == "allow") return "Open " + (p.Count > 1 ? Short(p[1]) : "a port") + " in the firewall";
+                    if (sub == "deny" || sub == "reject") return "Block " + (p.Count > 1 ? Short(p[1]) : "a port") + " in the firewall";
+                    if (sub == "delete") return "Remove a firewall rule";
+                    if (sub == "enable") return "Turn the firewall on";
+                    if (sub == "disable") return "Turn the firewall off";
+                    return "Change the firewall";
+                case "certbot":
+                    if (sub == "certificates") { weight = 1; return "List the HTTPS certificates"; }
+                    weight = 4; return sub == "renew" ? "Renew the HTTPS certificates" : sub == "delete" || sub == "revoke" ? "Remove an HTTPS certificate" : "Get an HTTPS certificate";
+                case "pm2":
+                    {
+                        if (sub == "list" || sub == "ls" || sub == "status" || sub == "show" || sub == "describe" || sub == "monit" || sub == "jlist") { weight = 1; return "List the apps pm2 runs"; }
+                        if (sub == "logs") { weight = 1; return "Show the logs of " + (p.Count > 1 ? Short(p[1]) : "the apps pm2 runs"); }
+                        string app = p.Count > 1 ? (p[1] == "all" ? "all apps" : Short(p[1])) : "the app";
+                        weight = 4;
+                        if (sub == "restart" || sub == "reload") return "Restart " + app + " with pm2";
+                        if (sub == "start") return "Start " + app + " with pm2";
+                        if (sub == "stop") return "Stop " + app + " in pm2";
+                        if (sub == "delete") return "Remove " + app + " from pm2";
+                        if (sub == "save") return "Save the list of apps pm2 runs";
+                        weight = 2; return "Run pm2 " + sub;
+                    }
+                case "nginx":
+                    {
+                        if (Has(w, "-t", "-T")) { weight = 1; return "Check the nginx configuration"; }
+                        string sig = After(w, "-s");
+                        weight = 4;
+                        if (sig == "reload") return "Reload nginx with its new configuration";
+                        if (sig == "stop" || sig == "quit") return "Stop nginx";
+                        return sig != null ? "Send nginx the signal " + sig : "Start nginx";
+                    }
+                case "useradd": case "adduser": weight = 4; return p.Count > 0 ? "Create the user account " + Short(p[p.Count - 1]) : "Create a user account";
+                case "userdel": case "deluser": weight = 5; return p.Count > 0 ? "Delete the user account " + Short(p[p.Count - 1]) : "Delete a user account";
+                case "passwd": weight = 5; return p.Count > 0 ? "Change the password of " + Short(p[p.Count - 1]) : "Change your password";
+                case "ssh-keygen": weight = 4; return Has(w, "-R") ? "Forget a server's saved SSH key" : "Create an SSH key";
                 case "cmd":
                     {
                         string inner = After(w, "/c", "/k");
@@ -2399,6 +2500,7 @@ namespace MinGent
         {
             string c = (command ?? "").Trim();
             if (c.Length == 0) return "";
+            if (Regex.IsMatch(c, @"^(exit|logout)(\s+\d+)?$", RegexOptions.IgnoreCase)) return "Close this shell (in a session on a server, this disconnects from it)";
             int top;
             List<string> steps;
             try { steps = Steps(c, 0, out top); }

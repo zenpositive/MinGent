@@ -2480,6 +2480,11 @@ namespace MinGent
 
         protected static string TerminalEnter(ToolContext ctx, AppWindow w, TerminalState t, string act)
         {
+            return TerminalEnter(ctx, w, t, act, null);
+        }
+
+        protected static string TerminalEnter(ToolContext ctx, AppWindow w, TerminalState t, string act, string description)
+        {
             string line, why;
             bool known;
             lock (t) { line = t.Line; known = t.Known; why = t.Why; }
@@ -2490,7 +2495,7 @@ namespace MinGent
             string refused = bad != null ? "Not run: " + bad + "." : Net.Offline && ((place.Name != null && !place.Linux) || !known || CommandSafety.NeedsInternet(line)) ? "Not run: " + Net.OfflineMessage : null;
             if (refused == null)
             {
-                PermissionAsk a = TerminalCheck.Ask(line, known, why, act, place, ctx.Session.Perms, ctx.Workspace, w.Title.Length > 0 ? w.Title : w.Process);
+                PermissionAsk a = TerminalCheck.Ask(line, known, why, act, place, ctx.Session.Perms, ctx.Workspace, w.Title.Length > 0 ? w.Title : w.Process, description);
                 if (a == null || ctx.Approve(a)) return null;
                 refused = (act == null ? "The user did not allow running " + what : "The user did not allow the agent to " + act + " while " + what + " is on the command line") + (place.Name != null ? " on " + place.Name : "") + ".";
             }
@@ -2526,7 +2531,7 @@ namespace MinGent
             return true;
         }
 
-        protected static ToolOutcome TerminalType(ToolContext ctx, AppWindow w, string text, bool enter)
+        protected static ToolOutcome TerminalType(ToolContext ctx, AppWindow w, string text, bool enter, string description)
         {
             TerminalState t = AppControl.TerminalOf(w);
             if (t == null) return ToolOutcome.Fail("this terminal window is no longer open");
@@ -2549,7 +2554,7 @@ namespace MinGent
                     chars += part.Length;
                 }
                 if (i == lines.Length - 1 && !enter) break;
-                string deny = TerminalEnter(ctx, w, t, null);
+                string deny = TerminalEnter(ctx, w, t, null, description);
                 if (deny != null) return Denied(deny);
                 string f2 = AppControl.Focus(w);
                 if (f2 != null) return ToolOutcome.Fail(f2);
@@ -2562,7 +2567,7 @@ namespace MinGent
             return After(ctx, w, ran > 0 ? 1200 : 300, how);
         }
 
-        protected static ToolOutcome TerminalKeys(ToolContext ctx, AppWindow w, List<KeyPress> keys)
+        protected static ToolOutcome TerminalKeys(ToolContext ctx, AppWindow w, List<KeyPress> keys, string description)
         {
             TerminalState t = AppControl.TerminalOf(w);
             if (t == null) return ToolOutcome.Fail("this terminal window is no longer open");
@@ -2590,7 +2595,7 @@ namespace MinGent
                 }
                 if (key == null) break;
                 bool enter = TerminalState.IsEnter(key);
-                string deny = TerminalEnter(ctx, w, t, enter ? null : "press " + key.Label);
+                string deny = TerminalEnter(ctx, w, t, enter ? null : "press " + key.Label, enter ? description : null);
                 if (deny != null) return Denied(deny);
                 string f2 = AppControl.Focus(w);
                 if (f2 != null) return ToolOutcome.Fail(f2);
@@ -2944,6 +2949,7 @@ namespace MinGent
                 return Obj("text", P("string", "Text to type"), true,
                            "ref", P("string", "Field ref from app_read, e.g. a7"), false,
                            "enter", P("boolean", "Press Enter after typing"), false,
+                           "description", P("string", "In a terminal, when this runs a command: a few plain words saying what it does, shown to the user when MinGent asks first, e.g. \"Restart the web server\""), false,
                            "window", WindowArg(), false);
             }
         }
@@ -3005,7 +3011,7 @@ namespace MinGent
                     AppControl.Key(0x23, new List<ushort>(new ushort[] { 0x10 }));
                 }
             }
-            if (w.Terminal) return TerminalType(ctx, w, text, B(a, "enter", false));
+            if (w.Terminal) return TerminalType(ctx, w, text, B(a, "enter", false), S(a, "description"));
             string terr = AppControl.Type(w, text);
             if (terr != null) return ToolOutcome.Fail(terr);
             if (B(a, "enter", false))
@@ -3044,6 +3050,7 @@ namespace MinGent
                 return Obj("key", P("string", "Key, shortcut or space-separated sequence"), true,
                            "repeat", P("integer", "How many times to press it (default 1)"), false,
                            "hold_ms", P("integer", "Hold the keys down this many milliseconds before letting go (at most 10000)"), false,
+                           "description", P("string", "In a terminal, when Enter runs the command on the line: a few plain words saying what it does, shown to the user when MinGent asks first"), false,
                            "window", WindowArg(), false);
             }
         }
@@ -3085,7 +3092,7 @@ namespace MinGent
             {
                 if (hold > 0) return ToolOutcome.Fail("hold_ms doesn't work in a terminal; press the keys without it");
                 uint was = copy ? ClipboardGuard.Now() : 0;
-                ToolOutcome to = TerminalKeys(ctx, w, keys);
+                ToolOutcome to = TerminalKeys(ctx, w, keys, S(a, "description"));
                 if (copy) ClipboardGuard.AfterCopy(was);
                 return to;
             }
