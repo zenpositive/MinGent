@@ -3339,14 +3339,25 @@ namespace MinGent
 
         public const int CaptchaLimit = 5;
 
-        protected static string CaptchaTurn(ToolContext ctx)
+        public static int AnswersFor(string kind)
+        {
+            string k = (kind ?? "").ToLowerInvariant();
+            if (k.Contains("arkoselabs") || k.Contains("funcaptcha")) return 15;
+            if (k.Contains("hcaptcha")) return 10;
+            return CaptchaLimit;
+        }
+
+        protected static bool IsCaptcha(string kind) { return (kind ?? "").StartsWith("a CAPTCHA", StringComparison.Ordinal); }
+
+        protected static string CaptchaTurn(ToolContext ctx, string kind)
         {
             AgentSession s = ctx.Session;
             string host = BlockCheck.HostOf(ctx.Browser.CurrentUrl ?? "") ?? "";
-            if (!string.Equals(host, s.CaptchaHost ?? "", StringComparison.OrdinalIgnoreCase)) { s.CaptchaHost = host; s.CaptchaTries = 0; s.CaptchaActed = false; s.CaptchaSubmitted = false; }
+            if (!string.Equals(host, s.CaptchaHost ?? "", StringComparison.OrdinalIgnoreCase)) { s.CaptchaHost = host; s.CaptchaTries = 0; s.CaptchaBudget = 0; s.CaptchaActed = false; s.CaptchaSubmitted = false; }
+            s.CaptchaBudget = Math.Max(s.CaptchaBudget, AnswersFor(kind));
             if (s.CaptchaActed && ctx.Cfg.Vision) return null;
-            if (s.CaptchaTries >= CaptchaLimit)
-                return "You have tried this CAPTCHA " + CaptchaLimit + " times, which is the limit. Stop trying: call ask_user to ask the user to solve it in the browser pane, then carry on once they say it's done.";
+            if (s.CaptchaTries >= s.CaptchaBudget)
+                return (s.CaptchaBudget > CaptchaLimit ? "You have answered " + s.CaptchaBudget + " puzzles in this CAPTCHA" : "You have tried this CAPTCHA " + s.CaptchaBudget + " times") + ", which is the limit. Stop trying: call ask_user to ask the user to solve it in the browser pane, then carry on once they say it's done.";
             s.CaptchaTries++;
             s.CaptchaActed = true;
             return null;
@@ -3356,7 +3367,7 @@ namespace MinGent
         {
             AgentSession s = ctx.Session;
             if (s.CaptchaSubmitted || !ctx.Cfg.Vision) { s.CaptchaActed = false; s.CaptchaSubmitted = false; }
-            if (ctx.Browser != null && !ctx.Browser.CaptchaOnPage) { s.CaptchaTries = 0; s.CaptchaActed = false; }
+            if (ctx.Browser != null && !ctx.Browser.CaptchaOnPage) { s.CaptchaTries = 0; s.CaptchaBudget = 0; s.CaptchaActed = false; }
         }
 
         protected static ToolOutcome Result(string err, string text, string summary, bool untrusted)
@@ -3518,8 +3529,37 @@ namespace MinGent
             Looked(ctx);
             ctx.Session.BrowserMovedTo = null;
             o.Images = new List<ImageData>(new ImageData[] { img });
+            ImageData near = zoomed ? null : CloseUp(ctx);
+            if (near != null) o.Images.Add(near);
             o.AddNote(zoomed ? "This is the CAPTCHA now, zoomed in (picture below, " + w + " x " + h + " pixels). Positions for the next browser_click are pixels in this picture. If a picture in it is still loading or fading in, take browser_screenshot again before you pick it or press Verify."
+                             : near != null ? "This is the page now (first picture, " + w + " x " + h + " pixels), with the CAPTCHA on it zoomed in as the second picture so it is easier to read. Positions for the next browser_click are pixels in the first picture."
                              : "This is the page now (picture below, " + w + " x " + h + " pixels); no CAPTCHA puzzle is open. Positions for the next browser_click are pixels in this picture.");
+            o.AddNote(CaptchaTip(ctx));
+        }
+
+        internal static ImageData CloseUp(ToolContext ctx)
+        {
+            ImageData near;
+            int nw, nh;
+            return ctx.Browser.CaptchaCloseUp(ctx.Ct, out near, out nw, out nh) == null ? near : null;
+        }
+
+        internal static string CaptchaTip(ToolContext ctx)
+        {
+            if (!ctx.Cfg.TryCaptchas || !ctx.Cfg.Vision || ctx.Session.IsHelper || ctx.Browser == null) return null;
+            string name = ctx.Browser.CaptchaName ?? "";
+            bool typed = ctx.Browser.CaptchaTyped;
+            string tip = null;
+            if (name == "hCaptcha") tip = "hCaptcha often has two or three pages of pictures: pick the matching ones on each page and press Next; the last page has Verify. Some pages ask you to click one spot or drag a piece instead.";
+            else if (name == "Arkose") tip = "Arkose puzzles have several rounds, often five or more: answer each round (usually with the arrows, then Submit). Each round counts as one answer.";
+            else if (name == "DataDome" || name == "GeeTest" || name == "Tencent" || name == "NetEase") tip = "If it asks you to slide a piece into place, use browser_drag once, from the slider handle to where the piece fits the gap.";
+            else if (name == "Press & Hold") tip = "This check wants its button pressed and held: use browser_click on the button with hold_ms (it fills up while held; 10000 is usually enough), then look again.";
+            else if (typed) tip = "Type the characters exactly as the picture shows them into its answer box with browser_type, then submit. If you can't make out a character, most of these have a button for a new picture.";
+            if (tip == null) return null;
+            string key = "|" + name + (typed ? "+typed" : "") + "|";
+            if ((ctx.Session.CaptchaTipped ?? "").Contains(key)) return null;
+            ctx.Session.CaptchaTipped = (ctx.Session.CaptchaTipped ?? "") + key;
+            return tip;
         }
 
         protected static ToolOutcome Act(ToolContext ctx, string err, string summary, string label)
@@ -3724,6 +3764,7 @@ namespace MinGent
             if (stale != null) return stale;
             string g = Gate(ctx, null);
             if (g != null) { ToolOutcome d = ToolOutcome.Fail(g); d.Denied = true; return d; }
+            string firstKind = null;
             foreach (double[] p in pts)
             {
                 string kind;
@@ -3732,10 +3773,11 @@ namespace MinGent
                 if (e != null) return ToolOutcome.Fail(e);
                 if (!kind.StartsWith("a CAPTCHA box", StringComparison.Ordinal))
                     return ToolOutcome.Fail("points is only for clicking several tiles of a CAPTCHA picture grid, and " + p[0].ToString("0", CultureInfo.InvariantCulture) + ", " + p[1].ToString("0", CultureInfo.InvariantCulture) + " is not inside one. Click other things one at a time.");
+                if (firstKind == null) firstKind = kind;
             }
             if (ctx.Session.IsHelper) return HelperCaptcha();
             if (!ctx.Cfg.TryCaptchas) return ToolOutcome.Fail("These positions are inside a CAPTCHA. The agent only solves CAPTCHAs when CAPTCHA mode is on in Settings: ask the user to solve it.");
-            string stop = CaptchaTurn(ctx);
+            string stop = CaptchaTurn(ctx, firstKind);
             if (stop != null) return ToolOutcome.Fail(stop);
             string summary;
             bool submitted;
@@ -3777,7 +3819,7 @@ namespace MinGent
                 if (captcha && ctx.Session.IsHelper) return HelperCaptcha();
                 if (captcha && ctx.Cfg.TryCaptchas)
                 {
-                    string stop = CaptchaTurn(ctx);
+                    string stop = CaptchaTurn(ctx, pkind);
                     if (stop != null) return ToolOutcome.Fail(stop);
                 }
                 if (psens && !(captcha && ctx.Cfg.TryCaptchas))
@@ -3804,11 +3846,11 @@ namespace MinGent
             bool sensitive;
             string ie = ctx.Browser.ElementInfo(r, ctx.Ct, out kind, out sensitive);
             if (ie != null) return ToolOutcome.Fail(ie);
-            bool isCaptcha = kind.StartsWith("a CAPTCHA box", StringComparison.Ordinal);
+            bool isCaptcha = IsCaptcha(kind);
             if (isCaptcha && ctx.Session.IsHelper) return HelperCaptcha();
             if (isCaptcha && ctx.Cfg.TryCaptchas)
             {
-                string stop = CaptchaTurn(ctx);
+                string stop = CaptchaTurn(ctx, kind);
                 if (stop != null) return ToolOutcome.Fail(stop);
             }
             if (sensitive && !(isCaptcha && ctx.Cfg.TryCaptchas))
@@ -3825,7 +3867,7 @@ namespace MinGent
             }
             string summary;
             string err = ctx.Browser.ClickElement(r, mouse, ctx.Ct, out summary);
-            if (isCaptcha && err == null) ctx.Session.CaptchaSubmitted = true;
+            if (isCaptcha && err == null && kind.StartsWith("a CAPTCHA box", StringComparison.Ordinal)) ctx.Session.CaptchaSubmitted = true;
             ToolOutcome ro = Act(ctx, err, FrameHint(ctx, summary), mouse.Describe() + " " + r);
             if (isCaptcha) LookAfterCaptcha(ctx, ro, true);
             return ro;
@@ -3921,7 +3963,7 @@ namespace MinGent
                 if (dragCaptcha && ctx.Session.IsHelper) return HelperCaptcha();
                 if (dragCaptcha && ctx.Cfg.TryCaptchas)
                 {
-                    string stop = CaptchaTurn(ctx);
+                    string stop = CaptchaTurn(ctx, kind);
                     if (stop != null) return ToolOutcome.Fail(stop);
                 }
                 if (sensitive && !(dragCaptcha && ctx.Cfg.TryCaptchas))
@@ -3948,7 +3990,7 @@ namespace MinGent
                 if (posCaptcha && ctx.Session.IsHelper) return HelperCaptcha();
                 if (posCaptcha && ctx.Cfg.TryCaptchas)
                 {
-                    string stop = CaptchaTurn(ctx);
+                    string stop = CaptchaTurn(ctx, pkind);
                     if (stop != null) return ToolOutcome.Fail(stop);
                 }
                 if (psens && !(posCaptcha && ctx.Cfg.TryCaptchas))
@@ -4000,6 +4042,20 @@ namespace MinGent
             bool sensitive;
             string ie = r.Length > 0 ? ctx.Browser.ElementInfo(r, ctx.Ct, out kind, out sensitive) : ctx.Browser.FocusedInfo(ctx.Ct, out kind, out sensitive);
             if (ie != null) return ToolOutcome.Fail(ie);
+            bool answer = (kind ?? "").StartsWith("a CAPTCHA answer box", StringComparison.Ordinal);
+            if (answer && ctx.Session.IsHelper) return HelperCaptcha();
+            if (answer && text.Length > 32) return ToolOutcome.Fail("A CAPTCHA answer box takes only the few characters its picture shows, so this text was not typed.");
+            if (answer)
+            {
+                string ex = WebAccess.ExfilText(ctx, text, "Type a lot of text into a web page", ctx.Browser.CurrentUrl);
+                if (ex != null) { ToolOutcome d0 = ToolOutcome.Fail(ex); d0.Denied = true; return d0; }
+            }
+            if (answer && ctx.Cfg.TryCaptchas)
+            {
+                string stop = CaptchaTurn(ctx, kind);
+                if (stop != null) return ToolOutcome.Fail(stop);
+                sensitive = false;
+            }
             if (sensitive)
             {
                 PermissionAsk ask = new PermissionAsk();
@@ -4009,17 +4065,21 @@ namespace MinGent
                 ask.AllowRemember = false;
                 ask.Title = kind.StartsWith("a ", StringComparison.Ordinal) ? "Type into " + kind : "Type into a " + kind + " field";
                 ask.Detail = ctx.Browser.CurrentUrl;
-                ask.Reason = "This field takes a password, payment or other sensitive information.";
+                ask.Reason = answer ? "This is a CAPTCHA. The agent only solves CAPTCHAs when CAPTCHA mode is on in Settings." : "This field takes a password, payment or other sensitive information.";
                 if (!ctx.Approve(ask)) { ToolOutcome d = ToolOutcome.Fail("The user did not allow typing into this field."); d.Denied = true; return d; }
             }
-            if (!sensitive)
+            if (!sensitive && !answer)
             {
                 string ex = WebAccess.ExfilText(ctx, text, "Type a lot of text into a web page", ctx.Browser.CurrentUrl);
                 if (ex != null) { ToolOutcome d2 = ToolOutcome.Fail(ex); d2.Denied = true; return d2; }
             }
             string summary;
-            string err = ctx.Browser.TypeText(r, text, B(a, "submit", false), B(a, "clear", true), ctx.Ct, out summary);
-            return Act(ctx, err, FrameHint(ctx, summary), r.Length > 0 ? "Typed into " + r : "Typed in the page");
+            bool submit = B(a, "submit", false);
+            string err = ctx.Browser.TypeText(r, text, submit, B(a, "clear", true), ctx.Ct, out summary);
+            if (answer && err == null) ctx.Session.CaptchaSubmitted = true;
+            ToolOutcome o = Act(ctx, err, FrameHint(ctx, summary), r.Length > 0 ? "Typed into " + r : "Typed in the page");
+            if (answer && ctx.Cfg.TryCaptchas && submit) LookAfterCaptcha(ctx, o, false);
+            return o;
         }
     }
 
@@ -4151,10 +4211,14 @@ namespace MinGent
             if (err != null) return ToolOutcome.Fail(err);
             Looked(ctx);
             ctx.Session.BrowserMovedTo = null;
+            ImageData near = !zoomed && ctx.Cfg.TryCaptchas && ctx.Cfg.Vision && !ctx.Session.IsHelper ? CloseUp(ctx) : null;
             ToolOutcome o = ToolOutcome.Ok(zoomed
                 ? "Screenshot of the CAPTCHA on " + ctx.Browser.CurrentUrl + ", zoomed in so it is easier to see (shown below, " + w + " x " + h + " pixels). Click in it with browser_click and x and y in these pixels; to pick several picture tiles at once, give points."
+                : near != null ? "Screenshot of " + ctx.Browser.CurrentUrl + " (first picture, " + w + " x " + h + " pixels), with the CAPTCHA on it zoomed in as the second picture so it is easier to read. To click, call browser_click with x and y in the pixels of the first picture."
                 : "Screenshot of " + ctx.Browser.CurrentUrl + " (shown below, " + w + " x " + h + " pixels). To click something that browser_read does not list, call browser_click with x and y in these pixels.", zoomed ? "Screenshot of the CAPTCHA" : "Screenshot");
             o.Images = new List<ImageData>(new ImageData[] { img });
+            if (near != null) o.Images.Add(near);
+            if (ctx.Cfg.TryCaptchas && (zoomed || near != null)) o.AddNote(CaptchaTip(ctx));
             o.Untrusted = true;
             return o;
         }

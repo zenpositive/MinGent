@@ -91,6 +91,9 @@ namespace MinGent
         string YouTubeTranscript(string url, CancelToken ct, out object result);
         string Screenshot(CancelToken ct, out ImageData image, out int width, out int height);
         string CaptchaShot(CancelToken ct, out ImageData image, out int width, out int height);
+        string CaptchaCloseUp(CancelToken ct, out ImageData image, out int width, out int height);
+        string CaptchaName { get; }
+        bool CaptchaTyped { get; }
         string ElementInfo(string refId, CancelToken ct, out string kind, out bool sensitive);
         string PointInfo(double x, double y, CancelToken ct, out string kind, out bool sensitive);
         bool PendingDownload(out string name, out string url, out long bytes);
@@ -918,7 +921,8 @@ namespace MinGent
         public string FrozenSystem, FrozenKey;
         public string LastTabs;
         public RunCoach LastCoach;
-        public int CaptchaTries;
+        public int CaptchaTries, CaptchaBudget;
+        public string CaptchaTipped = "";
         public bool CaptchaActed, CaptchaSubmitted, GoogleHanded, StopAsked, ReviewDeclined;
         public string CaptchaHost;
         public readonly List<string> Remembered = new List<string>();
@@ -2680,7 +2684,7 @@ namespace MinGent
             sb.Append("  then fix what is wrong and test again.\n");
             sb.Append("- When something fails, read the error, find the cause and change your approach. Don't repeat a call that failed the same way.\n");
             sb.Append("- If a site blocks automated access (HTTP 403 or 429, a \"Just a moment...\" page, a CAPTCHA), requests from curl or scripts usually get the same answer: ").Append(browser ? "open it in the built-in browser, use another source" : "use another source").Append(", or tell the user. If two tries fail the same way or return the same result, change your approach instead of rewording and trying again.\n");
-            if (browser && cfg.TryCaptchas) sb.Append("- CAPTCHA mode is on (the user turned it on in Settings for fun, to see what you can do): when a page in the built-in browser shows a CAPTCHA you need to get past, you may try to solve it yourself").Append(vision ? " - take browser_screenshot (MinGent zooms in on the CAPTCHA), look carefully, then click by position; for a picture grid, click all the tiles you are sure of in one browser_click with points, with Verify as the last point once your picks are complete (not on puzzles that say to click verify once there are none left: new pictures appear in the tiles you pick). After every click in a CAPTCHA, MinGent shows you the CAPTCHA again" : " by clicking its captcha ref").Append(". You get five tries; after that MinGent stops you, and you ask the user to solve it with ask_user.\n");
+            if (browser && cfg.TryCaptchas) sb.Append("- CAPTCHA mode is on (the user turned it on in Settings so CAPTCHAs don't stop your work): when a page in the built-in browser shows a CAPTCHA you need to get past, you may try to solve it yourself").Append(vision ? " - take browser_screenshot (MinGent zooms in on the CAPTCHA), look carefully, then click by position; for a picture grid, click all the tiles you are sure of in one browser_click with points, with Verify as the last point once your picks are complete (not on puzzles that say to click verify once there are none left: new pictures appear in the tiles you pick). For a CAPTCHA that shows characters to type, type them into its answer box with browser_type. After every click in a CAPTCHA, MinGent shows you the CAPTCHA again" : " by clicking its captcha ref").Append(". You get five tries, more on puzzles with several pages or rounds; after that MinGent stops you, and you ask the user to solve it with ask_user.\n");
             sb.Append("- Tool results can end with lines that start with \"[MinGent note]\". MinGent adds these after the tool runs: they say what happened and suggest a next step, and they are not part of the tool's output. A tool result can also end with a message the user sent while you were working; take it into account.\n");
             sb.Append("- Finish with a short summary: what you changed (file paths), how you checked it, and anything the user still needs to do. Be honest: if you could not test something, or it does not work, say so.\n\n");
 

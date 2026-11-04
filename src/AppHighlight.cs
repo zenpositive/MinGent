@@ -50,6 +50,34 @@ namespace MinGent
             });
         }
 
+        static int screenCopies;
+
+        public static void OutOfScreenCopy(bool hidden)
+        {
+            int now = hidden ? System.Threading.Interlocked.Increment(ref screenCopies) : System.Threading.Interlocked.Decrement(ref screenCopies);
+            if (hidden ? now != 1 : now != 0) return;
+            Control c = invoker;
+            if (broken || c == null || c.IsDisposed || !c.IsHandleCreated || Environment.OSVersion.Platform != PlatformID.Win32NT) return;
+            System.Threading.ManualResetEvent done = new System.Threading.ManualResetEvent(false);
+            MethodInvoker work = delegate
+            {
+                try
+                {
+                    if (frame != null) frame.InShots(!hidden);
+                    AgentCursor.InShots(!hidden);
+                }
+                catch (Exception) { }
+                finally { try { done.Set(); } catch (Exception) { } }
+            };
+            try
+            {
+                if (c.InvokeRequired) c.BeginInvoke(work);
+                else work();
+                if (done.WaitOne(1000)) done.Close();
+            }
+            catch (Exception) { }
+        }
+
         public static void Hide()
         {
             Post(delegate
@@ -358,7 +386,6 @@ namespace MinGent
                 cp.Width = 1;
                 cp.Height = 1;
                 CreateHandle(cp);
-                try { SetWindowDisplayAffinity(Handle, 0x11); } catch (Exception) { }
                 timer.Interval = 100;
                 timer.Tick += delegate
                 {
@@ -375,6 +402,11 @@ namespace MinGent
                 drawn = Rectangle.Empty;
                 dirty = true;
                 Wake();
+            }
+
+            public void InShots(bool show)
+            {
+                try { SetWindowDisplayAffinity(Handle, show ? 0u : 0x11u); } catch (Exception) { }
             }
 
             public void Wake()
@@ -548,6 +580,8 @@ namespace MinGent
 
         public static void FadeOut() { Pointer now = pointer; if (now != null) now.FadeOut(); }
 
+        public static void InShots(bool show) { Pointer now = pointer; if (now != null) now.InShots(show); }
+
         public static void Redraw() { Pointer now = pointer; if (now != null) now.Redraw(); }
 
         public static void Close()
@@ -596,7 +630,6 @@ namespace MinGent
                 cp.Width = 1;
                 cp.Height = 1;
                 CreateHandle(cp);
-                try { SetWindowDisplayAffinity(Handle, 0x11); } catch (Exception) { }
                 hot = new Point(UI.S(30), UI.S(30));
                 canvas = new Size(hot.X + UI.S(120), hot.Y + UI.S(48));
                 timer.Interval = 15;
@@ -608,6 +641,11 @@ namespace MinGent
             }
 
             public bool Visible { get { return shown && goal > 0; } }
+
+            public void InShots(bool show)
+            {
+                try { SetWindowDisplayAffinity(Handle, show ? 0u : 0x11u); } catch (Exception) { }
+            }
 
             public void Go(Point screen, bool click)
             {

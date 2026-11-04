@@ -722,6 +722,7 @@ namespace MinGent
             wv = view;
             Configure(wv, null);
             HookConsole();
+            HookCast();
             long tok;
             WvNavStarting ns = new WvNavStarting(OnNavStarting);
             WvNavCompleted nc = new WvNavCompleted(OnNavCompleted);
@@ -1885,8 +1886,10 @@ namespace MinGent
             }
             else if (lastChallenge && CaptchaMode)
             {
+                bool typedCheck = Json.Bool(v, "captchaPicture") && Json.Bool(v, "captchaAnswer");
                 pageNote = HostLabel(url) + " shows a human-verification check (CAPTCHA). CAPTCHA mode is on (the user turned it on in Settings), so you may try to solve it yourself: " +
-                           (AgentCanSee ? "take browser_screenshot, then click, drag or type in it by position (browser_click with x and y). Look carefully before each click. After five tries that fail, ask the user to solve it with ask_user."
+                           (AgentCanSee ? (typedCheck ? "take browser_screenshot (MinGent adds a zoomed copy of the CAPTCHA picture), then type the characters it shows into its answer box with browser_type and submit."
+                                                      : "take browser_screenshot, then click, drag or type in it by position (browser_click with x and y). Look carefully before each click.") + " When MinGent says the tries are used up, ask the user to solve it with ask_user."
                                         : "this model can't see images, so you can only click the captcha refs in the page text. If that does not get through, ask the user to solve it with ask_user.");
             }
             else if (lastChallenge)
@@ -1895,11 +1898,18 @@ namespace MinGent
                 pageNeedsUser = true;
             }
             string widget = Json.Str(v, "widget") ?? "";
-            lastWidget = widget.Length > 0;
+            bool picture = Json.Bool(v, "captchaPicture"), typed = Json.Bool(v, "captchaAnswer");
+            string box = Json.Str(v, "captchaBox") ?? "";
+            lastWidget = widget.Length > 0 || picture || box.Length > 0;
             if (!lastChallenge && widget.Length > 0 && pageNote == null)
                 pageNote = HostLabel(url) + " has a CAPTCHA box on this page (" + Clip(widget, 80) + "), usually next to a form. You can read and fill in the page normally. " +
                            (CaptchaMode ? "CAPTCHA mode is on, so when the form needs it you may try it yourself: click its captcha ref" + (AgentCanSee ? ", then take browser_screenshot to see if a picture puzzle opened." : ".") + " If it does not let you through, ask the user."
                                         : "When you get to the point where the form needs it, ask the user to tick it with ask_user; MinGent leaves CAPTCHAs to the user.");
+            else if (!lastChallenge && (picture || box.Length > 0) && pageNote == null)
+                pageNote = HostLabel(url) + (box.Length > 0 ? " has a CAPTCHA puzzle on this page (" + Clip(box, 40) + ")" : " has a CAPTCHA picture on this page" + (typed ? ", with a box to type what it shows" : "")) + ". You can read and fill in the page normally. " +
+                           (!CaptchaMode ? "When you get to the point where the form needs it, ask the user to solve it with ask_user; MinGent leaves CAPTCHAs to the user."
+                            : AgentCanSee ? "CAPTCHA mode is on, so when the form needs it you may try it yourself: take browser_screenshot (MinGent adds a zoomed copy of the CAPTCHA)" + (box.Length == 0 && typed ? ", then type the characters it shows into its answer box with browser_type." : ", then do what it asks with browser_click or browser_drag by position.") + " If it does not let you through, ask the user."
+                            : "CAPTCHA mode is on, but this model can't see pictures, so ask the user to solve it with ask_user when the form needs it.");
             if (Json.Bool(v, "modal")) sb.Append("Note: a dialog is open on top of the page. Deal with it first (for example accept or close it).\n");
             if (Json.Int(v, "xframes") > 0) sb.Append("Note: parts of this page are frames from other sites, which can't be read as text here.\n");
             sb.Append('\n');
@@ -1947,7 +1957,7 @@ namespace MinGent
             {
                 if (CaptchaMode)
                     pageNote = HostLabel(currentUrl) + " shows a bot check that did not clear by itself within about 12 seconds. CAPTCHA mode is on, so you may try it yourself" +
-                               (AgentCanSee ? " with browser_screenshot and clicks by position" : " by clicking its captcha ref") + "; after five tries that fail, ask the user to solve it with ask_user.";
+                               (AgentCanSee ? " with browser_screenshot and clicks by position" : " by clicking its captcha ref") + "; when MinGent says the tries are used up, ask the user to solve it with ask_user.";
                 else
                 {
                     pageNote = HostLabel(currentUrl) + " shows a bot check that did not clear by itself within about 12 seconds. MinGent does not solve these checks; only the user can.";
@@ -2644,7 +2654,7 @@ namespace MinGent
                     int start = navStarts;
                     double w = Json.Num(info, "w"), h = Json.Num(info, "h");
                     bool plain = mouse.Button == "left" && mouse.Clicks == 1 && mouse.HoldMs == 0 && mouse.CdpModifiers == 0;
-                    bool captcha = Json.Bool(info, "captcha");
+                    bool captcha = Json.Bool(info, "captcha") || Json.Bool(info, "inCaptcha");
                     if (w < 1 || h < 1 || !Json.Bool(info, "inView"))
                     {
                         if (!plain) return r + " is not visible on the screen, so it can't be " + mouse.Describe().ToLowerInvariant() + ". Scroll to it first, or use a plain click.";
@@ -2708,6 +2718,13 @@ namespace MinGent
                 string boxed = FrameKind.Of(Json.Str(v, "src"));
                 if (boxed != null) { sensitive = true; kind = boxed; }
                 else FrameKind.Inside(v, ref kind, ref sensitive);
+                return null;
+            }
+            if (Json.Bool(v, "captcha"))
+            {
+                sensitive = true;
+                kind = "a CAPTCHA box on this page";
+                FrameKind.Inside(v, ref kind, ref sensitive);
                 return null;
             }
             sensitive = Json.Bool(v, "sensitive");
@@ -2793,13 +2810,19 @@ namespace MinGent
             summary = null;
             bool navigated;
             Stopwatch clock = Stopwatch.StartNew();
-            bool still = CaptchaSettle.Wait(slow,
-                delegate { return navStarts != start || loading; },
-                delegate { return userDialogOpen; },
-                delegate { return CaptchaPixels(ct); },
-                delegate (int ms) { return ct.Sleep(ms); },
-                delegate { return clock.Elapsed.TotalMilliseconds; },
-                out navigated);
+            bool still;
+            castWanted = true;
+            try
+            {
+                still = CaptchaSettle.Wait(slow,
+                    delegate { return navStarts != start || loading; },
+                    delegate { return userDialogOpen; },
+                    delegate { return CaptchaPixels(ct); },
+                    delegate (int ms) { return ct.Sleep(ms); },
+                    delegate { return clock.Elapsed.TotalMilliseconds; },
+                    out navigated);
+            }
+            finally { castWanted = false; StopCast(); }
             if (ct.IsCancelled) return "stopped by the user";
             if (!still) done += " The CAPTCHA was still changing after " + (CaptchaSettle.MaxMs / 1000) + " seconds.";
             string note = "";
@@ -2824,11 +2847,94 @@ namespace MinGent
             double cx = Math.Max(0, x - 8), cy = Math.Max(0, y - 8);
             double cw = Math.Min(vw - cx, w + 16), ch = Math.Min(vh - cy, h + 16);
             if (cw < 8 || ch < 8) return null;
-            double scale = Math.Min(1.0, 240.0 / Math.Max(cw, ch));
+            string frame = castWanted ? CastFrame(vw, vh, cw, ch, Json.Num(v, "dpr"), ct) : null;
+            if (frame == null)
+            {
+                object res;
+                if (CdpCall("Page.captureScreenshot", Json.O("format", "jpeg", "quality", 50), ct, out res) != null) return null;
+                frame = Json.Str(res, "data");
+            }
+            string seen = ViewCrop.Signature(frame, vw, cx, cy, cw, ch);
+            if (seen == null) return null;
+            return Math.Round(cx) + "," + Math.Round(cy) + "," + Math.Round(cw) + "," + Math.Round(ch) + ":" + seen;
+        }
+
+        readonly object castLock = new object();
+        readonly List<object> castHold = new List<object>();
+        string castData;
+        volatile bool castOn, castWanted, castLive;
+        volatile int castFails;
+
+        void HookCast()
+        {
+            castHold.Clear();
+            castFails = 0;
+            try
+            {
+                IntPtr p;
+                if (wv.GetDevToolsProtocolEventReceiver("Page.screencastFrame", out p) < 0 || p == IntPtr.Zero) return;
+                ICoreWebView2DevToolsProtocolEventReceiver r;
+                try { r = (ICoreWebView2DevToolsProtocolEventReceiver)Marshal.GetObjectForIUnknown(p); }
+                finally { Marshal.Release(p); }
+                WvCdpEvent h = new WvCdpEvent(OnCastFrame);
+                long tok;
+                if (r.add_DevToolsProtocolEventReceived(h, out tok) >= 0) castHold.AddRange(new object[] { r, h });
+            }
+            catch { }
+        }
+
+        void OnCastFrame(string json)
+        {
+            object p = Json.TryParse(json ?? "");
+            if (p == null) return;
+            Fire("Page.screencastFrameAck", "{\"sessionId\":" + ((long)Json.Num(p, "sessionId")).ToString(CultureInfo.InvariantCulture) + "}");
+            if (!castOn) return;
+            string data = Json.Str(p, "data");
+            if (string.IsNullOrEmpty(data)) return;
+            lock (castLock) castData = data;
+        }
+
+        string CastFrame(double vw, double vh, double cw, double ch, double dpr, CancelToken ct)
+        {
+            if (castHold.Count == 0 || castFails >= 3) return null;
+            if (!castOn)
+            {
+                double s = Math.Max(1.0, dpr) * Math.Min(1.0, 240.0 / Math.Max(cw, ch));
+                int mw = Math.Max(64, (int)Math.Ceiling(vw * s)), mh = Math.Max(64, (int)Math.Ceiling(vh * s));
+                lock (castLock) castData = null;
+                castOn = true;
+                castLive = true;
+                object res;
+                if (CdpCall("Page.startScreencast", Json.O("format", "jpeg", "quality", 50, "maxWidth", mw, "maxHeight", mh, "everyNthFrame", 1), 3000, ct, out res) != null)
+                {
+                    castWanted = false;
+                    StopCast();
+                    return null;
+                }
+            }
+            Stopwatch first = Stopwatch.StartNew();
+            while (true)
+            {
+                lock (castLock) { if (castData != null) { castFails = 0; return castData; } }
+                if (first.ElapsedMilliseconds > 300 || (ct != null && ct.IsCancelled))
+                {
+                    if (first.ElapsedMilliseconds > 300) castFails++;
+                    castWanted = false;
+                    StopCast();
+                    return null;
+                }
+                Thread.Sleep(10);
+            }
+        }
+
+        void StopCast()
+        {
+            castOn = false;
+            if (!castLive) return;
+            castLive = false;
             object res;
-            if (CdpCall("Page.captureScreenshot", Json.O("format", "jpeg", "quality", 50,
-                "clip", Json.O("x", cx + Json.Num(v, "sx"), "y", cy + Json.Num(v, "sy"), "width", cw, "height", ch, "scale", scale)), ct, out res) != null) return null;
-            return Math.Round(cx) + "," + Math.Round(cy) + "," + Math.Round(cw) + "," + Math.Round(ch) + ":" + (Json.Str(res, "data") ?? "");
+            CdpCall("Page.stopScreencast", Json.O(), 2000, null, out res);
+            lock (castLock) castData = null;
         }
 
         bool CaptchaOpen(CancelToken ct)
@@ -3243,6 +3349,15 @@ namespace MinGent
             }
         }
 
+        static ImageData ShotOf(Image img, out int width, out int height)
+        {
+            const int maxSide = 1366;
+            double sc = Math.Min(1.0, (double)maxSide / Math.Max(img.Width, img.Height));
+            width = Math.Max(1, (int)(img.Width * sc));
+            height = Math.Max(1, (int)(img.Height * sc));
+            return ImageTools.Encode(img, maxSide);
+        }
+
         public string CaptchaShot(CancelToken ct, out ImageData image, out int width, out int height)
         {
             image = null;
@@ -3258,32 +3373,46 @@ namespace MinGent
                     object v;
                     err = Js("(" + BrowserScripts.CaptchaRect + ")()", ct, out v);
                     if (err != null) return err;
-                    if (!(v is Dictionary<string, object>) || !Json.Bool(v, "found")) return null;
+                    if (!(v is Dictionary<string, object>) || !Json.Bool(v, "found")) { captchaName = ""; return null; }
+                    captchaName = Json.Str(v, "name") ?? "";
+                    captchaTyped = Json.Bool(v, "answer");
+                    if (Json.Str(v, "kind") != "frame") return null;
                     double x = Json.Num(v, "x"), y = Json.Num(v, "y"), w = Json.Num(v, "w"), h = Json.Num(v, "h"), vw = Json.Num(v, "vw"), vh = Json.Num(v, "vh");
                     const double pad = 12;
                     double cx = Math.Max(0, x - pad), cy = Math.Max(0, y - pad);
                     double cw = Math.Min(vw - cx, w + 2 * pad), ch = Math.Min(vh - cy, h + 2 * pad);
                     if (cw < 60 || ch < 60) return null;
                     double zoom = Math.Max(1.0, Math.Min(2.0, 1100.0 / Math.Max(cw, ch)));
+                    double dpr = Json.Num(v, "dpr"), detail = Math.Min(zoom * Math.Max(1.0, dpr), 1366.0 / Math.Max(cw, ch));
                     object res;
-                    err = CdpCall("Page.captureScreenshot", Json.O("format", "jpeg", "quality", 88,
-                        "clip", Json.O("x", cx + Json.Num(v, "sx"), "y", cy + Json.Num(v, "sy"), "width", cw, "height", ch, "scale", zoom)), ct, out res);
-                    if (err != null) return err;
-                    string data = Json.Str(res, "data");
-                    if (string.IsNullOrEmpty(data)) return "the browser returned no screenshot";
+                    Image sharp = null;
                     try
                     {
-                        using (MemoryStream ms = new MemoryStream(Convert.FromBase64String(data)))
-                        using (Image img = Image.FromStream(ms))
+                        if (dpr >= detail - 0.01)
                         {
-                            const int maxSide = 1366;
-                            double sc = Math.Min(1.0, (double)maxSide / Math.Max(img.Width, img.Height));
-                            width = Math.Max(1, (int)(img.Width * sc));
-                            height = Math.Max(1, (int)(img.Height * sc));
-                            image = ImageTools.Encode(img, maxSide);
+                            err = CdpCall("Page.captureScreenshot", Json.O("format", "jpeg", "quality", 88), ct, out res);
+                            if (err != null) return err;
+                            sharp = ViewCrop.Zoom(Json.Str(res, "data"), vw, cx, cy, cw, ch, (int)Math.Round(cw * detail), (int)Math.Round(ch * detail));
                         }
+                        if (sharp != null) image = ShotOf(sharp, out width, out height);
                     }
                     catch (Exception ex) { image = null; return "could not read the screenshot: " + ex.Message; }
+                    finally { if (sharp != null) sharp.Dispose(); }
+                    if (image == null)
+                    {
+                        err = CdpCall("Page.captureScreenshot", Json.O("format", "jpeg", "quality", 88,
+                            "clip", Json.O("x", cx + Json.Num(v, "sx"), "y", cy + Json.Num(v, "sy"), "width", cw, "height", ch, "scale", zoom)), ct, out res);
+                        if (err != null) return err;
+                        string data = Json.Str(res, "data");
+                        if (string.IsNullOrEmpty(data)) return "the browser returned no screenshot";
+                        try
+                        {
+                            using (MemoryStream ms = new MemoryStream(Convert.FromBase64String(data)))
+                            using (Image img = Image.FromStream(ms))
+                                image = ShotOf(img, out width, out height);
+                        }
+                        catch (Exception ex) { image = null; return "could not read the screenshot: " + ex.Message; }
+                    }
                     shotScale = cw / width;
                     shotX0 = cx;
                     shotY0 = cy;
@@ -3294,6 +3423,46 @@ namespace MinGent
                     return null;
                 }
                 finally { Busy(false); }
+            }
+        }
+
+        volatile string captchaName = "";
+        volatile bool captchaTyped;
+
+        public string CaptchaName { get { return captchaName; } }
+
+        public bool CaptchaTyped { get { return captchaTyped; } }
+
+        public string CaptchaCloseUp(CancelToken ct, out ImageData image, out int width, out int height)
+        {
+            image = null;
+            width = height = 0;
+            string err = Ensure(ct);
+            if (err != null) return err;
+            lock (opLock)
+            {
+                object v;
+                err = Js("(" + BrowserScripts.CaptchaRect + ")()", ct, out v);
+                if (err != null) return err;
+                if (!(v is Dictionary<string, object>) || !Json.Bool(v, "found") || Json.Str(v, "kind") != "page") return null;
+                captchaName = Json.Str(v, "name") ?? "";
+                captchaTyped = Json.Bool(v, "answer");
+                double x = Json.Num(v, "x"), y = Json.Num(v, "y"), w = Json.Num(v, "w"), h = Json.Num(v, "h"), vw = Json.Num(v, "vw"), vh = Json.Num(v, "vh");
+                const double pad = 6;
+                double cx = Math.Max(0, x - pad), cy = Math.Max(0, y - pad);
+                double cw = Math.Min(vw - cx, w + 2 * pad), ch = Math.Min(vh - cy, h + 2 * pad);
+                if (cw < 20 || ch < 12) return null;
+                double zoom = Math.Max(1.0, Math.Min(3.0, 800.0 / Math.Max(cw, ch)));
+                object res;
+                err = CdpCall("Page.captureScreenshot", Json.O("format", "jpeg", "quality", 92), ct, out res);
+                if (err != null) return err;
+                try
+                {
+                    using (Bitmap near = ViewCrop.Zoom(Json.Str(res, "data"), vw, cx, cy, cw, ch, (int)Math.Round(cw * zoom), (int)Math.Round(ch * zoom)))
+                        if (near != null) image = ShotOf(near, out width, out height);
+                }
+                catch (Exception ex) { image = null; return "could not read the screenshot: " + ex.Message; }
+                return null;
             }
         }
 
@@ -3707,6 +3876,90 @@ namespace MinGent
         }
     }
 
+    static class ViewCrop
+    {
+        public static RectangleF Source(int imageW, int imageH, double viewW, double x, double y, double w, double h)
+        {
+            double r = viewW > 0 ? imageW / viewW : 1.0;
+            double left = Math.Max(0, Math.Min(imageW, x * r)), top = Math.Max(0, Math.Min(imageH, y * r));
+            double right = Math.Max(left, Math.Min(imageW, (x + w) * r)), bottom = Math.Max(top, Math.Min(imageH, (y + h) * r));
+            return new RectangleF((float)left, (float)top, (float)(right - left), (float)(bottom - top));
+        }
+
+        public static string Signature(string jpeg, double viewW, double x, double y, double w, double h)
+        {
+            if (string.IsNullOrEmpty(jpeg)) return null;
+            try
+            {
+                using (MemoryStream ms = new MemoryStream(Convert.FromBase64String(jpeg)))
+                using (Image img = Image.FromStream(ms, false, false))
+                {
+                    RectangleF src = Source(img.Width, img.Height, viewW, x, y, w, h);
+                    if (src.Width < 2 || src.Height < 2) return null;
+                    double s = Math.Min(1.0, 240.0 / Math.Max(src.Width, src.Height));
+                    int sw = Math.Max(1, (int)Math.Round(src.Width * s)), sh = Math.Max(1, (int)Math.Round(src.Height * s));
+                    using (Bitmap small = new Bitmap(sw, sh, System.Drawing.Imaging.PixelFormat.Format24bppRgb))
+                    {
+                        using (Graphics g = Graphics.FromImage(small))
+                        {
+                            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
+                            g.DrawImage(img, new Rectangle(0, 0, sw, sh), src.X, src.Y, src.Width, src.Height, GraphicsUnit.Pixel);
+                        }
+                        return Hash(small);
+                    }
+                }
+            }
+            catch (Exception) { return null; }
+        }
+
+        public static Bitmap Zoom(string jpeg, double viewW, double x, double y, double w, double h, int outW, int outH)
+        {
+            if (string.IsNullOrEmpty(jpeg) || outW < 1 || outH < 1) return null;
+            try
+            {
+                using (MemoryStream ms = new MemoryStream(Convert.FromBase64String(jpeg)))
+                using (Image img = Image.FromStream(ms, false, false))
+                {
+                    RectangleF src = Source(img.Width, img.Height, viewW, x, y, w, h);
+                    if (src.Width < 2 || src.Height < 2) return null;
+                    Bitmap bm = new Bitmap(outW, outH, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+                    try
+                    {
+                        using (Graphics g = Graphics.FromImage(bm))
+                        using (System.Drawing.Imaging.ImageAttributes edges = new System.Drawing.Imaging.ImageAttributes())
+                        {
+                            edges.SetWrapMode(System.Drawing.Drawing2D.WrapMode.TileFlipXY);
+                            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                            g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                            g.DrawImage(img, new Rectangle(0, 0, outW, outH), src.X, src.Y, src.Width, src.Height, GraphicsUnit.Pixel, edges);
+                        }
+                        return bm;
+                    }
+                    catch (Exception) { bm.Dispose(); throw; }
+                }
+            }
+            catch (Exception) { return null; }
+        }
+
+        static string Hash(Bitmap bm)
+        {
+            System.Drawing.Imaging.BitmapData d = bm.LockBits(new Rectangle(0, 0, bm.Width, bm.Height), System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+            try
+            {
+                int row = bm.Width * 3;
+                byte[] line = new byte[row];
+                ulong hash = 14695981039346656037UL;
+                for (int y = 0; y < bm.Height; y++)
+                {
+                    Marshal.Copy(new IntPtr(d.Scan0.ToInt64() + (long)y * d.Stride), line, 0, row);
+                    for (int i = 0; i < row; i++) { hash ^= line[i]; hash *= 1099511628211UL; }
+                }
+                return bm.Width.ToString(CultureInfo.InvariantCulture) + "x" + bm.Height.ToString(CultureInfo.InvariantCulture) + ":" + hash.ToString("x16", CultureInfo.InvariantCulture);
+            }
+            finally { bm.UnlockBits(d); }
+        }
+    }
+
     static class CaptchaSettle
     {
         public const int MaxMs = 4000, StillMs = 400, PollMs = 100, QuietMs = 2500;
@@ -3743,7 +3996,7 @@ namespace MinGent
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
         static readonly Regex Captcha = new Regex(
-            @"^https?://([^/?#]+\.)?(hcaptcha\.com|arkoselabs\.com|funcaptcha\.com|recaptcha\.net|captcha-delivery\.com|px-cloud\.net|perimeterx\.net)([/?#:]|$)|^https?://challenges\.cloudflare\.com([/?#:]|$)|^https?://(www\.)?google\.com/recaptcha/",
+            @"^https?://([^/?#]+\.)?(hcaptcha\.com|arkoselabs\.com|funcaptcha\.com|recaptcha\.net|captcha-delivery\.com|px-cloud\.net|px-cdn\.net|perimeterx\.net|geetest\.com|awswaf\.com)([/?#:]|$)|^https?://challenges\.cloudflare\.com([/?#:]|$)|^https?://(www\.)?google\.com/recaptcha/|^https?://([^/?#]+\.)?[a-z0-9-]*captcha[a-z0-9-]*\.[^/?#]+([/?#:]|$)|^https?://([^/?#]+\.)?arkoselabs\.[^/?#]+([/?#:]|$)",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
         public static string Of(string src)

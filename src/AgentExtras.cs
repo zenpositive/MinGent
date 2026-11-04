@@ -1619,7 +1619,16 @@ namespace MinGent
                 bool ok;
                 try { ok = PrintWindow(w.Hwnd, hdc, 2); }
                 finally { g.ReleaseHdc(hdc); }
-                if (!ok) g.CopyFromScreen(r.Left, r.Top, 0, 0, new Size(width, height));
+                if (!ok)
+                {
+                    AppHighlight.OutOfScreenCopy(true);
+                    try
+                    {
+                        Thread.Sleep(50);
+                        g.CopyFromScreen(r.Left, r.Top, 0, 0, new Size(width, height));
+                    }
+                    finally { AppHighlight.OutOfScreenCopy(false); }
+                }
             }
             w.Rect = Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
             return bm;
