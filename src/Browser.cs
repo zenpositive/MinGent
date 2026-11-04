@@ -395,8 +395,11 @@ namespace MinGent
         volatile string userDialogText = "";
         readonly List<DateTime> dialogTimes = new List<DateTime>();
         DateTime dialogsMutedUntil = DateTime.MinValue;
-        double shotScale;
+        double shotScale, shotX0, shotY0;
         int shotNav = -1, shotW, shotH, viewW, viewH;
+
+        double PageX(double x) { return shotX0 + x * shotScale; }
+        double PageY(double y) { return shotY0 + y * shotScale; }
         bool shotResized;
         string notice;
         public volatile bool CaptchaMode, AgentCanSee;
@@ -1774,11 +1777,30 @@ namespace MinGent
                         if (userTouched) { res = "The user has been using the browser pane" + shows + ", so it stays open. Close it only if the user asks."; return; }
                     }
                     if (CloseRequested != null) CloseRequested(this, EventArgs.Empty);
+                    if (!Visible && drawerOpen && !drawerUser) ShowConsole(false, false);
                     res = Visible ? "The browser pane could not be closed." : "Closed the browser pane. It opens again if you use the browser.";
                 }));
             }
             catch (Exception ex) { return "The browser pane could not be closed (" + ex.Message + ")."; }
             return res ?? "The browser pane is not open.";
+        }
+
+        public string CloseConsoleForAgent(bool userAsked)
+        {
+            if (!IsHandleCreated) return "The console is not open.";
+            string res = null;
+            try
+            {
+                Invoke(new Action(delegate
+                {
+                    if (!drawerOpen) { res = "The console is already closed."; return; }
+                    if (drawerUser && !userAsked) { res = "The user is using the console, so it stays open. Close it only if the user asks."; return; }
+                    ShowConsole(false, false);
+                    res = drawerOpen ? "The console could not be closed." : "Closed the console. The browser pane stays open.";
+                }));
+            }
+            catch (Exception ex) { return "The console could not be closed (" + ex.Message + ")."; }
+            return res ?? "The console is not open.";
         }
 
         string WaitNavigation(int startCount, int startWaitMs, int timeoutMs, CancelToken ct, out string note)
@@ -1864,7 +1886,7 @@ namespace MinGent
             else if (lastChallenge && CaptchaMode)
             {
                 pageNote = HostLabel(url) + " shows a human-verification check (CAPTCHA). CAPTCHA mode is on (the user turned it on in Settings), so you may try to solve it yourself: " +
-                           (AgentCanSee ? "take browser_screenshot, then click, drag or type in it by position (browser_click with x and y). Look carefully before each click. After three tries that fail, ask the user to solve it with ask_user."
+                           (AgentCanSee ? "take browser_screenshot, then click, drag or type in it by position (browser_click with x and y). Look carefully before each click. After five tries that fail, ask the user to solve it with ask_user."
                                         : "this model can't see images, so you can only click the captcha refs in the page text. If that does not get through, ask the user to solve it with ask_user.");
             }
             else if (lastChallenge)
@@ -1925,7 +1947,7 @@ namespace MinGent
             {
                 if (CaptchaMode)
                     pageNote = HostLabel(currentUrl) + " shows a bot check that did not clear by itself within about 12 seconds. CAPTCHA mode is on, so you may try it yourself" +
-                               (AgentCanSee ? " with browser_screenshot and clicks by position" : " by clicking its captcha ref") + "; after three tries that fail, ask the user to solve it with ask_user.";
+                               (AgentCanSee ? " with browser_screenshot and clicks by position" : " by clicking its captcha ref") + "; after five tries that fail, ask the user to solve it with ask_user.";
                 else
                 {
                     pageNote = HostLabel(currentUrl) + " shows a bot check that did not clear by itself within about 12 seconds. MinGent does not solve these checks; only the user can.";
@@ -2658,7 +2680,7 @@ namespace MinGent
                 err = ShotCheck(x, y);
                 if (err != null) return err;
                 object v;
-                err = Js("(" + BrowserScripts.Point + ")(" + (x * shotScale).ToString("0.##", CultureInfo.InvariantCulture) + "," + (y * shotScale).ToString("0.##", CultureInfo.InvariantCulture) + ")", ct, out v);
+                err = Js("(" + BrowserScripts.Point + ")(" + PageX(x).ToString("0.##", CultureInfo.InvariantCulture) + "," + PageY(y).ToString("0.##", CultureInfo.InvariantCulture) + ")", ct, out v);
                 if (err != null)
                 {
                     if (userDialogOpen) return err;
@@ -2697,8 +2719,8 @@ namespace MinGent
                     ArmEvents(ct);
                     string before = currentUrl;
                     int start = navStarts;
-                    PointAt(x * shotScale, y * shotScale, true, false, ct);
-                    err = Mouse(x * shotScale, y * shotScale, mouse, ct);
+                    PointAt(PageX(x), PageY(y), true, false, ct);
+                    err = Mouse(PageX(x), PageY(y), mouse, ct);
                     if (err != null) return err;
                     return AfterAction(start, before, ct, mouse.Describe() + " at " + Math.Round(x) + ", " + Math.Round(y) + " in the screenshot.", out summary);
                 }
@@ -2725,8 +2747,8 @@ namespace MinGent
             }
             string se = ShotCheck(x, y);
             if (se != null) return se;
-            px = x * shotScale;
-            py = y * shotScale;
+            px = PageX(x);
+            py = PageY(y);
             label = Math.Round(x) + ", " + Math.Round(y) + " in the screenshot";
             return null;
         }
@@ -3050,6 +3072,61 @@ namespace MinGent
                     }
                     catch (Exception ex) { return "could not read the screenshot: " + ex.Message; }
                     shotScale = cssW > 0 ? cssW / width : 0;
+                    shotX0 = shotY0 = 0;
+                    shotNav = navStarts;
+                    shotResized = false;
+                    shotW = width;
+                    shotH = height;
+                    return null;
+                }
+                finally { Busy(false); }
+            }
+        }
+
+        public string CaptchaShot(CancelToken ct, out ImageData image, out int width, out int height)
+        {
+            image = null;
+            width = height = 0;
+            string err = Ensure(ct);
+            if (err != null) return err;
+            lock (opLock)
+            {
+                Reveal();
+                Busy(true);
+                try
+                {
+                    object v;
+                    err = Js("(" + BrowserScripts.CaptchaRect + ")()", ct, out v);
+                    if (err != null) return err;
+                    if (!(v is Dictionary<string, object>)) return null;
+                    double x = Json.Num(v, "x"), y = Json.Num(v, "y"), w = Json.Num(v, "w"), h = Json.Num(v, "h"), vw = Json.Num(v, "vw"), vh = Json.Num(v, "vh");
+                    const double pad = 12;
+                    double cx = Math.Max(0, x - pad), cy = Math.Max(0, y - pad);
+                    double cw = Math.Min(vw - cx, w + 2 * pad), ch = Math.Min(vh - cy, h + 2 * pad);
+                    if (cw < 60 || ch < 60) return null;
+                    double zoom = Math.Max(1.0, Math.Min(2.0, 1100.0 / Math.Max(cw, ch)));
+                    object res;
+                    err = CdpCall("Page.captureScreenshot", Json.O("format", "jpeg", "quality", 88,
+                        "clip", Json.O("x", cx + Json.Num(v, "sx"), "y", cy + Json.Num(v, "sy"), "width", cw, "height", ch, "scale", zoom)), ct, out res);
+                    if (err != null) return err;
+                    string data = Json.Str(res, "data");
+                    if (string.IsNullOrEmpty(data)) return "the browser returned no screenshot";
+                    try
+                    {
+                        using (MemoryStream ms = new MemoryStream(Convert.FromBase64String(data)))
+                        using (Image img = Image.FromStream(ms))
+                        {
+                            const int maxSide = 1366;
+                            double sc = Math.Min(1.0, (double)maxSide / Math.Max(img.Width, img.Height));
+                            width = Math.Max(1, (int)(img.Width * sc));
+                            height = Math.Max(1, (int)(img.Height * sc));
+                            image = ImageTools.Encode(img, maxSide);
+                        }
+                    }
+                    catch (Exception ex) { image = null; return "could not read the screenshot: " + ex.Message; }
+                    shotScale = cw / width;
+                    shotX0 = cx;
+                    shotY0 = cy;
                     shotNav = navStarts;
                     shotResized = false;
                     shotW = width;

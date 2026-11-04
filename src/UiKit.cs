@@ -168,6 +168,10 @@ namespace MinGent
                     case "dot":
                         g.FillEllipse(b, cx - 2.5f * u, cy - 2.5f * u, 5f * u, 5f * u);
                         break;
+                    case "more":
+                        for (int i = -1; i <= 1; i++)
+                            g.FillEllipse(b, cx + i * 5f * u - 1.5f * u, cy - 1.5f * u, 3f * u, 3f * u);
+                        break;
                     case "tool":
                         {
                             PointF[] head = { new PointF(cx + 6.8f * u, cy - 0.02f * u), new PointF(cx + 3.98f * u, cy + 2.81f * u), new PointF(cx - 2.81f * u, cy - 3.98f * u), new PointF(cx + 0.02f * u, cy - 6.8f * u) };
@@ -227,6 +231,15 @@ namespace MinGent
                             float ca = (float)Math.Cos(a), sa = (float)Math.Sin(a);
                             g.DrawLine(p, cx + ca * 5f * u, cy + sa * 5f * u, cx + ca * 7f * u, cy + sa * 7f * u);
                         }
+                        break;
+                    case "archive":
+                        DrawRoundF(g, p, new RectangleF(cx - 6.5f * u, cy - 5.5f * u, 13f * u, 3.6f * u), 1f * u);
+                        g.DrawLines(p, new PointF[] { new PointF(cx - 5.5f * u, cy - 1.9f * u), new PointF(cx - 5.5f * u, cy + 5.5f * u), new PointF(cx + 5.5f * u, cy + 5.5f * u), new PointF(cx + 5.5f * u, cy - 1.9f * u) });
+                        g.DrawLine(p, cx - 2f * u, cy + 1f * u, cx + 2f * u, cy + 1f * u);
+                        break;
+                    case "back":
+                        g.DrawLine(p, cx - 5.5f * u, cy, cx + 5.5f * u, cy);
+                        g.DrawLines(p, new PointF[] { new PointF(cx - 1f * u, cy - 4.5f * u), new PointF(cx - 5.5f * u, cy), new PointF(cx - 1f * u, cy + 4.5f * u) });
                         break;
                     case "library":
                         g.DrawPolygon(p, new PointF[] { new PointF(cx, cy - 6.5f * u), new PointF(cx + 6f * u, cy - 3.2f * u), new PointF(cx + 6f * u, cy + 3.2f * u), new PointF(cx, cy + 6.5f * u), new PointF(cx - 6f * u, cy + 3.2f * u), new PointF(cx - 6f * u, cy - 3.2f * u) });
@@ -559,7 +572,7 @@ namespace MinGent
 
     class ToggleSwitch : Control
     {
-        bool on, hover, danger, chevron, downOnChevron;
+        bool on, hover, danger, chevron, downOnMenu, overMenu;
         Theme th = Theme.Light(Color.SteelBlue);
         readonly Tween knob;
         public Color Surface = Color.Empty;
@@ -589,6 +602,7 @@ namespace MinGent
             Text = text;
             Font = UI.Font;
             AccessibleRole = AccessibleRole.CheckButton;
+            Cursor = Cursors.Hand;
             knob = new Tween(0f, Invalidate);
         }
 
@@ -613,15 +627,26 @@ namespace MinGent
 
         public int PreferredWidth { get { return TrackSize.Width + UI.S(8) + TextRenderer.MeasureText(Label, Font).Width + UI.S(6) + ChevronW; } }
 
+        int MenuLeft { get { return UI.S(2) + TrackSize.Width + UI.S(4); } }
+
+        bool InMenu(int x) { return chevron && x >= MenuLeft; }
+
         protected override void OnMouseDown(MouseEventArgs e)
         {
             base.OnMouseDown(e);
-            downOnChevron = chevron && e.X >= Width - ChevronW - UI.S(2);
+            downOnMenu = InMenu(e.X);
             if (e.Button == MouseButtons.Right && chevron && MenuRequested != null) MenuRequested(this, EventArgs.Empty);
         }
 
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            bool m = InMenu(e.X);
+            if (m != overMenu) { overMenu = m; Invalidate(); }
+        }
+
         protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); hover = true; Invalidate(); }
-        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hover = false; Invalidate(); }
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hover = false; overMenu = false; Invalidate(); }
         protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
         protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
 
@@ -630,7 +655,7 @@ namespace MinGent
             base.OnClick(e);
             MouseEventArgs me = e as MouseEventArgs;
             if (me != null && me.Button == MouseButtons.Right) return;
-            if (downOnChevron && MenuRequested != null) { downOnChevron = false; MenuRequested(this, EventArgs.Empty); return; }
+            if (downOnMenu && MenuRequested != null) { downOnMenu = false; MenuRequested(this, EventArgs.Empty); return; }
             Flip();
         }
 
@@ -687,22 +712,24 @@ namespace MinGent
             Size ts = TrackSize;
             Rectangle track = new Rectangle(UI.S(2), (Height - ts.Height) / 2, ts.Width, ts.Height);
             Color red = th.HighContrast ? SystemColors.Highlight : th.Error;
+            bool menuHot = hover && overMenu, trackHot = hover && !overMenu;
+            if (menuHot && !th.HighContrast) Glyphs.Hover(g, th, th.ButtonHover, new Rectangle(MenuLeft, UI.S(2), Width - MenuLeft, Height - UI.S(4)), UI.S(6));
             if (danger)
             {
                 System.Drawing.Drawing2D.SmoothingMode old = g.SmoothingMode;
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                 RectangleF tf = new RectangleF(track.X + 0.5f, track.Y + 0.5f, track.Width - 1f, track.Height - 1f);
                 using (System.Drawing.Drawing2D.GraphicsPath p = Glyphs.Pill(tf))
-                using (SolidBrush b = new SolidBrush(hover ? Theme.Blend(red, th.Dark ? Color.White : Color.Black, 0.12) : red))
+                using (SolidBrush b = new SolidBrush(trackHot ? Theme.Blend(red, th.Dark ? Color.White : Color.Black, 0.12) : red))
                     g.FillPath(b, p);
-                float h = track.Height, d = h - UI.S(6) + (hover ? UI.S(1) : 0), cx = track.Right - h / 2f, cy = track.Y + h / 2f;
+                float h = track.Height, d = h - UI.S(6) + (trackHot ? UI.S(1) : 0), cx = track.Right - h / 2f, cy = track.Y + h / 2f;
                 using (SolidBrush kb = new SolidBrush(Color.White)) g.FillEllipse(kb, cx - d / 2f, cy - d / 2f, d, d);
                 g.SmoothingMode = old;
             }
-            else SwitchPaint.Draw(g, track, knob.Value, hover, Enabled, th);
+            else SwitchPaint.Draw(g, track, knob.Value, chevron ? trackHot : hover, Enabled, th);
             Rectangle tr = new Rectangle(track.Right + UI.S(8), 0, Math.Max(1, Width - track.Right - UI.S(8) - ChevronW), Height);
-            TextRenderer.DrawText(g, Label, Font, tr, danger ? red : on ? th.ChromeFore : th.ChromeDim, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
-            if (chevron) Glyphs.Chevron(g, new Rectangle(Width - ChevronW - UI.S(1), 0, ChevronW, Height), danger ? red : hover ? th.ChromeFore : th.ChromeDim, UI.S(3), false);
+            TextRenderer.DrawText(g, Label, Font, tr, danger ? red : on || menuHot ? th.ChromeFore : th.ChromeDim, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
+            if (chevron) Glyphs.Chevron(g, new Rectangle(Width - ChevronW - UI.S(1), 0, ChevronW, Height), danger ? red : menuHot ? th.ChromeFore : th.ChromeDim, UI.S(3), false);
             if (Focused && ShowFocusCues)
             {
                 Rectangle ring = Rectangle.Inflate(track, UI.S(2), UI.S(2));

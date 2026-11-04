@@ -19,10 +19,11 @@ namespace MinGent
         {
             public ChatInfo Chat;
             public string Header;
+            public bool Title;
             public int Top, H;
         }
 
-        const int ZNew = 1, ZLibrary = 2, ZSettings = 3, ZRow = 10, ZTrash = 11;
+        const int ZNew = 1, ZLibrary = 2, ZSettings = 3, ZArchived = 4, ZRow = 10, ZMore = 11;
 
         Theme th = Theme.Light(Color.SteelBlue);
         readonly FlatButton bCollapse = new FlatButton("", "sidebar", false);
@@ -36,12 +37,16 @@ namespace MinGent
         readonly List<ChatInfo> chats = new List<ChatInfo>();
         readonly List<Row> rows = new List<Row>();
         Image logo;
-        bool collapsed, running, listHover;
+        bool collapsed, running, listHover, archiveView;
+        int archivedCount;
         string activePath, filter = "";
         int scroll, contentH, hoverRow = -1, hoverZone, pressRow = -1, pressZone, phase, focusRow = -1;
 
         public event EventHandler NewChatClicked, SettingsClicked, LibraryClicked, CollapseClicked, DeleteAllClicked;
-        public event Action<string> OpenClicked, DeleteClicked, RenameClicked;
+        public event Action<string> OpenClicked, DeleteClicked, RenameClicked, ArchiveClicked, RestoreClicked;
+        public event EventHandler ArchiveViewClicked;
+
+        public bool ArchiveView { get { return archiveView; } }
 
         public Sidebar()
         {
@@ -62,7 +67,7 @@ namespace MinGent
                 else if (e.KeyCode == Keys.Down) { e.Handled = e.SuppressKeyPress = true; Focus(); MoveFocus(1); }
                 else if (e.KeyCode == Keys.Enter) { e.Handled = e.SuppressKeyPress = true; int i = FirstChatRow(); if (i >= 0) Open(rows[i].Chat); }
             };
-            search.HandleCreated += delegate { Native.SetCueBanner(search, "Search chats"); };
+            search.HandleCreated += delegate { Native.SetCueBanner(search, archiveView ? "Search archived chats" : "Search chats"); };
             Controls.AddRange(new Control[] { bCollapse, bRailNew, bRailSearch, bRailLibrary, bRailSettings, search });
             bCollapse.Click += delegate { if (CollapseClicked != null) CollapseClicked(this, EventArgs.Empty); };
             bRailNew.Click += delegate { if (NewChatClicked != null) NewChatClicked(this, EventArgs.Empty); };
@@ -126,9 +131,24 @@ namespace MinGent
 
         public void SetChats(List<ChatInfo> list, string active, bool isRunning)
         {
+            SetChats(list, active, isRunning, archivedCount, archiveView);
+        }
+
+        public void SetChats(List<ChatInfo> list, string active, bool isRunning, int archived, bool showingArchived)
+        {
             chats.Clear();
             if (list != null) chats.AddRange(list);
             activePath = active;
+            bool modeChanged = archiveView != showingArchived;
+            archivedCount = archived;
+            archiveView = showingArchived;
+            if (modeChanged)
+            {
+                scroll = 0;
+                focusRow = -1;
+                if (search.Text.Length > 0) search.Text = "";
+                if (search.IsHandleCreated) Native.SetCueBanner(search, archiveView ? "Search archived chats" : "Search chats");
+            }
             SetRunning(isRunning);
             Rebuild();
         }
@@ -156,7 +176,9 @@ namespace MinGent
         int ListTop { get { return SearchRect.Bottom + UI.S(10); } }
         Rectangle SettingsRect { get { return new Rectangle(M, Height - UI.S(10) - UI.S(36), Width - M * 2, UI.S(36)); } }
         Rectangle LibraryRect { get { Rectangle s = SettingsRect; return new Rectangle(M, s.Top - UI.S(36), s.Width, UI.S(36)); } }
-        int ListBottom { get { return LibraryRect.Top - UI.S(10); } }
+        bool ShowArchived { get { return archivedCount > 0 || archiveView; } }
+        Rectangle ArchivedRect { get { Rectangle l = LibraryRect; return ShowArchived ? new Rectangle(M, l.Top - UI.S(36), l.Width, UI.S(36)) : Rectangle.Empty; } }
+        int ListBottom { get { return (ShowArchived ? ArchivedRect.Top : LibraryRect.Top) - UI.S(10); } }
         Rectangle ListRect { get { return new Rectangle(0, ListTop, Width, Math.Max(0, ListBottom - ListTop)); } }
 
         protected override void OnLayout(LayoutEventArgs e)
@@ -200,6 +222,17 @@ namespace MinGent
             rows.Clear();
             int y = 0;
             string last = null;
+            if (archiveView)
+            {
+                Row top = new Row();
+                top.Header = "Archived chats";
+                top.Title = true;
+                top.Top = 0;
+                top.H = UI.S(28);
+                rows.Add(top);
+                y = top.H + UI.S(4);
+                last = "";
+            }
             foreach (ChatInfo c in chats)
             {
                 if (filter.Length > 0 && (c.Title ?? "").IndexOf(filter, StringComparison.CurrentCultureIgnoreCase) < 0) continue;
@@ -208,7 +241,7 @@ namespace MinGent
                 {
                     Row h = new Row();
                     h.Header = g;
-                    h.Top = y + (last == null ? 0 : UI.S(8));
+                    h.Top = y + (string.IsNullOrEmpty(last) ? 0 : UI.S(8));
                     h.H = UI.S(26);
                     rows.Add(h);
                     y = h.Top + h.H;
@@ -252,7 +285,7 @@ namespace MinGent
             return new Rectangle(UI.S(8), ListTop + r.Top - scroll, Width - UI.S(16), r.H);
         }
 
-        Rectangle TrashRect(int i)
+        Rectangle MoreRect(int i)
         {
             Rectangle r = RowRect(i);
             int s = UI.S(26);
@@ -291,6 +324,7 @@ namespace MinGent
             else if (!th.Dark || th.HighContrast) Glyphs.DrawRound(g, th.Border, new Rectangle(sr.X, sr.Y, sr.Width - 1, sr.Height - 1), UI.S(8));
             Glyphs.Draw("search", g, new Rectangle(sr.X + UI.S(8), sr.Y, UI.S(16), sr.Height), th.ChromeDim);
             PaintList(g);
+            if (ShowArchived) PaintAction(g, ArchivedRect, archiveView ? "back" : "archive", archiveView ? "Back to chats" : "Archived chats", archiveView ? null : archivedCount.ToString(CultureInfo.CurrentCulture), hoverZone == ZArchived);
             PaintAction(g, LibraryRect, "library", "Models", null, hoverZone == ZLibrary);
             PaintAction(g, SettingsRect, "gear", "Settings", null, hoverZone == ZSettings);
         }
@@ -307,6 +341,29 @@ namespace MinGent
                     TextFormatFlags.VerticalCenter | TextFormatFlags.Right | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
         }
 
+        void TitleText(Graphics g, string title, Rectangle box, Color fg, Color bg)
+        {
+            TextFormatFlags f = TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.PreserveGraphicsClipping;
+            if (th.HighContrast)
+            {
+                TextRenderer.DrawText(g, title, Font, box, fg, f | TextFormatFlags.EndEllipsis);
+                return;
+            }
+            bool fits = TextRenderer.MeasureText(g, title, Font, Size.Empty, TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width <= box.Width;
+            System.Drawing.Drawing2D.GraphicsState st = g.Save();
+            g.SetClip(box, System.Drawing.Drawing2D.CombineMode.Intersect);
+            TextRenderer.DrawText(g, title, Font, new Rectangle(box.X, box.Y, fits ? box.Width : box.Width + UI.S(400), box.Height), fg, f);
+            g.Restore(st);
+            if (fits) return;
+            int fw = Math.Min(UI.S(28), box.Width / 2);
+            Rectangle fade = new Rectangle(box.Right - fw, box.Y + 1, fw, box.Height - 2);
+            using (System.Drawing.Drawing2D.LinearGradientBrush b = new System.Drawing.Drawing2D.LinearGradientBrush(new Rectangle(fade.X - 1, fade.Y, fade.Width + 1, fade.Height), Color.FromArgb(0, bg), bg, System.Drawing.Drawing2D.LinearGradientMode.Horizontal))
+            {
+                b.WrapMode = System.Drawing.Drawing2D.WrapMode.TileFlipX;
+                g.FillRectangle(b, fade);
+            }
+        }
+
         void PaintList(Graphics g)
         {
             Rectangle lr = ListRect;
@@ -315,7 +372,7 @@ namespace MinGent
             g.SetClip(lr);
             if (rows.Count == 0)
             {
-                string msg = filter.Length > 0 ? "No chats match \u201C" + filter + "\u201D." : "Your chats will show up here.";
+                string msg = filter.Length > 0 ? "No chats match \u201C" + filter + "\u201D." : archiveView ? "No archived chats." : "Your chats will show up here.";
                 TextRenderer.DrawText(g, msg, Font, new Rectangle(UI.S(18), lr.Y + UI.S(4), Width - UI.S(36), UI.S(60)), th.ChromeDim, TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.PreserveGraphicsClipping);
             }
             using (Font small = new Font(UI.Font.FontFamily, UI.Font.Size * 0.9f))
@@ -327,6 +384,13 @@ namespace MinGent
                     Row row = rows[i];
                     if (row.Header != null)
                     {
+                        if (row.Title)
+                        {
+                            using (Font bold = new Font(UI.Font.FontFamily, UI.Font.Size, FontStyle.Bold))
+                                TextRenderer.DrawText(g, row.Header, bold, new Rectangle(r.X + UI.S(8), r.Y, r.Width - UI.S(16), r.Height), th.Fore,
+                                    TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.PreserveGraphicsClipping);
+                            continue;
+                        }
                         TextRenderer.DrawText(g, row.Header, small, new Rectangle(r.X + UI.S(8), r.Y, r.Width - UI.S(16), r.Height), th.ChromeDim,
                             TextFormatFlags.Bottom | TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.PreserveGraphicsClipping);
                         continue;
@@ -336,19 +400,23 @@ namespace MinGent
                     if (active) Glyphs.FillRound(g, th.SideSel, r, UI.S(8));
                     else if (hot) Glyphs.Hover(g, th, th.SideHover, r, UI.S(8));
                     if (i == focusRow && Focused && ShowFocusCues) Glyphs.Ring(g, active && th.HighContrast ? SystemColors.HighlightText : th.Accent, r, UI.S(8), Glyphs.FocusWidth);
-                    Color fg = active && th.HighContrast ? SystemColors.HighlightText : th.Fore;
+                    Color fg = th.HighContrast ? (active ? SystemColors.HighlightText : th.Fore) : active || hot ? th.ChromeFore : Theme.Blend(th.ChromeFore, th.Side, 0.22);
                     int right = r.Right - UI.S(10);
-                    Rectangle tr = TrashRect(i);
-                    if (hot) right = tr.Left - UI.S(2);
+                    Rectangle mr = MoreRect(i);
+                    if (hot) right = mr.Left - UI.S(2);
                     else if (active && running) right = r.Right - UI.S(30);
                     string title = row.Chat.Title.Length > 0 ? row.Chat.Title : "Untitled chat";
-                    TextRenderer.DrawText(g, title, Font, new Rectangle(r.X + UI.S(10), r.Y, Math.Max(10, right - r.X - UI.S(10)), r.Height), fg,
-                        TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.PreserveGraphicsClipping);
+                    Rectangle tbox = new Rectangle(r.X + UI.S(10), r.Y, Math.Max(10, right - r.X - UI.S(10)), r.Height);
+                    TitleText(g, title, tbox, fg, active ? th.SideSel : hot ? th.SideHover : th.Side);
                     if (hot)
                     {
-                        bool trashHot = hoverZone == ZTrash;
-                        if (trashHot) Glyphs.FillRound(g, active ? th.SideHover : th.SideSel, tr, UI.S(6));
-                        Glyphs.Draw("trash", g, tr, th.HighContrast && active && !trashHot ? SystemColors.HighlightText : trashHot ? th.Error : th.ChromeDim);
+                        bool moreHot = hoverZone == ZMore;
+                        if (moreHot)
+                        {
+                            if (th.HighContrast) Glyphs.DrawRound(g, active ? SystemColors.HighlightText : SystemColors.Highlight, new Rectangle(mr.X, mr.Y, mr.Width - 1, mr.Height - 1), UI.S(6));
+                            else Glyphs.FillRound(g, Theme.Blend(active ? th.SideSel : th.SideHover, th.ChromeFore, 0.07), mr, UI.S(6));
+                        }
+                        Glyphs.Draw("more", g, mr, th.HighContrast ? (active ? SystemColors.HighlightText : th.ChromeFore) : moreHot ? th.ChromeFore : th.ChromeDim);
                     }
                     else if (active && running)
                         Glyphs.Spinner(g, new Rectangle(r.Right - UI.S(26), r.Y + (r.Height - UI.S(18)) / 2, UI.S(18), UI.S(18)), th.HighContrast ? SystemColors.HighlightText : th.Accent, phase);
@@ -371,6 +439,7 @@ namespace MinGent
             if (collapsed) return;
             if (NewRect.Contains(p)) { zone = ZNew; return; }
             if (LibraryRect.Contains(p)) { zone = ZLibrary; return; }
+            if (ShowArchived && ArchivedRect.Contains(p)) { zone = ZArchived; return; }
             if (SettingsRect.Contains(p)) { zone = ZSettings; return; }
             if (!ListRect.Contains(p)) return;
             for (int i = 0; i < rows.Count; i++)
@@ -379,7 +448,7 @@ namespace MinGent
                 Rectangle r = RowRect(i);
                 if (!r.Contains(p)) continue;
                 row = i;
-                zone = TrashRect(i).Contains(p) ? ZTrash : ZRow;
+                zone = MoreRect(i).Contains(p) ? ZMore : ZRow;
                 return;
             }
         }
@@ -406,10 +475,10 @@ namespace MinGent
         void RowTip(int row, int zone)
         {
             string want = null;
-            if (row >= 0 && row < rows.Count && rows[row].Chat != null && zone != ZTrash)
+            if (row >= 0 && row < rows.Count && rows[row].Chat != null && zone != ZMore)
             {
                 string title = rows[row].Chat.Title.Length > 0 ? rows[row].Chat.Title : "Untitled chat";
-                int room = TrashRect(row).Left - UI.S(2) - (RowRect(row).X + UI.S(10));
+                int room = MoreRect(row).Left - UI.S(2) - (RowRect(row).X + UI.S(10));
                 if (TextRenderer.MeasureText(title, Font, Size.Empty, TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width > room) want = title;
             }
             if (want == rowTip) return;
@@ -460,9 +529,10 @@ namespace MinGent
             {
                 case ZNew: if (NewChatClicked != null) NewChatClicked(this, EventArgs.Empty); break;
                 case ZLibrary: if (LibraryClicked != null) LibraryClicked(this, EventArgs.Empty); break;
+                case ZArchived: if (ArchiveViewClicked != null) ArchiveViewClicked(this, EventArgs.Empty); break;
                 case ZSettings: if (SettingsClicked != null) SettingsClicked(this, EventArgs.Empty); break;
                 case ZRow: Open(rows[row].Chat); break;
-                case ZTrash: Delete(rows[row].Chat); break;
+                case ZMore: { Rectangle m = MoreRect(row); ShowRowMenu(row, new Point(m.Left, m.Bottom + UI.S(2))); } break;
             }
         }
 
@@ -476,11 +546,21 @@ namespace MinGent
             if (c == null) return;
             ContextMenuStrip m = Menus.Create(th);
             m.ShowCheckMargin = false;
-            m.Items.Add(Menus.Item("Open", false, delegate { Open(c); }));
-            m.Items.Add(Menus.Item("Rename chat...", false, delegate { if (RenameClicked != null) RenameClicked(c.Path); }));
-            m.Items.Add(Menus.Item("Delete chat", false, delegate { Delete(c); }));
-            m.Items.Add(new ToolStripSeparator());
-            m.Items.Add(Menus.Item("Delete all chats...", false, delegate { if (DeleteAllClicked != null) DeleteAllClicked(this, EventArgs.Empty); }));
+            if (archiveView)
+            {
+                m.Items.Add(Menus.Item("Open", false, delegate { Open(c); }));
+                m.Items.Add(Menus.Item("Move back to chats", false, delegate { if (RestoreClicked != null) RestoreClicked(c.Path); }));
+                m.Items.Add(Menus.Item("Delete chat", false, delegate { Delete(c); }));
+            }
+            else
+            {
+                m.Items.Add(Menus.Item("Open", false, delegate { Open(c); }));
+                m.Items.Add(Menus.Item("Rename chat...", false, delegate { if (RenameClicked != null) RenameClicked(c.Path); }));
+                m.Items.Add(Menus.Item("Archive chat", false, delegate { if (ArchiveClicked != null) ArchiveClicked(c.Path); }));
+                m.Items.Add(Menus.Item("Delete chat", false, delegate { Delete(c); }));
+                m.Items.Add(new ToolStripSeparator());
+                m.Items.Add(Menus.Item("Delete all chats...", false, delegate { if (DeleteAllClicked != null) DeleteAllClicked(this, EventArgs.Empty); }));
+            }
             m.Closed += delegate { BeginInvoke(new Action(delegate { m.Dispose(); })); };
             m.Show(this, p);
         }
@@ -539,7 +619,7 @@ namespace MinGent
                 case Keys.End: focusRow = rows.Count; MoveFocus(-1); e.Handled = true; break;
                 case Keys.Enter: Open(c); e.Handled = true; break;
                 case Keys.Delete: Delete(c); e.Handled = true; break;
-                case Keys.F2: if (c != null && RenameClicked != null) RenameClicked(c.Path); e.Handled = true; break;
+                case Keys.F2: if (c != null && !archiveView && RenameClicked != null) RenameClicked(c.Path); e.Handled = true; break;
                 case Keys.Apps: if (focusRow >= 0 && c != null) { Rectangle r = RowRect(focusRow); ShowRowMenu(focusRow, new Point(r.X + UI.S(20), r.Bottom)); } e.Handled = true; break;
             }
         }

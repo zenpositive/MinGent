@@ -39,7 +39,8 @@ namespace MinGent
         public List<Rectangle> Tiles;
         public int TrayH;
         public string ContextLabel;
-        public bool Queued, MidRun, Running, Stopped;
+        public bool Queued, MidRun, Running, Stopped, SpeedGuess;
+        public double Speed, FirstToken;
         public string Phase = "", CurrentTask = "";
         public ChatItem Group, Under, LastKid;
         public int Kids;
@@ -658,7 +659,7 @@ namespace MinGent
                 ChatItem it = Items[i];
                 if (it.Under != null) { it.Group = act; it.Hidden = !act.Expanded; continue; }
                 if (it.Kind == ChatKind.Assistant && it.Text.Trim().Length > 0 && Answer(i, e)) continue;
-                bool pinned = it.Kind == ChatKind.Question && it.Decision >= 0 && (it.Question == null || !it.Question.Wait);
+                bool pinned = (it.Kind == ChatKind.Question && it.Decision >= 0 && (it.Question == null || !it.Question.Wait)) || (it.Kind == ChatKind.Assistant && Substantial(it.Text));
                 bool member = it.Kind == ChatKind.Tool || it.Kind == ChatKind.Thinking || it.Kind == ChatKind.Assistant || (it.Kind == ChatKind.Permission && it.Decision >= 0) ||
                               (it.Kind == ChatKind.Question && it.Decision >= 0) || pinned;
                 if (!member) continue;
@@ -667,6 +668,25 @@ namespace MinGent
                 act.Members.Add(it);
             }
             return act;
+        }
+
+        public static string SpeedText(ChatItem it)
+        {
+            string rate = it.Speed < 10 ? it.Speed.ToString("0.0", CultureInfo.InvariantCulture) : Math.Round(it.Speed).ToString("0", CultureInfo.InvariantCulture);
+            string s = (it.SpeedGuess ? "about " : "") + rate + " tokens/s";
+            if (it.FirstToken >= 0.05) s += "  \u00B7  first token in " + (it.FirstToken < 10 ? it.FirstToken.ToString("0.0", CultureInfo.InvariantCulture) : Math.Round(it.FirstToken).ToString("0", CultureInfo.InvariantCulture)) + " s";
+            return s;
+        }
+
+        static readonly System.Text.RegularExpressions.Regex Structured = new System.Text.RegularExpressions.Regex(@"(^|\n)\s*(#{1,6}\s|[-*]\s|\d+[.)]\s|\||```)", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+        static bool Substantial(string text)
+        {
+            string t = (text ?? "").Trim();
+            if (t.Length >= 400) return true;
+            if (t.Length >= 40 && Structured.IsMatch(t)) return true;
+            if (t.Length < 120) return false;
+            return System.Text.RegularExpressions.Regex.Matches(t, @"[.!?](\s|$)").Count >= 3;
         }
 
         bool Answer(int i, int e)
@@ -989,11 +1009,49 @@ namespace MinGent
             }
         }
 
+        bool dropHint;
+
+        public bool DropHint
+        {
+            get { return dropHint; }
+            set { if (dropHint == value) return; dropHint = value; Invalidate(); }
+        }
+
+        public Rectangle DropArea
+        {
+            get
+            {
+                int m = UI.S(10);
+                return new Rectangle(m, m, ClientSize.Width - 2 * m, ClientSize.Height - 2 * m);
+            }
+        }
+
+        public Color DropFill { get { return th.HighContrast ? th.Back : Theme.Blend(th.Back, th.Accent, th.Dark ? 0.10 : 0.06); } }
+
+        void PaintDrop(Graphics g)
+        {
+            if (!dropHint) return;
+            Rectangle r = DropArea;
+            if (r.Width < UI.S(120) || r.Height < UI.S(80)) return;
+            Color fill = DropFill;
+            Glyphs.FillRound(g, fill, r, UI.S(12));
+            Glyphs.Ring(g, th.HighContrast ? SystemColors.Highlight : th.Accent, r, UI.S(12), Glyphs.FocusWidth);
+            string text = "Drop files to attach them";
+            int cs = UI.S(44), gs = UI.S(22), mid = r.Y + r.Height / 2;
+            if (!EmptyAnchor.IsEmpty && EmptyAnchor.Y - r.Y > cs + fonts.LineH + UI.S(40))
+                mid = (r.Y + EmptyAnchor.Y - UI.S(12)) / 2 - (UI.S(12) + fonts.LineH - cs) / 2;
+            Rectangle circle = new Rectangle(r.X + (r.Width - cs) / 2, mid - cs - UI.S(2), cs, cs);
+            if (!th.HighContrast) Glyphs.Dot(g, circle, Theme.Blend(fill, th.Accent, th.Dark ? 0.22 : 0.14), cs);
+            Glyphs.Draw("attach", g, new Rectangle(circle.X + (cs - gs) / 2, circle.Y + (cs - gs) / 2, gs, gs), th.HighContrast ? th.Fore : th.Accent);
+            TextRenderer.DrawText(g, text, fonts.Body, new Rectangle(r.X + UI.S(8), mid + UI.S(10), r.Width - UI.S(16), fonts.LineH + UI.S(4)), th.Fore,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
             g.Clear(th.Back);
-            if (Items.Count == 0) { PaintEmpty(g); return; }
+            if (Items.Count == 0) { PaintEmpty(g); PaintDrop(g); return; }
             faceRect = Rectangle.Empty;
             foreach (ChatItem it in Items)
             {
@@ -1028,7 +1086,8 @@ namespace MinGent
             }
             PaintScrollbar(g);
             PaintJump(g);
-            if (Focused && ShowFocusCues) Glyphs.Ring(g, th.Accent, new Rectangle(UI.S(2), UI.S(2), ClientSize.Width - UI.S(4), ClientSize.Height - UI.S(4)), UI.S(8), Glyphs.FocusWidth);
+            if (Focused && ShowFocusCues && !dropHint) Glyphs.Ring(g, th.Accent, new Rectangle(UI.S(2), UI.S(2), ClientSize.Width - UI.S(4), ClientSize.Height - UI.S(4)), UI.S(8), Glyphs.FocusWidth);
+            PaintDrop(g);
         }
 
         void PaintEmpty(Graphics g)
@@ -1242,6 +1301,14 @@ namespace MinGent
                                 Glyphs.Draw("reload", g, new Rectangle(rr.X + UI.S(5), rr.Y, UI.S(16), rr.Height), rh ? th.Fore : th.ChromeDim);
                                 TextRenderer.DrawText(g, rl, f.Small, new Rectangle(rr.X + UI.S(24), rr.Y, rr.Width - UI.S(24), rr.Height), rh ? th.Fore : th.ChromeDim,
                                     TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
+                                br = rr;
+                            }
+                            if (it.Speed > 0)
+                            {
+                                int sx = br.Right + UI.S(10);
+                                if (sx < x + w - UI.S(40))
+                                    TextRenderer.DrawText(g, SpeedText(it), f.Small, new Rectangle(sx, br.Y, x + w - sx, br.Height), th.ChromeDim,
+                                        TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
                             }
                         }
                         break;

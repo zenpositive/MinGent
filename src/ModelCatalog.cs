@@ -372,7 +372,14 @@ namespace MinGent
 
         public static List<string> EngineThinkingLevels(LocalModel lm)
         {
-            if (lm.NativeEffort) return new List<string>(new string[] { "low", "medium", "high" });
+            if (lm.NativeEffort)
+            {
+                List<string> own = new List<string>();
+                if (lm.EffortNames == null) own.AddRange(new string[] { "low", "medium", "high" });
+                else foreach (string n in lm.EffortNames) if (n != "none") own.Add(n);
+                if (lm.CanStopThinking || (lm.EffortNames != null && lm.EffortNames.Contains("none"))) own.Insert(0, "off");
+                return own;
+            }
             if (!lm.Thinking) return null;
             if (lm.CanStopThinking) return new List<string>(new string[] { "off", "low", "medium", "high", "max" });
             return new List<string>(new string[] { "low", "medium", "high", "max" });

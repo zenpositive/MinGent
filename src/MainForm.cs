@@ -30,6 +30,8 @@ namespace MinGent
         public bool AiAutoExplained, AiPlanExplained, AiFullExplained;
         public string AiAutoAllow = "";
         public bool AiCaptcha;
+        public bool AiSandbox;
+        public bool AiOtherApps;
         public bool AiWebGuard = true;
         public bool AiWeb = true;
         public bool AiBrowser = true;
@@ -143,6 +145,8 @@ namespace MinGent
                         case "aiFullExplained": s.AiFullExplained = v == "1"; break;
                         case "aiAutoAllow": s.AiAutoAllow = v; break;
                         case "aiCaptcha": s.AiCaptcha = v == "1"; break;
+                        case "aiSandbox": s.AiSandbox = v == "1"; break;
+                        case "aiOtherApps": s.AiOtherApps = v == "1"; break;
                         case "aiWebGuard": s.AiWebGuard = v != "0"; break;
                         case "aiWeb": s.AiWeb = v != "0"; break;
                         case "aiBrowser": s.AiBrowser = v != "0"; break;
@@ -244,6 +248,8 @@ namespace MinGent
                 w("aiFullExplained", AiFullExplained ? "1" : "0");
                 w("aiAutoAllow", AiAutoAllow);
                 w("aiCaptcha", AiCaptcha ? "1" : "0");
+                w("aiSandbox", AiSandbox ? "1" : "0");
+                w("aiOtherApps", AiOtherApps ? "1" : "0");
                 w("aiWebGuard", AiWebGuard ? "1" : "0");
                 w("aiWeb", AiWeb ? "1" : "0");
                 w("aiBrowser", AiBrowser ? "1" : "0");
@@ -497,7 +503,10 @@ namespace MinGent
             aiPanel.NotesChatChanged += delegate { SyncNotesChat(); };
 
             sidebar.NewChatClicked += delegate { aiPanel.NewChat(); };
-            sidebar.OpenClicked += delegate (string p) { aiPanel.OpenChat(p); };
+            sidebar.OpenClicked += delegate (string p) { OpenFromSidebar(p); };
+            sidebar.ArchiveClicked += delegate (string p) { aiPanel.ArchiveChat(p); RefreshSidebar(); };
+            sidebar.RestoreClicked += delegate (string p) { aiPanel.RestoreChat(p); RefreshSidebar(); };
+            sidebar.ArchiveViewClicked += delegate { showArchived = !showArchived; RefreshSidebar(); };
             sidebar.DeleteClicked += DeleteChat;
             sidebar.RenameClicked += RenameChat;
             sidebar.DeleteAllClicked += delegate { DeleteAllChats(); };
@@ -1101,10 +1110,28 @@ namespace MinGent
             shell.PerformLayout();
         }
 
+        bool showArchived;
+
         void RefreshSidebar()
         {
             if (aiPanel == null) return;
-            sidebar.SetChats(aiPanel.ListChats(), aiPanel.ActiveChatPath, aiPanel.Running);
+            int archived = aiPanel.ArchivedCount();
+            if (archived == 0) showArchived = false;
+            sidebar.SetChats(showArchived ? aiPanel.ListArchived() : aiPanel.ListChats(), aiPanel.ActiveChatPath, aiPanel.Running, archived, showArchived);
+        }
+
+        void OpenFromSidebar(string path)
+        {
+            if (aiPanel == null) return;
+            if (aiPanel.IsArchived(path))
+            {
+                string back = aiPanel.RestoreChat(path);
+                if (back == null) { RefreshSidebar(); return; }
+                showArchived = false;
+                path = back;
+            }
+            aiPanel.OpenChat(path);
+            RefreshSidebar();
         }
 
         void DeleteChat(string path)
@@ -1134,7 +1161,7 @@ namespace MinGent
             return true;
         }
 
-        const string DeleteAllText = "Delete all chats?\n\nThey are erased from this PC and can't be brought back. What the agent remembered in them is forgotten too; facts you added yourself in Settings > Memory stay.";
+        const string DeleteAllText = "Delete all chats?\n\nThey are erased from this PC, archived chats too, and can't be brought back. What the agent remembered in them is forgotten too; facts you added yourself in Settings > Memory stay.";
 
         string DeleteAllPrompt()
         {
@@ -2434,15 +2461,7 @@ namespace MinGent
 
         void UpdateTitle()
         {
-            Document d = CurDoc;
-            string t;
-            if (NotesShown && d != null) t = (d.Modified ? "*" : "") + d.DisplayName + " - " + Program.AppName;
-            else
-            {
-                string chatTitle = aiPanel != null ? aiPanel.ChatTitle : "";
-                t = chatTitle.Length > 0 ? chatTitle + " - " + Program.AppName : Program.AppName;
-            }
-            if (Text != t) Text = t;
+            if (Text != Program.AppName) Text = Program.AppName;
             UpdateAiChip();
         }
 
@@ -3334,8 +3353,29 @@ namespace MinGent
         {
             string[] files = e.Data.GetData(DataFormats.FileDrop) as string[];
             if (files == null) return;
-            foreach (string f in files) OpenFile(f);
+            List<string> toChat = new List<string>();
+            foreach (string f in files)
+            {
+                if (aiPanel != null && ForChat(f)) toChat.Add(f);
+                else OpenFile(f);
+            }
+            if (toChat.Count > 0)
+            {
+                if (!shell.AgentOn) ShowAgent(true, false);
+                aiPanel.DropFiles(toChat.ToArray());
+            }
             Activate();
+        }
+
+        bool ForChat(string path)
+        {
+            string full;
+            try { full = Path.GetFullPath(path.Trim().Trim('"')); }
+            catch { return false; }
+            for (int i = 0; i < docs.Count; i++)
+                if (docs[i].Path != null && string.Equals(docs[i].Path, full, StringComparison.OrdinalIgnoreCase)) return false;
+            if (Directory.Exists(full)) return true;
+            return File.Exists(full) && (Attachments.NotText(full) || LooksBinary(full));
         }
 
         protected override void OnDragEnter(DragEventArgs e) { base.OnDragEnter(e); OnFileDragEnter(this, e); }

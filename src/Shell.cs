@@ -24,7 +24,8 @@ namespace MinGent
         public int ExitCode = -1;
         public string Ending = "";
         public string ScriptFile;
-        public bool Background;
+        public bool Background, Sandboxed, GitWarned;
+        public string SandboxNote, GitWatch;
         public long Dropped;
 
         public string Text(long from)
@@ -130,9 +131,19 @@ namespace MinGent
             return Start(command, shell, cwd, background, null, out error);
         }
 
+        static readonly string[] PlainEnv = { "PYTHONUNBUFFERED", "1", "PYTHONIOENCODING", "utf-8", "NO_COLOR", "1", "TERM", "dumb", "CI", "1", "GIT_TERMINAL_PROMPT", "0", "npm_config_yes", "true", "PIP_NO_INPUT", "1" };
+        static readonly string[] HiddenEnv = { "ANTHROPIC_API_KEY", "OPENAI_API_KEY" };
+
         public static ShellJob Start(string command, string shell, string cwd, bool background, Dictionary<string, string> env, out string error)
         {
+            bool lowFailed;
+            return Start(command, shell, cwd, background, env, false, out error, out lowFailed);
+        }
+
+        public static ShellJob Start(string command, string shell, string cwd, bool background, Dictionary<string, string> env, bool low, out string error, out bool lowFailed)
+        {
             error = null;
+            lowFailed = false;
             Sweep();
             ShellJob j = new ShellJob();
             j.Command = command;
@@ -166,15 +177,9 @@ namespace MinGent
             psi.RedirectStandardInput = true;
             psi.RedirectStandardOutput = true;
             psi.RedirectStandardError = true;
-            psi.EnvironmentVariables["PYTHONUNBUFFERED"] = "1";
-            psi.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8";
-            psi.EnvironmentVariables["NO_COLOR"] = "1";
-            psi.EnvironmentVariables["TERM"] = "dumb";
-            psi.EnvironmentVariables["CI"] = "1";
-            psi.EnvironmentVariables["GIT_TERMINAL_PROMPT"] = "0";
-            psi.EnvironmentVariables["npm_config_yes"] = "true";
-            psi.EnvironmentVariables["PIP_NO_INPUT"] = "1";
-            foreach (string k in new string[] { "ANTHROPIC_API_KEY", "OPENAI_API_KEY" })
+            if (low) return StartLow(j, psi.FileName, psi.Arguments, cwd, env, out error, out lowFailed);
+            for (int i = 0; i + 1 < PlainEnv.Length; i += 2) psi.EnvironmentVariables[PlainEnv[i]] = PlainEnv[i + 1];
+            foreach (string k in HiddenEnv)
                 if (psi.EnvironmentVariables.ContainsKey(k)) psi.EnvironmentVariables.Remove(k);
             if (env != null) foreach (KeyValuePair<string, string> kv in env) psi.EnvironmentVariables[kv.Key] = kv.Value;
             Process p = new Process();
@@ -187,7 +192,7 @@ namespace MinGent
                 return null;
             }
             j.Proc = p;
-            j.Job = MakeJob(p);
+            j.Job = MakeJob(p.Handle);
             try { p.StandardInput.Close(); } catch { }
             Pump(p.StandardOutput.BaseStream, j);
             Pump(p.StandardError.BaseStream, j);
@@ -205,9 +210,64 @@ namespace MinGent
             return j;
         }
 
-        static IntPtr MakeJob(Process p)
+        static ShellJob StartLow(ShellJob j, string exe, string args, string cwd, Dictionary<string, string> env, out string error, out bool lowFailed)
         {
-            if (!IsWindows) return IntPtr.Zero;
+            error = null;
+            lowFailed = false;
+            Dictionary<string, string> all = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (System.Collections.DictionaryEntry de in Environment.GetEnvironmentVariables())
+            {
+                string k = de.Key as string;
+                if (!string.IsNullOrEmpty(k)) all[k] = de.Value as string ?? "";
+            }
+            for (int i = 0; i + 1 < PlainEnv.Length; i += 2) all[PlainEnv[i]] = PlainEnv[i + 1];
+            foreach (string k in HiddenEnv) all.Remove(k);
+            if (env != null) foreach (KeyValuePair<string, string> kv in env) all[kv.Key] = kv.Value;
+            foreach (KeyValuePair<string, string> kv in Sandbox.Env()) all[kv.Key] = kv.Value;
+            int pid;
+            IntPtr process, thread;
+            Stream output, errors;
+            string why = Sandbox.Start(exe, args, cwd, all, out pid, out process, out thread, out output, out errors);
+            if (why != null)
+            {
+                error = why;
+                lowFailed = true;
+                Cleanup(j);
+                return null;
+            }
+            try { j.Proc = Process.GetProcessById(pid); }
+            catch
+            {
+                Sandbox.Abandon(process, thread);
+                try { output.Dispose(); } catch { }
+                try { errors.Dispose(); } catch { }
+                error = "the sandboxed command stopped before MinGent could watch it";
+                lowFailed = true;
+                Cleanup(j);
+                return null;
+            }
+            j.Job = MakeJob(process);
+            j.Sandboxed = true;
+            Sandbox.Resume(thread);
+            Pump(output, j);
+            Pump(errors, j);
+            lock (jobs) { j.Id = nextId++; jobs.Add(j); }
+            Thread waiter = new Thread(delegate ()
+            {
+                int code = Sandbox.Wait(process);
+                j.ExitCode = code;
+                Thread.Sleep(150);
+                j.Exited = true;
+                Cleanup(j);
+            });
+            waiter.IsBackground = true;
+            waiter.Start();
+            return j;
+        }
+
+        static IntPtr MakeJob(IntPtr process)
+        {
+            if (!IsWindows || process == IntPtr.Zero) return IntPtr.Zero;
             try
             {
                 IntPtr job = CreateJobObject(IntPtr.Zero, null);
@@ -222,7 +282,7 @@ namespace MinGent
                     SetInformationJobObject(job, 9, ptr, (uint)size);
                 }
                 finally { Marshal.FreeHGlobal(ptr); }
-                AssignProcessToJobObject(job, p.Handle);
+                AssignProcessToJobObject(job, process);
                 return job;
             }
             catch { return IntPtr.Zero; }
@@ -1654,6 +1714,1313 @@ namespace MinGent
         public static bool Nests(string line)
         {
             return Nested.IsMatch(line ?? "");
+        }
+    }
+
+    static class CommandWords
+    {
+        static readonly Regex GenericWords = new Regex(@"^(please\s+)?(run|runs|running|execute|executes|executing|start|starts|invoke|do)?\s*(a|an|the|this|that|my|some|following)?\s*(powershell|cmd|shell|terminal|system|console|cli)?\s*(command|commands|script|cmd|task|it|code)?\s*[.!:]*$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        public static bool Generic(string description, string command)
+        {
+            string d = Regex.Replace(description ?? "", @"\s+", " ").Trim();
+            if (d.Length < 3 || GenericWords.IsMatch(d)) return true;
+            string c = Regex.Replace(command ?? "", @"\s+", " ").Trim();
+            return c.Length > 0 && string.Equals(d.TrimEnd('.', ' '), c, StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static string Explain(string description, string command)
+        {
+            string d = PermissionAsk.PlainSummary(description, 160);
+            return Generic(d, command) ? Describe(command) : d;
+        }
+
+        class Seg { public string Text; public bool StepStart; }
+
+        static List<Seg> Split(string c)
+        {
+            List<Seg> l = new List<Seg>();
+            StringBuilder cur = new StringBuilder();
+            bool start = true;
+            char q = '\0';
+            for (int i = 0; i < c.Length; i++)
+            {
+                char ch = c[i];
+                if (q != '\0')
+                {
+                    cur.Append(ch);
+                    if (ch == q) q = '\0';
+                    continue;
+                }
+                if (ch == '"' || ch == '\'') { q = ch; cur.Append(ch); continue; }
+                bool step = ch == '\n' || ch == ';' || ((ch == '&' || ch == '|') && i + 1 < c.Length && c[i + 1] == ch);
+                bool inner = !step && (ch == '|' || ch == '&' || ch == '(' || ch == ')' || ch == '{' || ch == '}');
+                if (!step && !inner) { cur.Append(ch); continue; }
+                Seg sg = new Seg();
+                sg.Text = cur.ToString();
+                sg.StepStart = start;
+                l.Add(sg);
+                cur.Length = 0;
+                start = step;
+                if (step && ch != '\n' && ch != ';') i++;
+            }
+            Seg last = new Seg();
+            last.Text = cur.ToString();
+            last.StepStart = start;
+            l.Add(last);
+            return l;
+        }
+
+        static List<string> Tokens(string s)
+        {
+            List<string> l = new List<string>();
+            foreach (Match m in Regex.Matches(s ?? "", @"""([^""]*)""|'([^']*)'|(\S+)"))
+                l.Add(m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Success ? m.Groups[2].Value : m.Groups[3].Value);
+            return l;
+        }
+
+        static string Base(string token)
+        {
+            string t = (token ?? "").Trim().Trim('"', '\'').Trim();
+            int slash = Math.Max(t.LastIndexOf('\\'), t.LastIndexOf('/'));
+            if (slash >= 0) t = t.Substring(slash + 1);
+            string low = t.ToLowerInvariant();
+            if (low.EndsWith(".exe", StringComparison.Ordinal) || low.EndsWith(".com", StringComparison.Ordinal)) low = low.Substring(0, low.Length - 4);
+            return low;
+        }
+
+        static string Short(string path)
+        {
+            string p = (path ?? "").Trim().Trim('"', '\'');
+            if (p.Length > 2 && p[0] == '.' && (p[1] == '\\' || p[1] == '/')) p = p.Substring(2);
+            if (p.Length <= 48) return p;
+            if (Regex.IsMatch(p, @"^[a-z]+://", RegexOptions.IgnoreCase))
+            {
+                Uri u;
+                if (Uri.TryCreate(p, UriKind.Absolute, out u))
+                {
+                    string rest = u.PathAndQuery.Length > 1 ? u.PathAndQuery : "";
+                    if (rest.Length > 24) rest = rest.Substring(0, 24) + "…";
+                    return u.Host + rest;
+                }
+                return p.Substring(0, 45) + "…";
+            }
+            string[] parts = p.Split('\\', '/');
+            if (parts.Length >= 2)
+            {
+                string tail = parts[parts.Length - 2] + "\\" + parts[parts.Length - 1];
+                if (tail.Length <= 46) return "…\\" + tail;
+            }
+            return "…" + p.Substring(p.Length - 45);
+        }
+
+        static List<string> Plain(List<string> w)
+        {
+            List<string> l = new List<string>();
+            bool skip = false;
+            foreach (string x in w)
+            {
+                if (skip) { skip = false; continue; }
+                if (x.Length > 1 && x[0] == '-') { if (ValueFlag.IsMatch(x)) skip = true; continue; }
+                if (x.Length > 1 && x[0] == '/' && Regex.IsMatch(x, @"^/[a-z?]{1,3}(:\S*)?$", RegexOptions.IgnoreCase)) continue;
+                if (x == ">" || x == ">>" || x == "2>&1" || x.StartsWith(">") || x.StartsWith("2>") || x.StartsWith("1>")) break;
+                l.Add(x);
+            }
+            return l;
+        }
+
+        static readonly Regex ValueFlag = new Regex(@"^-(o|f|m|c|e|n|t|w|filter|include|exclude|encoding|depth|outfile|output|path|literalpath|lp|destination|destinationpath|value|itemtype|type|name|newname|uri|method|body|headers|tail|totalcount|head|first|last|pattern|filepath|argumentlist|workingdirectory|wait|seconds|milliseconds|id|processname|computername|count|message|branch|b)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        static string Redirect(string seg)
+        {
+            char q = '\0';
+            for (int i = 0; i < seg.Length; i++)
+            {
+                char ch = seg[i];
+                if (q != '\0') { if (ch == q) q = '\0'; continue; }
+                if (ch == '"' || ch == '\'') { q = ch; continue; }
+                if (ch != '>') continue;
+                int j = i + 1;
+                if (j < seg.Length && seg[j] == '>') j++;
+                if (j < seg.Length && seg[j] == '&') return null;
+                while (j < seg.Length && seg[j] == ' ') j++;
+                int k = j;
+                if (k < seg.Length && (seg[k] == '"' || seg[k] == '\''))
+                {
+                    int e = seg.IndexOf(seg[k], k + 1);
+                    if (e < 0) return null;
+                    string quoted = seg.Substring(k + 1, e - k - 1);
+                    return Sink(quoted) ? null : quoted;
+                }
+                while (k < seg.Length && !char.IsWhiteSpace(seg[k]) && seg[k] != '>') k++;
+                string t = seg.Substring(j, k - j);
+                if (t.Length == 0 || Sink(t)) { i = k; continue; }
+                return t;
+            }
+            return null;
+        }
+
+        static bool Sink(string t)
+        {
+            string l = t.Trim().ToLowerInvariant();
+            return l == "$null" || l == "nul" || l == "null" || l == "/dev/null" || l.StartsWith("&");
+        }
+
+        static bool Has(List<string> w, params string[] flags)
+        {
+            foreach (string x in w) foreach (string f in flags) if (string.Equals(x, f, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        static string After(List<string> w, params string[] flags)
+        {
+            for (int i = 0; i + 1 < w.Count; i++) foreach (string f in flags) if (string.Equals(w[i], f, StringComparison.OrdinalIgnoreCase)) return w[i + 1];
+            foreach (string x in w)
+                foreach (string f in flags)
+                    if (x.StartsWith(f + ":", StringComparison.OrdinalIgnoreCase) || x.StartsWith(f + "=", StringComparison.OrdinalIgnoreCase)) return x.Substring(f.Length + 1);
+            return null;
+        }
+
+        static string Names(List<string> items, int from)
+        {
+            List<string> l = new List<string>();
+            for (int i = from; i < items.Count && l.Count < 3; i++) l.Add(Short(items[i]));
+            int more = items.Count - from - l.Count;
+            if (l.Count == 0) return "";
+            string s = l.Count == 1 ? l[0] : string.Join(", ", l.GetRange(0, l.Count - 1).ToArray()) + " and " + l[l.Count - 1];
+            return more > 0 ? s + " and " + more + " more" : s;
+        }
+
+        static string Target(List<string> plain, string fallback)
+        {
+            if (plain.Count == 0) return fallback;
+            string t = plain[0];
+            if (t.StartsWith("$")) return fallback;
+            if (t == "." || t == ".\\" || t == "./") return "this folder";
+            return Short(t);
+        }
+
+        static readonly Dictionary<string, string> Nice = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "python", "Python" }, { "python3", "Python" }, { "py", "Python" }, { "node", "Node.js" }, { "npm", "npm" }, { "git", "Git" }, { "dotnet", ".NET" },
+            { "java", "Java" }, { "javac", "the Java compiler" }, { "go", "Go" }, { "cargo", "Cargo" }, { "rustc", "Rust" }, { "gcc", "GCC" }, { "cmake", "CMake" },
+            { "pip", "pip" }, { "pip3", "pip" }, { "pwsh", "PowerShell" }, { "powershell", "PowerShell" }, { "deno", "Deno" }, { "bun", "Bun" }, { "ruby", "Ruby" },
+            { "php", "PHP" }, { "perl", "Perl" }, { "ffmpeg", "FFmpeg" }, { "winget", "winget" }, { "docker", "Docker" }, { "code", "VS Code" }
+        };
+
+        static string Tool(string name) { string n; return Nice.TryGetValue(name, out n) ? n : name; }
+
+        static string One(string seg, bool first, int depth, out int weight)
+        {
+            weight = -1;
+            string s = Regex.Replace(seg.Trim(), @"^(@|[.&](?=\s))\s*", "");
+            Match asg = Regex.Match(s, @"^\$(env:)?([\w:]+)\s*[+-]?=(?!=)\s*(.*)$", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            if (asg.Success)
+            {
+                if (asg.Groups[1].Success) { weight = 1; return "Set " + asg.Groups[2].Value + " for the next steps"; }
+                s = asg.Groups[3].Value.Trim();
+                if (s.Length == 0 || s[0] == '"' || s[0] == '\'' || s[0] == '$' || s[0] == '@' || char.IsDigit(s[0]) || s[0] == '[') { weight = 0; return first ? "Set a variable" : null; }
+            }
+            List<string> t = Tokens(s);
+            if (t.Count == 0) return null;
+            string head = t[0];
+            string name = Base(head);
+            List<string> w = t.GetRange(1, t.Count - 1);
+            List<string> p = Plain(w);
+            if (name.IndexOf('-') > 0)
+            {
+                string pathArg = After(w, "-path", "-literalpath", "-lp");
+                if (pathArg != null) p.Insert(0, pathArg);
+            }
+            string sub = p.Count > 0 ? p[0].ToLowerInvariant() : "";
+            string low = head.ToLowerInvariant().Trim('"', '\'');
+            if (w.Count == 1 && Regex.IsMatch(w[0], @"^(--version|-v|-V|version|/version|-version)$") && !Regex.IsMatch(name, @"^(echo|write-host|write-output|cd|dir|ls)$"))
+            { weight = 1; return "Check the " + Tool(name) + " version"; }
+            if (low.EndsWith(".ps1")) { weight = 2; return "Run the PowerShell script " + Short(head); }
+            if (low.EndsWith(".bat") || low.EndsWith(".cmd")) { weight = 2; return "Run the batch file " + Short(head); }
+            if (low.EndsWith(".sh")) { weight = 2; return "Run the script " + Short(head); }
+            if (low.EndsWith(".py")) { weight = 2; return "Run the Python script " + Short(head); }
+            switch (name)
+            {
+                case "cd": case "chdir": case "set-location": case "sl": case "pushd": case "popd":
+                    weight = -2; return p.Count > 0 ? Short(p[0]) : "";
+                case "dir": case "ls": case "gci": case "get-childitem": case "tree":
+                    weight = 1;
+                    {
+                        string where = Target(p, "this folder");
+                        if (name == "tree") return "Show the folders in " + where;
+                        return Has(w, "-recurse", "-r", "/s", "-recursive") ? "List all files in " + where + " and its subfolders" : "List the files in " + where;
+                    }
+                case "type": case "cat": case "gc": case "get-content": case "more":
+                    weight = 1;
+                    if (After(w, "-tail") != null) return "Show the end of " + Target(p, "a file");
+                    if (After(w, "-totalcount", "-head", "-first") != null) return "Show the start of " + Target(p, "a file");
+                    return "Show " + Target(p, "a file");
+                case "select-string": case "sls": case "findstr": case "grep": case "rg":
+                    {
+                        weight = 1;
+                        if (!first && After(w, "-path") == null && p.Count <= 1)
+                        {
+                            string only = After(w, "-pattern") ?? (p.Count > 0 ? p[0] : null);
+                            weight = 0;
+                            return only != null ? "\u0001" + (only.Length > 40 ? only.Substring(0, 40) + "\u2026" : only) : null;
+                        }
+                        string pat = After(w, "-pattern") ?? (p.Count > 0 ? p[0] : null);
+                        int from = After(w, "-pattern") != null ? 0 : 1;
+                        string where = After(w, "-path") ?? (p.Count > from ? Names(p, from) : null);
+                        return "Search " + (string.IsNullOrEmpty(where) ? "the text" : where) + (pat != null ? " for “" + (pat.Length > 40 ? pat.Substring(0, 40) + "…" : pat) + "”" : "");
+                    }
+                case "test-path": weight = 1; return "Check whether " + Target(p, "a path") + " exists";
+                case "get-item": case "gi": case "get-itemproperty": case "gp": weight = 1; return "Show details of " + Target(p, "an item");
+                case "get-command": case "gcm": case "which": weight = 1; return "Find where " + Target(p, "a program") + " is installed";
+                case "where":
+                    if (!first) { weight = 0; return null; }
+                    weight = 1; return "Find where " + Target(p, "a program") + " is installed";
+                case "get-process": case "ps": case "tasklist": case "gps": weight = 1; return "List running programs";
+                case "get-service": case "gsv": weight = 1; return "List Windows services";
+                case "get-date": weight = 1; return "Show the date and time";
+                case "get-location": case "pwd": case "gl": weight = 1; return "Show the current folder";
+                case "hostname": weight = 1; return "Show this PC's name";
+                case "whoami": weight = 1; return "Show the signed-in user";
+                case "systeminfo": case "get-computerinfo": weight = 1; return "Show system information";
+                case "ipconfig": case "get-netipaddress": case "get-netipconfiguration": weight = 1; return "Show network settings";
+                case "netstat": case "get-nettcpconnection": weight = 1; return "List network connections";
+                case "ping": case "test-connection": case "test-netconnection": case "tnc": weight = 3; return "Check the connection to " + Target(p, "a server");
+                case "nslookup": case "resolve-dnsname": weight = 3; return "Look up the address of " + Target(p, "a server");
+                case "get-filehash": weight = 1; return "Compute the checksum of " + Target(p, "a file");
+                case "compare-object": case "fc": case "comp": case "diff": weight = 1; return p.Count >= 2 ? "Compare " + Short(p[0]) + " and " + Short(p[1]) : "Compare files";
+                case "echo": case "write-output": case "write-host": case "write": weight = 0; return "Print text";
+                case "start-sleep": case "sleep": case "timeout":
+                    {
+                        weight = 0;
+                        string n = After(w, "-seconds", "-s", "/t") ?? (p.Count > 0 ? p[0] : null);
+                        double sec;
+                        if (n != null && double.TryParse(n, NumberStyles.Float, CultureInfo.InvariantCulture, out sec) && sec > 0)
+                        {
+                            if (After(w, "-milliseconds", "-m") != null) return "Wait a moment";
+                            return "Wait " + (sec == 1 ? "1 second" : sec.ToString("0.#", CultureInfo.InvariantCulture) + " seconds");
+                        }
+                        return "Wait a moment";
+                    }
+                case "select-object": case "select": case "sort-object": case "sort": case "where-object": case "?": case "foreach-object": case "%": case "format-table": case "ft":
+                case "format-list": case "fl": case "measure-object": case "measure": case "group-object": case "out-string": case "out-host": case "out-null": case "tee-object":
+                case "convertto-json": case "convertfrom-json": case "convertto-csv": case "convertfrom-csv": case "if": case "else": case "elseif": case "foreach": case "for": case "while": case "try": case "catch": case "finally": case "param": case "return": case "exit":
+                    weight = 0; return null;
+                case "set-content": case "out-file": weight = 4; return "Write " + Target(p.Count > 0 && name == "out-file" ? p : p, "a file") ;
+                case "add-content": case "ac": weight = 4; return "Add text to " + Target(p, "a file");
+                case "clear-content": case "clc": weight = 5; return "Empty " + Target(p, "a file");
+                case "new-item": case "ni":
+                    {
+                        weight = 4;
+                        string type = (After(w, "-itemtype", "-type") ?? "").ToLowerInvariant();
+                        string path = After(w, "-path") ?? (p.Count > 0 ? p[0] : null);
+                        string nm = After(w, "-name");
+                        string what = path != null ? Short(path) + (nm != null ? "\\" + nm : "") : nm != null ? nm : "an item";
+                        return (type.StartsWith("dir") ? "Create the folder " : "Create ") + what;
+                    }
+                case "mkdir": case "md": weight = 4; return "Create the folder " + Names(p, 0).TrimEnd();
+                case "copy-item": case "copy": case "cp": case "cpi": case "xcopy": case "robocopy":
+                    {
+                        weight = 4;
+                        string to = After(w, "-destination");
+                        if (to != null) return "Copy " + Target(p, "files") + " to " + Short(to);
+                        return p.Count >= 2 ? "Copy " + Short(p[0]) + " to " + Short(p[1]) : "Copy " + Target(p, "files");
+                    }
+                case "move-item": case "move": case "mv": case "mi":
+                    {
+                        weight = 4;
+                        string to = After(w, "-destination");
+                        if (to != null) return "Move " + Target(p, "files") + " to " + Short(to);
+                        return p.Count >= 2 ? "Move " + Short(p[0]) + " to " + Short(p[1]) : "Move " + Target(p, "files");
+                    }
+                case "rename-item": case "ren": case "rni": case "rename":
+                    {
+                        weight = 4;
+                        string to = After(w, "-newname");
+                        if (to != null) return "Rename " + Target(p, "an item") + " to " + Short(to);
+                        return p.Count >= 2 ? "Rename " + Short(p[0]) + " to " + Short(p[1]) : "Rename " + Target(p, "an item");
+                    }
+                case "remove-item": case "rm": case "ri": case "del": case "erase": case "rd": case "rmdir":
+                    {
+                        weight = 5;
+                        bool all = Has(w, "-recurse", "-r", "/s", "-rf", "-fr");
+                        string what = p.Count > 0 && !p[0].StartsWith("$") ? Names(p, 0) : "files";
+                        return "Delete " + what + (all && what != "files" ? " and everything in it" : "");
+                    }
+                case "expand-archive": weight = 4; { string to = After(w, "-destinationpath"); return "Unpack " + Target(p, "an archive") + (to != null ? " into " + Short(to) : ""); }
+                case "compress-archive": weight = 4; { string to = After(w, "-destinationpath") ?? (p.Count > 1 ? p[1] : null); return "Pack " + Target(p, "files") + (to != null ? " into " + Short(to) : " into a zip file"); }
+                case "tar":
+                    weight = 4;
+                    if (w.Count > 0 && Regex.IsMatch(w[0], @"^-?[a-z]*x", RegexOptions.IgnoreCase)) return "Unpack " + Target(p, "an archive");
+                    if (w.Count > 0 && Regex.IsMatch(w[0], @"^-?[a-z]*c", RegexOptions.IgnoreCase)) return "Pack files into " + Target(p, "an archive");
+                    weight = 1; return "List what is in " + Target(p, "an archive");
+                case "invoke-webrequest": case "iwr": case "curl": case "wget": case "invoke-restmethod": case "irm":
+                    {
+                        weight = 3;
+                        string url = After(w, "-uri") ?? p.Find(delegate (string x) { return Regex.IsMatch(x, @"^https?://", RegexOptions.IgnoreCase); }) ?? (p.Count > 0 ? p[0] : null);
+                        string to = After(w, "-outfile", "-o", "--output");
+                        if (url == null) return "Send a web request";
+                        if (to != null) return "Download " + Short(url) + " to " + Short(to);
+                        string m = (After(w, "-method", "-x", "--request") ?? "").ToUpperInvariant();
+                        return (m == "POST" || m == "PUT" || m == "PATCH" || m == "DELETE" ? "Send a " + m + " request to " : "Fetch ") + Short(url);
+                    }
+                case "start-process": case "start": case "saps":
+                    {
+                        weight = 2;
+                        string what = After(w, "-filepath") ?? (p.Count > 0 ? p[0] : null);
+                        if (what == null) return "Open a program";
+                        if (Regex.IsMatch(what, @"^https?://", RegexOptions.IgnoreCase)) return "Open " + Short(what) + " in your web browser";
+                        return "Open " + Short(what);
+                    }
+                case "stop-process": case "kill": case "spps": case "taskkill":
+                    {
+                        weight = 4;
+                        string who = After(w, "-name", "-processname", "/im") ?? After(w, "-id", "/pid") ?? (p.Count > 0 ? p[0] : null);
+                        return "Stop " + (who != null ? "the program " + Short(who) : "a program");
+                    }
+                case "explorer": weight = 2; return "Open " + Target(p, "a folder") + " in File Explorer";
+                case "notepad": weight = 2; return "Open " + Target(p, "Notepad") + (p.Count > 0 ? " in Notepad" : "");
+                case "code": weight = 2; return "Open " + Target(p, "VS Code") + (p.Count > 0 ? " in VS Code" : "");
+                case "ssh": weight = 3; return "Connect to " + Target(p, "a server") + " with SSH";
+                case "scp": case "sftp": weight = 3; return "Copy files over SSH";
+                case "reg":
+                    if (sub == "query") { weight = 1; return "Read " + (p.Count > 1 ? Short(p[1]) : "a key") + " in the registry"; }
+                    weight = 5; return "Change the Windows registry";
+                case "winget": case "choco": case "scoop":
+                    if (sub == "install") { weight = 4; return "Install " + (p.Count > 1 ? Names(p, 1) : "a program") + " with " + name; }
+                    if (sub == "uninstall" || sub == "remove") { weight = 5; return "Uninstall " + (p.Count > 1 ? Names(p, 1) : "a program") + " with " + name; }
+                    if (sub == "upgrade" || sub == "update") { weight = 4; return "Update " + (p.Count > 1 ? Names(p, 1) : "programs") + " with " + name; }
+                    weight = 1; return "Look up programs with " + name;
+                case "sudo": case "doas":
+                    {
+                        if (w.Count == 0 || depth >= 3) { weight = 4; return "Run a command as administrator"; }
+                        int iw;
+                        string d = Inner(string.Join(" ", w.ToArray()), depth + 1, out iw);
+                        weight = Math.Max(4, iw);
+                        return d != null ? d + " (as administrator)" : "Run a command as administrator";
+                    }
+                case "apt": case "apt-get": case "dnf": case "yum": case "pacman": case "brew": case "apk": case "zypper": case "snap":
+                    if (sub == "install" || sub == "add" || (name == "pacman" && Has(w, "-S"))) { weight = 4; return "Install " + (p.Count > (name == "pacman" ? 0 : 1) ? Names(p, name == "pacman" ? 0 : 1) : "packages") + " with " + name; }
+                    if (sub == "remove" || sub == "purge" || sub == "uninstall" || sub == "del" || (name == "pacman" && Has(w, "-R"))) { weight = 5; return "Uninstall " + (p.Count > 1 ? Names(p, 1) : "packages") + " with " + name; }
+                    if (sub == "update" || sub == "upgrade" || (name == "pacman" && Has(w, "-Syu"))) { weight = 4; return "Update the packages with " + name; }
+                    weight = 1; return "Look up packages with " + name;
+                case "systemctl": case "service":
+                    {
+                        string act = name == "service" ? (p.Count > 1 ? p[1].ToLowerInvariant() : "") : sub;
+                        string unit = name == "service" ? (p.Count > 0 ? p[0] : "a service") : (p.Count > 1 ? p[1] : "a service");
+                        if (act == "status" || act == "is-active" || act == "list-units") { weight = 1; return "Show the status of " + unit; }
+                        weight = 4;
+                        return act == "start" ? "Start the service " + unit : act == "stop" ? "Stop the service " + unit : act == "restart" || act == "reload" ? "Restart the service " + unit : act == "enable" ? "Make " + unit + " start at boot" : act == "disable" ? "Stop " + unit + " from starting at boot" : "Change the service " + unit;
+                    }
+                case "journalctl": weight = 1; return "Show the system log";
+                case "chmod": case "chown": case "chgrp": weight = 4; return "Change the permissions of " + (p.Count > 1 ? Names(p, 1) : "files");
+                case "touch": weight = 4; return "Create " + Target(p, "a file");
+                case "head": case "tail":
+                    {
+                        weight = 1;
+                        string file = w.FindLast(delegate (string x) { return x.Length > 0 && x[0] != '-' && !Regex.IsMatch(x, @"^\+?\d+$"); });
+                        string what = file != null ? Short(file) : "a file";
+                        return name == "head" ? "Show the start of " + what : (Has(w, "-f", "-F") ? "Follow the end of " : "Show the end of ") + what;
+                    }
+                case "less": weight = 1; return "Show " + Target(p, "a file");
+                case "find": weight = 1; return "Find files in " + Target(p, "this folder");
+                case "du": case "df": weight = 1; return "Show how much disk space is used";
+                case "top": case "htop": weight = 1; return "Show what is using the processor";
+                case "pkill": case "killall": weight = 4; return "Stop the program " + Target(p, "a program");
+                case "nano": case "vim": case "vi": case "nvim": case "emacs": weight = 2; return "Open " + Target(p, "a file") + " in " + name;
+                case "export": weight = 1; return p.Count > 0 ? "Set " + p[0].Split('=')[0] + " for the next steps" : "Show the environment";
+                case "source": weight = 2; return "Load " + Target(p, "a script") + " into this shell";
+                case "bash": case "sh": case "zsh": weight = 2; return Has(w, "-c") ? "Run a shell command" : p.Count > 0 ? "Run the script " + Short(p[0]) : "Start a shell";
+                case "git": return Git(p, w, out weight);
+                case "npm": case "pnpm": case "yarn": case "bun": return Npm(name, p, out weight);
+                case "npx": case "pnpx": case "bunx": weight = 2; return p.Count > 0 ? "Run " + Short(p[0]) + " with " + name : "Run a package with " + name;
+                case "pip": case "pip3": return Pip(p, w, out weight);
+                case "uv":
+                    weight = 4;
+                    if (sub == "pip" && p.Count > 1 && p[1] == "install") return "Install the Python packages " + Names(p, 2);
+                    if (sub == "add") return "Add " + Names(p, 1) + " to the Python project";
+                    if (sub == "sync") return "Install the Python project's packages";
+                    if (sub == "venv") return "Create a Python virtual environment";
+                    weight = 2; return sub == "run" && p.Count > 1 ? "Run " + Short(p[1]) + " with uv" : "Run uv " + sub;
+                case "python": case "python3": case "py": case "pythonw":
+                    {
+                        string mod = After(w, "-m");
+                        if (mod != null)
+                        {
+                            int at = w.FindIndex(delegate (string x) { return x == "-m"; });
+                            List<string> rest = Plain(w.GetRange(Math.Min(w.Count, at + 2), Math.Max(0, w.Count - at - 2)));
+                            if (mod == "pip") return Pip(rest, w, out weight);
+                            weight = 2;
+                            if (mod == "venv") { weight = 4; return "Create a Python virtual environment" + (rest.Count > 0 ? " in " + Short(rest[0]) : ""); }
+                            if (mod == "pytest" || mod == "unittest") return "Run the Python tests";
+                            if (mod == "http.server") return "Start a local web server";
+                            return "Run the Python module " + mod;
+                        }
+                        weight = 2;
+                        if (Has(w, "-c")) return "Run a line of Python";
+                        return p.Count > 0 ? "Run the Python script " + Short(p[0]) : "Start Python";
+                    }
+                case "node": weight = 2; if (Has(w, "-e", "--eval", "-p", "--print")) return "Run a line of JavaScript"; return p.Count > 0 ? "Run " + Short(p[0]) + " with Node.js" : "Start Node.js";
+                case "dotnet": return DotNet(p, out weight);
+                case "cargo": weight = sub == "add" || sub == "install" ? 4 : 2; return sub == "build" ? "Build the Rust project" : sub == "run" ? "Run the Rust project" : sub == "test" ? "Run the Rust tests" : sub == "add" ? "Add " + Names(p, 1) + " to the Rust project" : "Run cargo " + sub;
+                case "go": weight = sub == "get" || sub == "install" ? 4 : 2; return sub == "build" ? "Build the Go program" : sub == "run" ? "Run " + (p.Count > 1 ? Short(p[1]) : "the Go program") : sub == "test" ? "Run the Go tests" : sub == "mod" ? "Update the Go module files" : "Run go " + sub;
+                case "make": case "mingw32-make": case "nmake": weight = 2; return p.Count > 0 ? "Run the make target " + p[0] : "Build with make";
+                case "cmake": weight = 2; return Has(w, "--build") ? "Build with CMake" : "Set up the build with CMake";
+                case "msbuild": weight = 2; return "Build " + Target(p, "the project") + " with MSBuild";
+                case "csc": weight = 2; return "Compile " + Target(p, "C# files") + " with the C# compiler";
+                case "gcc": case "g++": case "clang": case "clang++": case "cl": weight = 2; return "Compile " + Target(p, "the code");
+                case "javac": weight = 2; return "Compile " + Target(p, "Java files");
+                case "java": weight = 2; { string jar = After(w, "-jar"); return jar != null ? "Run " + Short(jar) : p.Count > 0 ? "Run the Java program " + Short(p[0]) : "Start Java"; }
+                case "pytest": weight = 2; return "Run the Python tests";
+                case "tsc": weight = 2; return "Compile the TypeScript code";
+                case "eslint": weight = 1; return "Check the code with ESLint";
+                case "prettier": weight = 4; return Has(w, "--write", "-w") ? "Format the code with Prettier" : "Check the formatting with Prettier";
+                case "black": case "ruff": case "mypy": weight = name == "black" ? 4 : 1; return name == "black" ? "Format the Python code with Black" : "Check the Python code with " + (name == "ruff" ? "Ruff" : "mypy");
+                case "docker": weight = sub == "run" || sub == "build" || sub == "compose" ? 3 : 1; return "Run docker " + sub;
+                case "cmd":
+                    {
+                        string inner = After(w, "/c", "/k");
+                        if (inner != null && depth < 3)
+                        {
+                            int at = w.FindIndex(delegate (string x) { return x.Equals("/c", StringComparison.OrdinalIgnoreCase) || x.Equals("/k", StringComparison.OrdinalIgnoreCase); });
+                            string rest = string.Join(" ", w.GetRange(at + 1, w.Count - at - 1).ToArray());
+                            int iw;
+                            string d = Inner(rest, depth + 1, out iw);
+                            if (d != null) { weight = iw; return d; }
+                        }
+                        weight = 2; return "Start cmd.exe";
+                    }
+                case "powershell": case "pwsh":
+                    {
+                        string file = After(w, "-file", "-f");
+                        if (file != null) { weight = 2; return "Run the PowerShell script " + Short(file); }
+                        string inner = After(w, "-command", "-c");
+                        if (inner != null && depth < 3)
+                        {
+                            int at = w.FindIndex(delegate (string x) { return x.Equals("-command", StringComparison.OrdinalIgnoreCase) || x.Equals("-c", StringComparison.OrdinalIgnoreCase); });
+                            string rest = string.Join(" ", w.GetRange(at + 1, w.Count - at - 1).ToArray());
+                            int iw;
+                            string d = Inner(rest, depth + 1, out iw);
+                            if (d != null) { weight = iw; return d; }
+                        }
+                        weight = 2; return "Start " + Tool(name);
+                    }
+            }
+            if (!first) return null;
+            if (low.EndsWith(".exe") || low.IndexOf('\\') >= 0 || low.IndexOf('/') >= 0) { weight = 2; return "Run " + Short(head); }
+            if (!Regex.IsMatch(name, @"^[\w.+-]{1,40}$")) return null;
+            weight = 2;
+            return "Run " + Tool(name) + (sub.Length > 0 && Regex.IsMatch(sub, @"^[a-z][\w-]{0,20}$") ? " " + sub : "");
+        }
+
+        static string Git(List<string> p, List<string> w, out int weight)
+        {
+            string sub = p.Count > 0 ? p[0].ToLowerInvariant() : "";
+            weight = 1;
+            switch (sub)
+            {
+                case "status": return "Show the Git status";
+                case "log": return "Show the Git history";
+                case "diff": return "Show the changes Git sees";
+                case "show": return "Show a Git commit";
+                case "branch": if (p.Count > 1 || Has(w, "-d", "-D", "--delete", "-m")) { weight = 4; return "Change Git branches"; } return "List the Git branches";
+                case "remote": if (p.Count > 1 && p[1] != "-v") { weight = 4; return "Change the Git remotes"; } return "List the Git remotes";
+                case "add": weight = 2; return "Stage " + (p.Count > 1 ? (p[1] == "." || p[1] == "-A" ? "all changes" : Names(p, 1)) : "changes") + " for the next commit";
+                case "commit":
+                    {
+                        weight = 4;
+                        string m = After(w, "-m", "--message");
+                        return m != null ? "Commit the changes as “" + (m.Length > 60 ? m.Substring(0, 60) + "…" : m) + "”" : "Commit the changes";
+                    }
+                case "push": weight = 4; return "Push the commits to " + (p.Count > 1 ? p[1] : "the remote");
+                case "pull": weight = 4; return "Pull changes from " + (p.Count > 1 ? p[1] : "the remote");
+                case "fetch": weight = 3; return "Fetch changes from " + (p.Count > 1 ? p[1] : "the remote");
+                case "clone": weight = 3; return "Download the repository " + (p.Count > 1 ? Short(p[1]) : "");
+                case "checkout": case "switch":
+                    {
+                        weight = 2;
+                        string nb = After(w, "-b", "-c", "-B");
+                        if (nb != null) { weight = 4; return "Create the branch " + nb + " and switch to it"; }
+                        return p.Count > 1 ? "Switch to " + p[p.Count - 1] : "Switch branches";
+                    }
+                case "merge": weight = 4; return "Merge " + (p.Count > 1 ? p[1] : "a branch") + " into the current branch";
+                case "rebase": weight = 4; return "Rebase the current branch";
+                case "reset": weight = 4; return Has(w, "--hard") ? "Throw away uncommitted changes" : "Unstage changes";
+                case "restore": weight = 4; return "Restore " + (p.Count > 1 ? Names(p, 1) : "files") + " from Git";
+                case "clean": weight = 5; return "Delete files Git doesn't track";
+                case "stash": weight = 4; return p.Count > 1 && (p[1] == "pop" || p[1] == "apply") ? "Bring back stashed changes" : "Set changes aside with git stash";
+                case "init": weight = 4; return "Create a Git repository";
+                case "tag": weight = p.Count > 1 ? 4 : 1; return p.Count > 1 ? "Tag the commit " + p[1] : "List the Git tags";
+                case "config": weight = p.Count > 2 ? 4 : 1; return p.Count > 2 ? "Change a Git setting" : "Show the Git settings";
+            }
+            weight = 2;
+            return sub.Length > 0 ? "Run git " + sub : "Run git";
+        }
+
+        static string Npm(string tool, List<string> p, out int weight)
+        {
+            string sub = p.Count > 0 ? p[0].ToLowerInvariant() : "";
+            weight = 2;
+            switch (sub)
+            {
+                case "": case "install": case "i": case "ci": case "add":
+                    weight = 4;
+                    if (p.Count > 1) return "Install " + Names(p, 1) + " with " + tool;
+                    if (sub == "add") return "Add packages with " + tool;
+                    return "Install the project's packages";
+                case "uninstall": case "remove": case "rm": case "un": weight = 4; return "Remove " + (p.Count > 1 ? Names(p, 1) : "packages") + " with " + tool;
+                case "update": case "upgrade": case "up": weight = 4; return "Update packages with " + tool;
+                case "run": case "run-script": return p.Count > 1 ? "Run the " + tool + " script " + p[1] : "List the " + tool + " scripts";
+                case "start": return "Start the app with " + tool;
+                case "test": case "t": return "Run the tests with " + tool;
+                case "build": return "Build the project with " + tool;
+                case "init": case "create": weight = 4; return "Create a new project with " + tool;
+                case "audit": weight = 1; return "Check the packages for known security problems";
+                case "outdated": case "list": case "ls": weight = 1; return "List the packages";
+                case "publish": weight = 4; return "Publish the package";
+                case "exec": case "dlx": return p.Count > 1 ? "Run " + Short(p[1]) + " with " + tool : "Run a package with " + tool;
+            }
+            if (tool == "yarn" || tool == "pnpm" || tool == "bun") return "Run the " + tool + " script " + sub;
+            return "Run " + tool + " " + sub;
+        }
+
+        static string Pip(List<string> p, List<string> w, out int weight)
+        {
+            string sub = p.Count > 0 ? p[0].ToLowerInvariant() : "";
+            weight = 4;
+            string req = After(w, "-r", "--requirement");
+            if (sub == "install") return req != null ? "Install the Python packages listed in " + Short(req) : p.Count > 1 ? "Install the Python packages " + Names(p, 1) : "Install Python packages";
+            if (sub == "uninstall") return "Remove the Python packages " + (p.Count > 1 ? Names(p, 1) : "");
+            weight = 1;
+            if (sub == "list" || sub == "freeze") return "List the installed Python packages";
+            if (sub == "show") return "Show details of " + (p.Count > 1 ? p[1] : "a package");
+            weight = 2;
+            return "Run pip " + sub;
+        }
+
+        static string DotNet(List<string> p, out int weight)
+        {
+            string sub = p.Count > 0 ? p[0].ToLowerInvariant() : "";
+            weight = 2;
+            switch (sub)
+            {
+                case "build": return "Build the .NET project";
+                case "run": return "Run the .NET project";
+                case "test": return "Run the .NET tests";
+                case "new": weight = 4; return "Create a new .NET " + (p.Count > 1 ? p[1] + " " : "") + "project";
+                case "add": weight = 4; return p.Count > 2 && p[1] == "package" ? "Add the NuGet package " + p[2] : "Add a reference to the .NET project";
+                case "restore": weight = 4; return "Restore the .NET packages";
+                case "publish": weight = 4; return "Publish the .NET project";
+                case "clean": weight = 4; return "Clean the .NET build output";
+                case "tool": weight = 4; return "Manage .NET tools";
+            }
+            return p.Count > 0 && p[0].EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? "Run " + Short(p[0]) : "Run dotnet " + sub;
+        }
+
+        static string Inner(string c, int depth, out int weight)
+        {
+            string t = c.Trim();
+            if (t.Length >= 2 && (t[0] == '"' || t[0] == '\'') && t[t.Length - 1] == t[0]) t = t.Substring(1, t.Length - 2);
+            weight = -1;
+            List<string> steps = Steps(t, depth, out weight);
+            return steps.Count == 0 ? null : Join(steps);
+        }
+
+        static List<string> Steps(string c, int depth, out int top)
+        {
+            List<string> steps = new List<string>();
+            List<Seg> segs = Split(c);
+            string folder = null, best = null;
+            int bestW = -1, firstAt = 0, most = -1;
+            bool started = false;
+            Action flush = delegate
+            {
+                if (best != null) { steps.Add(best); if (bestW > most) most = bestW; }
+                best = null;
+                bestW = -1;
+            };
+            string pattern = null, saved = null;
+            Action finish = delegate
+            {
+                if (best != null && pattern != null && best.StartsWith("List ", StringComparison.Ordinal)) best += " and search them for \u201C" + pattern + "\u201D";
+                if (best != null && saved != null && bestW < 4) { best += " and save the output to " + Short(saved); bestW = 4; }
+                pattern = null;
+                saved = null;
+                flush();
+            };
+            foreach (Seg sg in segs)
+            {
+                if (sg.StepStart) { if (started) finish(); started = true; firstAt = 0; }
+                if (sg.Text.Trim().Length == 0) continue;
+                int wgt;
+                string d = One(sg.Text, firstAt == 0, depth, out wgt);
+                firstAt++;
+                string to = Redirect(sg.Text);
+                if (to != null) saved = to;
+                if (wgt == -2)
+                {
+                    if (steps.Count == 0 && best == null) folder = d;
+                    continue;
+                }
+                if (d == null) continue;
+                if (d.Length > 0 && d[0] == '\u0001') { pattern = d.Substring(1); continue; }
+                if (wgt > bestW) { best = d; bestW = wgt; }
+            }
+            finish();
+            top = most;
+            if (steps.Count > 1) steps.RemoveAll(delegate (string x) { return x == "Print text" || x == "Wait a moment" || x == "Set a variable"; });
+            if (folder != null && folder.Length > 0 && steps.Count > 0) steps[0] = "In " + folder + ": " + Lower(steps[0]);
+            return steps;
+        }
+
+        static string Lower(string s)
+        {
+            if (string.IsNullOrEmpty(s) || s.Length < 2 || !char.IsUpper(s[0]) || char.IsUpper(s[1])) return s;
+            return char.ToLowerInvariant(s[0]) + s.Substring(1);
+        }
+
+        static string Join(List<string> steps)
+        {
+            StringBuilder sb = new StringBuilder(steps[0]);
+            int shown = 1;
+            for (int i = 1; i < steps.Count && shown < 3; i++)
+            {
+                string next = ", then " + Lower(steps[i]);
+                if (sb.Length + next.Length > 150) break;
+                sb.Append(next);
+                shown++;
+            }
+            int more = steps.Count - shown;
+            if (more > 0) sb.Append(more == 1 ? " and 1 more step" : " and " + more + " more steps");
+            return sb.ToString();
+        }
+
+        public static string Describe(string command)
+        {
+            string c = (command ?? "").Trim();
+            if (c.Length == 0) return "";
+            int top;
+            List<string> steps;
+            try { steps = Steps(c, 0, out top); }
+            catch { steps = new List<string>(); }
+            if (steps.Count == 0) return "Run the command shown below";
+            return Join(steps);
+        }
+    }
+
+    static class Sandbox
+    {
+        const uint TOKEN_DUPLICATE = 0x0002, TOKEN_QUERY = 0x0008, TOKEN_ASSIGN_PRIMARY = 0x0001, TOKEN_ADJUST_DEFAULT = 0x0080, MAXIMUM_ALLOWED = 0x02000000;
+        const int TokenIntegrityLevel = 25, SecurityImpersonation = 2, TokenPrimary = 1, FileObject = 1, LabelInfo = 0x10;
+        const uint SE_GROUP_INTEGRITY = 0x20, HANDLE_FLAG_INHERIT = 1, INFINITE = 0xFFFFFFFF;
+        const uint CREATE_SUSPENDED = 0x4, CREATE_UNICODE_ENVIRONMENT = 0x400, CREATE_NO_WINDOW = 0x08000000, EXTENDED_STARTUPINFO_PRESENT = 0x80000;
+        const int STARTF_USESTDHANDLES = 0x100;
+        static readonly IntPtr HandleList = (IntPtr)0x20002;
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct SecurityAttributes { public int Length; public IntPtr Descriptor; public bool Inherit; }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct StartupInfo
+        {
+            public int cb;
+            public string lpReserved, lpDesktop, lpTitle;
+            public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
+            public short wShowWindow, cbReserved2;
+            public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct StartupInfoEx { public StartupInfo StartupInfo; public IntPtr AttributeList; }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct ProcessInformation { public IntPtr hProcess, hThread; public int dwProcessId, dwThreadId; }
+
+        [DllImport("advapi32.dll", SetLastError = true)] static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+        [DllImport("advapi32.dll", SetLastError = true)] static extern bool DuplicateTokenEx(IntPtr existing, uint access, IntPtr attributes, int level, int type, out IntPtr token);
+        [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)] static extern bool ConvertStringSidToSid(string sid, out IntPtr psid);
+        [DllImport("advapi32.dll", SetLastError = true)] static extern bool SetTokenInformation(IntPtr token, int cls, IntPtr info, int length);
+        [DllImport("advapi32.dll")] static extern int GetLengthSid(IntPtr sid);
+        [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        static extern bool CreateProcessAsUser(IntPtr token, string application, StringBuilder commandLine, IntPtr processAttributes, IntPtr threadAttributes, bool inherit, uint flags, IntPtr environment, string directory, ref StartupInfoEx startup, out ProcessInformation info);
+        [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptor(string sddl, int revision, out IntPtr descriptor, out int size);
+        [DllImport("advapi32.dll", SetLastError = true)] static extern bool GetSecurityDescriptorSacl(IntPtr descriptor, out bool present, out IntPtr sacl, out bool defaulted);
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode)] static extern int SetNamedSecurityInfo(string name, int type, int info, IntPtr owner, IntPtr group, IntPtr dacl, IntPtr sacl);
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode)] static extern int GetNamedSecurityInfo(string name, int type, int info, IntPtr owner, IntPtr group, IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);
+        [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)] static extern bool SetFileSecurity(string name, int info, IntPtr descriptor);
+        [DllImport("advapi32.dll")] static extern bool GetAce(IntPtr acl, int index, out IntPtr ace);
+        [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+        [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr memory);
+        [DllImport("kernel32.dll", SetLastError = true)] static extern bool CloseHandle(IntPtr handle);
+        [DllImport("kernel32.dll", SetLastError = true)] static extern bool CreatePipe(out IntPtr read, out IntPtr write, ref SecurityAttributes attributes, int size);
+        [DllImport("kernel32.dll", SetLastError = true)] static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
+        [DllImport("kernel32.dll", SetLastError = true)] static extern bool InitializeProcThreadAttributeList(IntPtr list, int count, int flags, ref IntPtr size);
+        [DllImport("kernel32.dll", SetLastError = true)] static extern bool UpdateProcThreadAttribute(IntPtr list, uint flags, IntPtr attribute, IntPtr value, IntPtr size, IntPtr previous, IntPtr returned);
+        [DllImport("kernel32.dll")] static extern void DeleteProcThreadAttributeList(IntPtr list);
+        [DllImport("kernel32.dll", SetLastError = true)] static extern uint ResumeThread(IntPtr thread);
+        [DllImport("kernel32.dll", SetLastError = true)] static extern bool TerminateProcess(IntPtr process, uint code);
+        [DllImport("kernel32.dll", SetLastError = true)] static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+        [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetExitCodeProcess(IntPtr process, out int code);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool GetVolumeInformation(string root, StringBuilder name, int nameSize, IntPtr serial, IntPtr maxLength, out uint flags, StringBuilder fs, int fsSize);
+        [DllImport("shell32.dll")] static extern int SHGetKnownFolderPath(ref Guid id, int flags, IntPtr token, out IntPtr path);
+        [DllImport("ole32.dll")] static extern void CoTaskMemFree(IntPtr memory);
+
+        static readonly object gate = new object();
+        static readonly Dictionary<string, string> ready = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        static readonly HashSet<string> busy = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        static bool dataGuarded;
+        static readonly IntPtr InvalidHandle = new IntPtr(-1);
+        const uint WRITE_OWNER = 0x80000, READ_CONTROL = 0x20000, FILE_READ_ATTRIBUTES = 0x80;
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct ByHandleInfo
+        {
+            public uint Attributes, CreatedLow, CreatedHigh, AccessedLow, AccessedHigh, WrittenLow, WrittenHigh, Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] static extern IntPtr CreateFile(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+        [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetFileInformationByHandle(IntPtr file, out ByHandleInfo info);
+        [DllImport("advapi32.dll", SetLastError = true)] static extern bool SetKernelObjectSecurity(IntPtr handle, int info, IntPtr descriptor);
+
+        public static bool Supported { get { return Path.DirectorySeparatorChar == '\\' && Environment.OSVersion.Platform == PlatformID.Win32NT && Environment.OSVersion.Version.Major >= 6; } }
+
+        public static readonly Regex Blocked = new Regex(@"access (is |was )?denied|access to the path .{1,300}? is denied|unauthorizedaccessexception|permissionerror|\[winerror 5\]|\beacces\b|\beperm\b|permission denied|operation not permitted|requested operation requires elevation|could not read (username|password)|terminal prompts disabled", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        static string Known(string guid)
+        {
+            try
+            {
+                Guid id = new Guid(guid);
+                IntPtr p;
+                if (SHGetKnownFolderPath(ref id, 0, IntPtr.Zero, out p) != 0) return null;
+                try { return Marshal.PtrToStringUni(p); }
+                finally { CoTaskMemFree(p); }
+            }
+            catch { return null; }
+        }
+
+        public static string LowRoot
+        {
+            get
+            {
+                string low = Supported ? Known("A520A1A4-1780-4FF6-BD18-167343C5AF16") : null;
+                if (string.IsNullOrEmpty(low)) low = Path.Combine(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "AppData"), "LocalLow");
+                return Path.Combine(low, Program.AppName);
+            }
+        }
+
+        public static Dictionary<string, string> Env()
+        {
+            string root = LowRoot;
+            string temp = Path.Combine(root, "temp"), cache = Path.Combine(root, "cache");
+            Dictionary<string, string> e = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            e["TEMP"] = temp;
+            e["TMP"] = temp;
+            e["npm_config_cache"] = Path.Combine(cache, "npm");
+            e["YARN_CACHE_FOLDER"] = Path.Combine(cache, "yarn");
+            e["PIP_CACHE_DIR"] = Path.Combine(cache, "pip");
+            e["PYTHONPYCACHEPREFIX"] = Path.Combine(cache, "pycache");
+            e["NUGET_PACKAGES"] = Path.Combine(cache, "nuget");
+            e["NUGET_HTTP_CACHE_PATH"] = Path.Combine(cache, "nuget-http");
+            e["DOTNET_CLI_HOME"] = Path.Combine(root, "dotnet");
+            e["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
+            e["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1";
+            e["DOTNET_NOLOGO"] = "1";
+            e["GOCACHE"] = Path.Combine(cache, "go-build");
+            e["GOMODCACHE"] = Path.Combine(cache, "go-mod");
+            e["XDG_CACHE_HOME"] = cache;
+            e["MPLCONFIGDIR"] = Path.Combine(cache, "matplotlib");
+            e["PSModuleAnalysisCachePath"] = Path.Combine(Path.Combine(cache, "powershell"), "ModuleAnalysisCache");
+            return e;
+        }
+
+        static string Trim(string p)
+        {
+            if (string.IsNullOrEmpty(p)) return null;
+            try { p = Path.GetFullPath(p); } catch { return null; }
+            return p.Length > 3 ? p.TrimEnd('\\', '/') : p;
+        }
+
+        static bool Under(string path, string folder)
+        {
+            if (path == null || folder == null) return false;
+            if (string.Equals(path, folder, StringComparison.OrdinalIgnoreCase)) return true;
+            string f = folder.EndsWith("\\") ? folder : folder + "\\";
+            return path.StartsWith(f, StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static string Broad(string folder)
+        {
+            string f = Trim(folder);
+            if (f == null) return "MinGent can't read its path";
+            string why = BroadAt(f);
+            if (why != null) return why;
+            string real = null;
+            try { real = Trim(AgentPaths.Real(f)); } catch { }
+            if (real != null && !string.Equals(real, f, StringComparison.OrdinalIgnoreCase))
+            {
+                why = BroadAt(real);
+                if (why != null) return why + " (it is reached through a link)";
+            }
+            return null;
+        }
+
+        static string BroadAt(string f)
+        {
+            if (f.StartsWith("\\\\")) return "it is on a network share";
+            if (f.Length <= 3) return "it is a whole drive";
+            try { if (new DriveInfo(Path.GetPathRoot(f)).DriveType == DriveType.Network) return "it is on a network drive"; } catch { }
+            string home = Trim(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+            List<KeyValuePair<string, string>> whole = new List<KeyValuePair<string, string>>();
+            Action<string, string> add = delegate (string path, string name) { string t = Trim(path); if (t != null) whole.Add(new KeyValuePair<string, string>(t, name)); };
+            add(home, "your user folder");
+            if (home != null) add(Path.GetDirectoryName(home), "the folder with every user's files");
+            add(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "your Desktop");
+            add(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "your Documents folder");
+            add(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "your Pictures folder");
+            add(Environment.GetFolderPath(Environment.SpecialFolder.MyMusic), "your Music folder");
+            add(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "your Videos folder");
+            if (Supported) add(Known("374DE290-123F-4565-9164-39C4925E467B"), "your Downloads folder");
+            foreach (string v in new string[] { "OneDrive", "OneDriveConsumer", "OneDriveCommercial" }) add(Environment.GetEnvironmentVariable(v), "your OneDrive folder");
+            foreach (KeyValuePair<string, string> w in whole) if (Under(w.Key, f)) return string.Equals(w.Key, f, StringComparison.OrdinalIgnoreCase) ? "it is " + w.Value : "it holds " + w.Value;
+            string app = Trim(AppDomain.CurrentDomain.BaseDirectory);
+            if (app != null && (Under(f, app) || Under(app, f))) return "it holds MinGent itself";
+            List<string> inside = new List<string>();
+            foreach (Environment.SpecialFolder sf in new Environment.SpecialFolder[] { Environment.SpecialFolder.Windows, Environment.SpecialFolder.ProgramFiles, Environment.SpecialFolder.ProgramFilesX86, Environment.SpecialFolder.CommonApplicationData })
+                inside.Add(Trim(Environment.GetFolderPath(sf)));
+            foreach (string s in inside) if (s != null && (Under(f, s) || Under(s, f))) return "it is a Windows or program folder";
+            foreach (string s in new string[] { Trim(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)), Trim(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)), Trim(Path.GetDirectoryName(LowRoot)) })
+                if (s != null && (Under(f, s) || Under(s, f))) return "it is a folder where programs keep their own data";
+            string data = Trim(Program.DataDir);
+            if (data != null && (Under(f, data) || Under(data, f))) return "it holds MinGent's own data";
+            return null;
+        }
+
+        static bool LowLabel(string path)
+        {
+            IntPtr sacl, sd;
+            if (GetNamedSecurityInfo(path, FileObject, LabelInfo, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, out sacl, out sd) != 0) return false;
+            try
+            {
+                if (sacl == IntPtr.Zero) return false;
+                int count = Marshal.ReadInt16(sacl, 4) & 0xFFFF;
+                for (int i = 0; i < count; i++)
+                {
+                    IntPtr ace;
+                    if (!GetAce(sacl, i, out ace)) continue;
+                    int type = Marshal.ReadByte(ace, 0), flags = Marshal.ReadByte(ace, 1);
+                    if (type != 0x11 || (flags & 8) != 0) continue;
+                    if (Marshal.ReadByte(ace, 8) == 1 && Marshal.ReadByte(ace, 9) >= 1 && Marshal.ReadByte(ace, 15) == 16 && Marshal.ReadInt32(ace, 16) <= 0x1000) return true;
+                }
+                return false;
+            }
+            finally { LocalFree(sd); }
+        }
+
+        public static string GitWatch(string workspace)
+        {
+            if (!Supported) return null;
+            try
+            {
+                string g = Path.Combine(Path.GetFullPath(workspace), ".git");
+                if (!Directory.Exists(g) || Link(g) || LowLabel(g)) return null;
+                return g;
+            }
+            catch { return null; }
+        }
+
+        public static bool GitReplaced(string watched)
+        {
+            if (string.IsNullOrEmpty(watched)) return false;
+            try { return !Directory.Exists(watched) || Link(watched) || LowLabel(watched); }
+            catch { return false; }
+        }
+
+        public static bool Labeled(string path)
+        {
+            IntPtr sacl, sd;
+            if (GetNamedSecurityInfo(path, FileObject, LabelInfo, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, out sacl, out sd) != 0) return false;
+            try
+            {
+                if (sacl == IntPtr.Zero) return false;
+                int count = Marshal.ReadInt16(sacl, 4) & 0xFFFF;
+                for (int i = 0; i < count; i++)
+                {
+                    IntPtr ace;
+                    if (!GetAce(sacl, i, out ace)) continue;
+                    int type = Marshal.ReadByte(ace, 0), flags = Marshal.ReadByte(ace, 1);
+                    if (type != 0x11 || (flags & 3) != 3 || (flags & 8) != 0) continue;
+                    if (Marshal.ReadByte(ace, 8) != 1 || Marshal.ReadByte(ace, 9) < 1 || Marshal.ReadByte(ace, 15) != 16) continue;
+                    if (Marshal.ReadInt32(ace, 16) <= 0x1000) return true;
+                }
+                return false;
+            }
+            finally { LocalFree(sd); }
+        }
+
+        static bool Secured(string path)
+        {
+            try
+            {
+                StringBuilder name = new StringBuilder(261), fs = new StringBuilder(261);
+                uint flags;
+                if (!GetVolumeInformation(Path.GetPathRoot(path), name, name.Capacity, IntPtr.Zero, IntPtr.Zero, out flags, fs, fs.Capacity)) return true;
+                return (flags & 0x8) != 0;
+            }
+            catch { return true; }
+        }
+
+        static bool Link(string path)
+        {
+            try { return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0; }
+            catch { return false; }
+        }
+
+        static string Long(string p)
+        {
+            if (p.Length < 240 || p.StartsWith("\\\\?\\", StringComparison.Ordinal)) return p;
+            return p.StartsWith("\\\\", StringComparison.Ordinal) ? "\\\\?\\UNC\\" + p.Substring(2) : "\\\\?\\" + p;
+        }
+
+        static readonly HashSet<string> KeptOut = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".git", ".hg", ".svn" };
+
+        static bool LabelOne(string path, IntPtr sd, bool dir, out bool skipped)
+        {
+            skipped = false;
+            IntPtr h = CreateFile(Long(path), WRITE_OWNER | READ_CONTROL | FILE_READ_ATTRIBUTES, 7, IntPtr.Zero, 3, 0x02000000 | 0x00200000, IntPtr.Zero);
+            if (h == InvalidHandle) return false;
+            try
+            {
+                ByHandleInfo info;
+                if (!GetFileInformationByHandle(h, out info)) return false;
+                if ((info.Attributes & 0x400) != 0 || (!dir && info.Links > 1)) { skipped = true; return true; }
+                return SetKernelObjectSecurity(h, LabelInfo, sd);
+            }
+            finally { CloseHandle(h); }
+        }
+
+        static string LabelTree(string root, CancelToken ct, Action<int> progress, out bool stopped)
+        {
+            stopped = false;
+            if (Link(root)) return "it is a link to another folder";
+            IntPtr dirSd, fileSd;
+            int size;
+            if (!ConvertStringSecurityDescriptorToSecurityDescriptor("S:(ML;OICI;NW;;;LW)", 1, out dirSd, out size)) return "Windows could not build the label (error " + Marshal.GetLastWin32Error() + ")";
+            if (!ConvertStringSecurityDescriptorToSecurityDescriptor("S:(ML;;NW;;;LW)", 1, out fileSd, out size)) { LocalFree(dirSd); return "Windows could not build the label (error " + Marshal.GetLastWin32Error() + ")"; }
+            try
+            {
+                Stack<DirectoryInfo> todo = new Stack<DirectoryInfo>();
+                todo.Push(new DirectoryInfo(root));
+                int count = 0;
+                DateTime told = DateTime.UtcNow;
+                while (todo.Count > 0)
+                {
+                    DirectoryInfo d = todo.Pop();
+                    try
+                    {
+                        foreach (FileSystemInfo f in d.EnumerateFileSystemInfos())
+                        {
+                            if (ct != null && ct.IsCancelled) { stopped = true; return null; }
+                            if ((f.Attributes & FileAttributes.ReparsePoint) != 0 || KeptOut.Contains(f.Name)) continue;
+                            bool dir = (f.Attributes & FileAttributes.Directory) != 0, skipped;
+                            bool done = LabelOne(f.FullName, dir ? dirSd : fileSd, dir, out skipped);
+                            if (dir && done && !skipped) todo.Push((DirectoryInfo)f);
+                            count++;
+                            if (progress != null && (count & 255) == 0 && (DateTime.UtcNow - told).TotalSeconds >= 2) { told = DateTime.UtcNow; progress(count); }
+                        }
+                    }
+                    catch (Exception) { }
+                }
+                if (ct != null && ct.IsCancelled) { stopped = true; return null; }
+                bool rootSkipped;
+                if (!LabelOne(root, dirSd, true, out rootSkipped) || rootSkipped)
+                {
+                    int err = Marshal.GetLastWin32Error();
+                    return rootSkipped ? "it is a link to another folder" : err == 5 ? "Windows refused to change it (access denied)" : "Windows refused to change it (error " + err + ")";
+                }
+                return null;
+            }
+            finally
+            {
+                LocalFree(dirSd);
+                LocalFree(fileSd);
+            }
+        }
+
+        static string LabelPlain(string path, string sddl)
+        {
+            IntPtr sd;
+            int size;
+            if (!ConvertStringSecurityDescriptorToSecurityDescriptor(sddl, 1, out sd, out size)) return "no label";
+            try { return SetFileSecurity(path, LabelInfo, sd) ? null : "refused"; }
+            finally { LocalFree(sd); }
+        }
+
+        static string LabelBranch(string dir, string sddl, string fileSddl)
+        {
+            if (Link(dir)) return "link";
+            string first = LabelPlain(dir, sddl);
+            if (first != null) return first;
+            try
+            {
+                foreach (string f in Directory.GetFiles(dir)) if (!Link(f)) LabelPlain(f, fileSddl);
+                foreach (string d in Directory.GetDirectories(dir)) LabelBranch(d, sddl, fileSddl);
+            }
+            catch (Exception) { }
+            return null;
+        }
+
+        public static bool Pending(string workspace)
+        {
+            string ws = Trim(workspace);
+            if (ws == null || !Supported) return false;
+            lock (gate)
+            {
+                string known;
+                if (ready.TryGetValue(ws, out known) && (known != null || Labeled(ws))) return false;
+            }
+            return Broad(ws) == null && Directory.Exists(ws) && Secured(ws) && !Labeled(ws);
+        }
+
+        static void MakeDirs()
+        {
+            try
+            {
+                string root = LowRoot, parent = Path.GetDirectoryName(root);
+                if (parent == null || !Directory.Exists(parent) || Link(parent)) return;
+                if (Directory.Exists(root) && Link(root)) return;
+                Directory.CreateDirectory(root);
+                string top = Trim(root);
+                foreach (string d in Env().Values)
+                {
+                    string t = Path.IsPathRooted(d) ? Trim(d) : null;
+                    if (t == null || !Under(t, top) || string.Equals(t, top, StringComparison.OrdinalIgnoreCase)) continue;
+                    bool linked = false;
+                    for (string at = Path.GetDirectoryName(t); at != null && at.Length > top.Length; at = Path.GetDirectoryName(at))
+                        if (Directory.Exists(at) && Link(at)) { linked = true; break; }
+                    if (!linked && !(Directory.Exists(t) && Link(t))) Directory.CreateDirectory(t);
+                }
+            }
+            catch { }
+        }
+
+        public static string Prepare(string workspace)
+        {
+            return Prepare(workspace, null, null);
+        }
+
+        public static string Prepare(string workspace, CancelToken ct, Action<int> progress)
+        {
+            if (!Supported) return "the sandbox only works on Windows";
+            string ws = Trim(workspace);
+            if (ws == null) return "MinGent can't read the workspace's path";
+            lock (gate)
+            {
+                GuardData();
+                MakeDirs();
+            }
+            while (true)
+            {
+                lock (gate)
+                {
+                    string known;
+                    if (ready.TryGetValue(ws, out known) && (known != null || Labeled(ws))) return known;
+                    if (!busy.Contains(ws)) { busy.Add(ws); break; }
+                }
+                if (ct != null && ct.IsCancelled) return "MinGent was still setting up the sandbox for " + ws;
+                Thread.Sleep(200);
+            }
+            string note = null;
+            bool stopped = false;
+            try
+            {
+                string why = Broad(ws);
+                if (why == null && Directory.Exists(ws) && Secured(ws) && !Labeled(ws)) why = LabelTree(ws, ct, progress, out stopped);
+                if (!stopped && why != null) note = "MinGent did not open " + ws + " to sandboxed commands because " + Lower(why);
+            }
+            catch (Exception ex) { note = "MinGent did not open " + ws + " to sandboxed commands because " + Lower(ex.Message); }
+            lock (gate)
+            {
+                busy.Remove(ws);
+                if (!stopped) ready[ws] = note;
+            }
+            return stopped ? "MinGent stopped setting up the sandbox for " + ws : note;
+        }
+
+        static string Lower(string s) { return s.Length > 0 && char.IsUpper(s[0]) && (s.Length == 1 || !char.IsUpper(s[1])) ? char.ToLowerInvariant(s[0]) + s.Substring(1) : s; }
+
+        static void GuardData()
+        {
+            if (dataGuarded) return;
+            dataGuarded = true;
+            try
+            {
+                string d = Trim(Program.DataDir);
+                if (d == null || !Directory.Exists(d) || Link(d) || !Secured(d)) return;
+                LabelPlain(d, "S:(ML;OIIONP;NRNW;;;ME)");
+                foreach (string f in Directory.GetFiles(d)) if (!Link(f)) LabelPlain(f, "S:(ML;;NRNW;;;ME)");
+                foreach (string sub in new string[] { "chats", "backup", Path.Combine("admin", "backup") })
+                {
+                    string dir = Path.Combine(d, sub);
+                    if (Directory.Exists(dir)) LabelBranch(dir, "S:(ML;OICI;NRNW;;;ME)", "S:(ML;;NRNW;;;ME)");
+                }
+            }
+            catch { }
+        }
+
+        static IntPtr LowToken(out string error)
+        {
+            error = null;
+            IntPtr own, dup = IntPtr.Zero, sid = IntPtr.Zero, info = IntPtr.Zero;
+            if (!OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT, out own)) { error = "could not open MinGent's own sign-in token (error " + Marshal.GetLastWin32Error() + ")"; return IntPtr.Zero; }
+            try
+            {
+                if (!DuplicateTokenEx(own, MAXIMUM_ALLOWED, IntPtr.Zero, SecurityImpersonation, TokenPrimary, out dup)) { error = "could not copy the sign-in token (error " + Marshal.GetLastWin32Error() + ")"; return IntPtr.Zero; }
+                if (!ConvertStringSidToSid("S-1-16-4096", out sid)) { error = "could not build the low integrity level"; CloseHandle(dup); return IntPtr.Zero; }
+                int sidLen = GetLengthSid(sid);
+                int size = IntPtr.Size * 2 + sidLen;
+                info = Marshal.AllocHGlobal(size);
+                Marshal.WriteIntPtr(info, sid);
+                Marshal.WriteInt32(info, IntPtr.Size, (int)SE_GROUP_INTEGRITY);
+                if (!SetTokenInformation(dup, TokenIntegrityLevel, info, size)) { error = "could not lower the sign-in token (error " + Marshal.GetLastWin32Error() + ")"; CloseHandle(dup); return IntPtr.Zero; }
+                return dup;
+            }
+            finally
+            {
+                if (info != IntPtr.Zero) Marshal.FreeHGlobal(info);
+                if (sid != IntPtr.Zero) LocalFree(sid);
+                CloseHandle(own);
+            }
+        }
+
+        static IntPtr Block(Dictionary<string, string> env)
+        {
+            List<string> keys = new List<string>(env.Keys);
+            keys.Sort(StringComparer.OrdinalIgnoreCase);
+            StringBuilder sb = new StringBuilder();
+            foreach (string k in keys)
+            {
+                string v = env[k];
+                if (k.Length == 0 || k.IndexOf('=') >= 0 || k.IndexOf('\0') >= 0 || v == null || v.IndexOf('\0') >= 0) continue;
+                sb.Append(k).Append('=').Append(v).Append('\0');
+            }
+            sb.Append('\0');
+            return Marshal.StringToHGlobalUni(sb.ToString());
+        }
+
+        static readonly object processLock = FindProcessLock();
+
+        static object FindProcessLock()
+        {
+            try
+            {
+                System.Reflection.FieldInfo f = typeof(Process).GetField("s_CreateProcessLock", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+                object o = f != null ? f.GetValue(null) : null;
+                if (o != null) return o;
+            }
+            catch { }
+            return new object();
+        }
+
+        public static string Start(string exe, string args, string cwd, Dictionary<string, string> env, out int pid, out IntPtr process, out IntPtr thread, out Stream output, out Stream errors)
+        {
+            lock (processLock) return StartLocked(exe, args, cwd, env, out pid, out process, out thread, out output, out errors);
+        }
+
+        static string StartLocked(string exe, string args, string cwd, Dictionary<string, string> env, out int pid, out IntPtr process, out IntPtr thread, out Stream output, out Stream errors)
+        {
+            pid = 0;
+            process = thread = IntPtr.Zero;
+            output = errors = null;
+            if (!Supported) return "the sandbox only works on Windows";
+            string err;
+            IntPtr token = LowToken(out err);
+            if (token == IntPtr.Zero) return err;
+            IntPtr outRead = IntPtr.Zero, outWrite = IntPtr.Zero, errRead = IntPtr.Zero, errWrite = IntPtr.Zero, inRead = IntPtr.Zero, inWrite = IntPtr.Zero;
+            IntPtr list = IntPtr.Zero, handles = IntPtr.Zero, block = IntPtr.Zero;
+            bool listReady = false;
+            try
+            {
+                SecurityAttributes sa = new SecurityAttributes();
+                sa.Length = Marshal.SizeOf(typeof(SecurityAttributes));
+                sa.Inherit = true;
+                if (!CreatePipe(out outRead, out outWrite, ref sa, 0) || !CreatePipe(out errRead, out errWrite, ref sa, 0) || !CreatePipe(out inRead, out inWrite, ref sa, 0))
+                    return "could not create the pipes for the output (error " + Marshal.GetLastWin32Error() + ")";
+                SetHandleInformation(outRead, HANDLE_FLAG_INHERIT, 0);
+                SetHandleInformation(errRead, HANDLE_FLAG_INHERIT, 0);
+                SetHandleInformation(inWrite, HANDLE_FLAG_INHERIT, 0);
+                IntPtr size = IntPtr.Zero;
+                InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
+                if (size == IntPtr.Zero) return "could not set up the process (error " + Marshal.GetLastWin32Error() + ")";
+                list = Marshal.AllocHGlobal(size);
+                if (!InitializeProcThreadAttributeList(list, 1, 0, ref size)) return "could not set up the process (error " + Marshal.GetLastWin32Error() + ")";
+                listReady = true;
+                handles = Marshal.AllocHGlobal(IntPtr.Size * 3);
+                Marshal.WriteIntPtr(handles, 0, inRead);
+                Marshal.WriteIntPtr(handles, IntPtr.Size, outWrite);
+                Marshal.WriteIntPtr(handles, IntPtr.Size * 2, errWrite);
+                if (!UpdateProcThreadAttribute(list, 0, HandleList, handles, (IntPtr)(IntPtr.Size * 3), IntPtr.Zero, IntPtr.Zero)) return "could not limit what the command inherits (error " + Marshal.GetLastWin32Error() + ")";
+                StartupInfoEx si = new StartupInfoEx();
+                si.StartupInfo.cb = Marshal.SizeOf(typeof(StartupInfoEx));
+                si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+                si.StartupInfo.hStdInput = inRead;
+                si.StartupInfo.hStdOutput = outWrite;
+                si.StartupInfo.hStdError = errWrite;
+                si.AttributeList = list;
+                block = Block(env);
+                StringBuilder cmd = new StringBuilder("\"" + exe + "\"" + (string.IsNullOrEmpty(args) ? "" : " " + args));
+                ProcessInformation pi;
+                if (!CreateProcessAsUser(token, exe, cmd, IntPtr.Zero, IntPtr.Zero, true, CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, block, cwd, ref si, out pi))
+                    return "Windows would not start the command with low rights (error " + Marshal.GetLastWin32Error() + ")";
+                pid = pi.dwProcessId;
+                process = pi.hProcess;
+                thread = pi.hThread;
+                output = new FileStream(new Microsoft.Win32.SafeHandles.SafeFileHandle(outRead, true), FileAccess.Read, 4096, false);
+                outRead = IntPtr.Zero;
+                errors = new FileStream(new Microsoft.Win32.SafeHandles.SafeFileHandle(errRead, true), FileAccess.Read, 4096, false);
+                errRead = IntPtr.Zero;
+                return null;
+            }
+            catch (Exception ex)
+            {
+                if (process != IntPtr.Zero) { TerminateProcess(process, 1); CloseHandle(process); process = IntPtr.Zero; }
+                if (thread != IntPtr.Zero) { CloseHandle(thread); thread = IntPtr.Zero; }
+                if (output != null) { output.Dispose(); output = null; }
+                return "could not start the command in the sandbox (" + ex.Message + ")";
+            }
+            finally
+            {
+                foreach (IntPtr h in new IntPtr[] { outWrite, errWrite, inRead, inWrite, outRead, errRead })
+                    if (h != IntPtr.Zero) CloseHandle(h);
+                if (listReady) DeleteProcThreadAttributeList(list);
+                if (list != IntPtr.Zero) Marshal.FreeHGlobal(list);
+                if (handles != IntPtr.Zero) Marshal.FreeHGlobal(handles);
+                if (block != IntPtr.Zero) Marshal.FreeHGlobal(block);
+                CloseHandle(token);
+            }
+        }
+
+        public static void Resume(IntPtr thread)
+        {
+            if (thread == IntPtr.Zero) return;
+            ResumeThread(thread);
+            CloseHandle(thread);
+        }
+
+        public static int Wait(IntPtr process)
+        {
+            int code = -1;
+            if (process == IntPtr.Zero) return code;
+            WaitForSingleObject(process, INFINITE);
+            if (!GetExitCodeProcess(process, out code)) code = -1;
+            CloseHandle(process);
+            return code;
+        }
+
+        public static void Abandon(IntPtr process, IntPtr thread)
+        {
+            if (process != IntPtr.Zero) { TerminateProcess(process, 1); CloseHandle(process); }
+            if (thread != IntPtr.Zero) CloseHandle(thread);
         }
     }
 }

@@ -83,6 +83,14 @@ namespace MinGent
             "C", "C header", "C++", "C++ header", "Ruby", "PHP", "PowerShell", "Batch file", "Shell script", "SQL", "CSV", "TSV"
         };
 
+        public static bool NotText(string path)
+        {
+            string ext = System.IO.Path.GetExtension(path ?? "") ?? "";
+            string k;
+            if (!Kinds.TryGetValue(ext, out k) || TextKinds.Contains(k)) return false;
+            return !ext.Equals(".svg", StringComparison.OrdinalIgnoreCase) && !ext.Equals(".rtf", StringComparison.OrdinalIgnoreCase);
+        }
+
         public static bool Opens(Attachment a)
         {
             return a != null && !a.Folder && a.Path != null && TextKinds.Contains(Kind(a));

@@ -12,9 +12,9 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("MinGent - an AI agent for Windows with its own notepad and browser")]
 [assembly: AssemblyProduct("MinGent")]
 [assembly: AssemblyCopyright("Built locally from source")]
-[assembly: AssemblyVersion("1.0.5.0")]
-[assembly: AssemblyFileVersion("1.0.5.0")]
-[assembly: AssemblyInformationalVersion("1.0.5 beta")]
+[assembly: AssemblyVersion("1.0.6.0")]
+[assembly: AssemblyFileVersion("1.0.6.0")]
+[assembly: AssemblyInformationalVersion("1.0.6 beta")]
 
 namespace MinGent
 {
@@ -334,6 +334,26 @@ namespace MinGent
         static int ColorRef(Color c)
         {
             return c.IsEmpty ? unchecked((int)0xFFFFFFFF)  : (c.R | (c.G << 8) | (c.B << 16));
+        }
+
+        [DllImport("user32.dll")]
+        static extern bool RedrawWindow(IntPtr hwnd, IntPtr rect, IntPtr region, int flags);
+
+        public static bool Cloak(Form f, bool on)
+        {
+            try
+            {
+                if (!f.IsHandleCreated || Environment.OSVersion.Platform != PlatformID.Win32NT) return false;
+                int v = on ? 1 : 0;
+                return DwmSetWindowAttribute(f.Handle, 13, ref v, 4) == 0;
+            }
+            catch { return false; }
+        }
+
+        public static void PaintNow(Control c)
+        {
+            try { if (c.IsHandleCreated) RedrawWindow(c.Handle, IntPtr.Zero, IntPtr.Zero, 0x1 | 0x4 | 0x80 | 0x100); }
+            catch { }
         }
 
         public static void SetTitleBar(Form f, Theme t)

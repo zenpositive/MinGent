@@ -89,6 +89,7 @@ namespace MinGent
         bool CaptchaOnPage { get; }
         string YouTubeTranscript(string url, CancelToken ct, out object result);
         string Screenshot(CancelToken ct, out ImageData image, out int width, out int height);
+        string CaptchaShot(CancelToken ct, out ImageData image, out int width, out int height);
         string ElementInfo(string refId, CancelToken ct, out string kind, out bool sensitive);
         string PointInfo(double x, double y, CancelToken ct, out string kind, out bool sensitive);
         bool PendingDownload(out string name, out string url, out long bytes);
@@ -101,6 +102,7 @@ namespace MinGent
         bool CheckCleared(CancelToken ct);
         void ShowToUser();
         string CloseForAgent(bool userAsked);
+        string CloseConsoleForAgent(bool userAsked);
         string ConsoleRead(CancelToken ct, out string text);
         string ConsoleRun(string code, string checkedUrl, CancelToken ct, out string result);
         void ConsoleRefused(string code, string why);
@@ -159,7 +161,7 @@ namespace MinGent
     class PermissionAsk
     {
         public string Kind = "", Title = "", Detail = "", Reason = "", Key = "", Where = "", Summary = "", Category = "";
-        public bool High, Never;
+        public bool High, Never, EvenInFull;
         public bool AllowRemember = true;
 
         public static string PlainSummary(string s, int max)
@@ -704,6 +706,7 @@ namespace MinGent
         public bool BrowserAllowed = true;
         public bool TryCaptchas;
         public bool SideBySide;
+        public bool Sandbox, OtherApps;
         public string CustomInstructions = "";
         public int RunId;
     }
@@ -732,7 +735,7 @@ namespace MinGent
         {
             PermissionState ps = Session.Perms;
             if (Ct.IsCancelled) return false;
-            if (ps.Full) return !ask.Never;
+            if (ps.Full && !ask.EvenInFull) return !ask.Never;
             if (ps.Auto && !ask.Never && ps.AutoAllows(ask.Category)) return true;
             lock (ps.AskLock)
             {
@@ -892,7 +895,7 @@ namespace MinGent
         public string LastTabs;
         public RunCoach LastCoach;
         public int CaptchaTries;
-        public bool CaptchaActed;
+        public bool CaptchaActed, GoogleHanded, StopAsked;
         public string CaptchaHost;
         public readonly List<string> Remembered = new List<string>();
         public readonly Dictionary<string, string> DocSources = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -981,14 +984,51 @@ namespace MinGent
             return said;
         }
 
+        class Pace
+        {
+            int tokens, calls;
+            double gen, first;
+            bool guess;
+
+            public void Add(LlmResult r, DateTime firstAt, DateTime asked, DateTime ended, double charsPerToken)
+            {
+                if (firstAt == DateTime.MinValue) return;
+                double g = (ended - firstAt).TotalSeconds;
+                int n = r.OutputTokens;
+                bool est = n <= 0;
+                if (est)
+                {
+                    long chars = (r.Text ?? "").Length + (r.Reasoning ?? "").Length;
+                    foreach (ToolCall c in r.ToolCalls) chars += (c.Arguments ?? "").Length + (c.Name ?? "").Length;
+                    n = (int)(chars / Math.Max(1.5, charsPerToken));
+                }
+                else if (r.HiddenReasoningTokens > 0 && string.IsNullOrEmpty(r.Reasoning)) n = Math.Max(0, n - r.HiddenReasoningTokens);
+                if (g < 0.2 || n < 8) return;
+                tokens += n;
+                gen += g;
+                first += Math.Max(0, (firstAt - asked).TotalSeconds);
+                calls++;
+                guess |= est;
+            }
+
+            public void Stamp(Msg m)
+            {
+                if (m == null || calls == 0 || gen <= 0) return;
+                m.Speed = tokens / gen;
+                m.FirstToken = first / calls;
+                m.SpeedGuess = guess;
+            }
+        }
+
         class Sink : IStreamSink
         {
             public IAgentUi Ui;
             public bool AnyText, AnyReasoning;
             public string LastTool = "";
-            public DateTime LastToolNote = DateTime.MinValue;
-            public void OnText(string d) { AnyText = true; Ui.TextDelta(d); }
-            public void OnReasoning(string d) { AnyReasoning = true; Ui.ReasoningDelta(d); }
+            public DateTime LastToolNote = DateTime.MinValue, First = DateTime.MinValue;
+            void Mark() { if (First == DateTime.MinValue) First = DateTime.UtcNow; }
+            public void OnText(string d) { Mark(); AnyText = true; Ui.TextDelta(d); }
+            public void OnReasoning(string d) { Mark(); AnyReasoning = true; Ui.ReasoningDelta(d); }
             int lastPct = -1;
             public void OnPromptProgress(int processed, int total, int cached)
             {
@@ -1001,6 +1041,7 @@ namespace MinGent
             }
             public void OnToolProgress(string name, int chars)
             {
+                Mark();
                 if (name != LastTool || (DateTime.UtcNow - LastToolNote).TotalMilliseconds > 400)
                 {
                     LastTool = name;
@@ -1133,7 +1174,16 @@ namespace MinGent
                 ToolOutcome o = j.Outcome ?? ToolOutcome.Fail("the helper stopped without a report. Do this part yourself.");
                 if (o.Untrusted && !Perms.Tainted) { Perms.Tainted = true; Perms.TaintSource = "a helper's report"; }
                 string note;
-                if (j.Framing != null) note = j.Framing(o);
+                if (j.Framing != null)
+                {
+                    note = j.Framing(o);
+                    if (string.IsNullOrEmpty(note) && j.Kind == "review")
+                    {
+                        string why = (o.Text ?? "").Replace("Error: ", "").Trim();
+                        if (why.Length > 200) why = why.Substring(0, 200) + "...";
+                        note = "[MinGent] The automatic review could not finish" + (why.Length > 0 ? " (" + why + ")" : "") + ". Give the user your final answer now.";
+                    }
+                }
                 else
                 {
                     string text = (o.Text ?? "").Replace(InboxIntro, "\n\n(MinGent)" + InboxIntro.Substring(11));
@@ -1216,25 +1266,87 @@ namespace MinGent
             }
             Action<List<int>> read = InboxRead;
             if (read != null) { try { read(ids); } catch { } }
+            bool stop = false;
+            foreach (string t in msgs) if (StopWords.Says(t)) stop = true;
             string body = string.Join("\n\n", msgs.ToArray());
+            string stopNote = stop && !IsHelper ? "\n\n" + StopNote : "";
             Msg last = History.Count > 0 ? History[History.Count - 1] : null;
             if (!asNewTurn && last != null && last.Role == "tool")
             {
-                last.Text = (last.Text ?? "") + InboxIntro + body + InboxOutro;
+                last.Text = (last.Text ?? "") + InboxIntro + body + InboxOutro + stopNote;
             }
-            else if (!asNewTurn && last != null && last.Role == "user")
+            else if (!asNewTurn && last != null && last.Role == "user" && !last.Hidden)
             {
-                last.Text = (last.Text ?? "") + "\n\n" + body;
+                last.Text = (last.Text ?? "") + "\n\n" + body + stopNote;
                 if (last.Compact != null) last.Compact += "\n\n" + body;
                 last.Hidden = false;
             }
             else
             {
-                Msg m = new Msg("user", body);
+                Msg m = new Msg("user", body + stopNote);
                 m.Compact = body;
                 History.Add(m);
             }
+            if (stop && !IsHelper)
+            {
+                StopAsked = true;
+                string sn = StopHelpers();
+                if (sn.Length > 0)
+                {
+                    Msg tail = History[History.Count - 1];
+                    tail.Text = (tail.Text ?? "") + "\n\n" + sn;
+                }
+            }
             return true;
+        }
+
+        public string StopWork()
+        {
+            if (IsHelper) return "";
+            StopAsked = true;
+            return StopHelpers();
+        }
+
+        public static void RepairHistory(List<Msg> h)
+        {
+            for (int i = 0; i < h.Count; i++)
+            {
+                Msg m = h[i];
+                if (m.Role != "assistant" || m.ToolCalls == null || m.ToolCalls.Count == 0) continue;
+                HashSet<string> answered = new HashSet<string>();
+                int j = i + 1;
+                while (j < h.Count && h[j].Role == "tool") { answered.Add(h[j].ToolCallId ?? ""); j++; }
+                foreach (ToolCall c in m.ToolCalls)
+                    if (!answered.Contains(c.Id))
+                    {
+                        Msg r = Msg.ToolResult(c, "Not run: the conversation was interrupted.", true, null);
+                        h.Insert(j, r);
+                        j++;
+                    }
+            }
+        }
+
+        public const string StopNote = "[MinGent] This reads as a request to stop. If it is, don't start anything new and don't change more files: reply briefly with where things stand.";
+
+        string StopHelpers()
+        {
+            List<HelperJob> left = new List<HelperJob>();
+            lock (jobGate)
+            {
+                foreach (HelperJob j in jobs) if (!j.Done) left.Add(j);
+                foreach (HelperJob j in left) jobs.Remove(j);
+            }
+            if (left.Count == 0) return "";
+            foreach (HelperJob j in left) j.Drop("stopped because you asked the agent to stop");
+            DateTime until = DateTime.UtcNow.AddSeconds(3);
+            foreach (HelperJob j in left) j.Settle(until);
+            StringBuilder sb = new StringBuilder();
+            foreach (HelperJob j in left)
+            {
+                if (sb.Length > 0) sb.Append("\n\n");
+                sb.Append("[MinGent] The user asked to stop, so MinGent stopped the ").Append(j.Who).Append(" that was working in the background").Append(j.Label.Length > 0 ? " (" + j.Label + ")" : "").Append(". Don't start that work again unless the user asks.");
+            }
+            return sb.ToString();
         }
 
         static readonly Regex FakeTag = new Regex(@"[<\uFF1C]\s*/?\s*untrusted[\s_\-]*content", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -1290,7 +1402,8 @@ namespace MinGent
         void Steps(Msg userMsg, AgentConfig cfg, List<AgentTool> tools, IAgentUi ui, IEditorBridge ed, IBrowserBridge br, CancelToken ct, RunChangeLog changes, string systemPrompt)
         {
             if (!IsHelper) lock (Perms.AskLock) Perms.DeniedKeys.Clear();
-            if (!IsHelper && !FinalTurn) { PlanApproved = userMsg.PlanApproved; CaptchaTries = 0; CaptchaActed = false; }
+            if (!IsHelper) RepairHistory(History);
+            if (!IsHelper && !FinalTurn) { PlanApproved = userMsg.PlanApproved; CaptchaTries = 0; CaptchaActed = false; GoogleHanded = false; StopAsked = StopWords.Says(userMsg.Compact ?? userMsg.Text); }
             History.Add(userMsg);
             if (!IsHelper) RunMessage = userMsg;
             Dictionary<string, AgentTool> byName = new Dictionary<string, AgentTool>();
@@ -1320,10 +1433,12 @@ namespace MinGent
             LastCoach = coach;
             RepeatGuard guard = new RepeatGuard();
             int continues = 0, retries = 0, emptyReplies = 0, thinkBoost = 0, thinkRetries = 0;
+            Pace pace = new Pace();
             bool compactedForOverflow = false;
             int overflowFits = 0;
             bool reviewed = false;
-            bool finalTurn = FinalTurn;
+            bool finalTurn = FinalTurn, dropToolsOnFinal = false;
+            int pauses = 0;
             FinalTurn = false;
             bool keepToolsOnFinal = cfg.Backend != null && cfg.Backend.Provider == "anthropic";
             for (int step = 0; step < StepLimit; step++)
@@ -1343,7 +1458,8 @@ namespace MinGent
                 visible = planning ? planVisible : fullVisible;
                 LlmRequest req = new LlmRequest();
                 req.System = planning ? systemPrompt + PlanMode.Note : systemPrompt;
-                req.Tools = finalTurn && !keepToolsOnFinal ? new List<ToolSpec>() : planning ? planSpecs : fullSpecs;
+                req.Tools = finalTurn && !keepToolsOnFinal && dropToolsOnFinal ? new List<ToolSpec>() : planning ? planSpecs : fullSpecs;
+                req.NoCalls = finalTurn && !keepToolsOnFinal;
                 req.Effort = cfg.Effort;
                 req.ShowThinking = cfg.ShowThinking;
                 req.Messages = PrepareMessages(cfg);
@@ -1374,7 +1490,9 @@ namespace MinGent
                 ui.Phase("Thinking");
                 Sink sink = new Sink();
                 sink.Ui = ui;
+                DateTime asked = DateTime.UtcNow;
                 LlmResult r = cfg.Backend.Stream(req, sink, ct);
+                if (r.Error == null && !r.Cancelled) pace.Add(r, sink.First, asked, DateTime.UtcNow, CharsPerToken);
                 if (r.InputTokens > 0)
                 {
                     LastPromptTokens = r.InputTokens;
@@ -1431,6 +1549,12 @@ namespace MinGent
                         List<ToolCall> stray = LlmText.ExtractTextToolCalls(ref ft, new HashSet<string>(byName.Keys));
                         if (stray.Count > 0) { r.ToolCalls.AddRange(stray); r.Text = ft; }
                     }
+                    if (r.ToolCalls.Count > 0 && (r.Text ?? "").Trim().Length == 0 && !keepToolsOnFinal && !dropToolsOnFinal)
+                    {
+                        dropToolsOnFinal = true;
+                        step--;
+                        continue;
+                    }
                     if (r.ToolCalls.Count > 0)
                     {
                         fm = new Msg("assistant", r.Text);
@@ -1447,6 +1571,7 @@ namespace MinGent
                             }
                     }
                     else fm = r.ToMessage();
+                    pace.Stamp(fm);
                     if ((fm.Text ?? "").Trim().Length == 0)
                     {
                         if (!IsHelper) ui.Notice(emptyFinal ?? "Stopped: the agent kept running into the same problem and did not write a summary.", 2);
@@ -1491,6 +1616,7 @@ namespace MinGent
                     continue;
                 }
                 Msg am = r.ToMessage();
+                pace.Stamp(am);
                 bool hasCalls = r.ToolCalls.Count > 0;
                 if (!hasCalls && r.Text.Trim().Length == 0)
                 {
@@ -1518,10 +1644,10 @@ namespace MinGent
                         History.Add(more);
                         continue;
                     }
-                    if (r.Stop == "pause") { step--; continue; }
+                    if (r.Stop == "pause" && pauses < 3) { pauses++; continue; }
                     if (!IsHelper && !ct.IsCancelled && DeliverInbox(true)) continue;
-                    if (!IsHelper && !ct.IsCancelled && AwaitHelpers(ui, ct)) continue;
-                    string coachNote = coach.EndOfTurn(r.Text, canPlan && Perms.Planning ? null : Todos);
+                    if (!IsHelper && !ct.IsCancelled && !StopAsked && AwaitHelpers(ui, ct)) continue;
+                    string coachNote = StopAsked ? null : coach.EndOfTurn(r.Text, canPlan && Perms.Planning ? null : Todos);
                     if (coachNote != null && !ct.IsCancelled)
                     {
                         Msg cn = new Msg("user", coachNote);
@@ -1529,7 +1655,7 @@ namespace MinGent
                         History.Add(cn);
                         continue;
                     }
-                    if (AutoReview && !IsHelper && !Perms.Planning && !reviewed && !coach.Reviewed && coach.FilesChanged && byName.ContainsKey("delegate") && !ct.IsCancelled && !RunCoach.IsQuestion(r.Text))
+                    if (AutoReview && !IsHelper && !StopAsked && !Perms.Planning && !reviewed && !coach.Reviewed && (coach.FilesChanged || (tc.Changes != null && (tc.Changes.Created.Count > 0 || tc.Changes.Originals.Count > 0))) && byName.ContainsKey("delegate") && !ct.IsCancelled && !RunCoach.IsQuestion(r.Text))
                     {
                         reviewed = true;
                         string review = Helpers.AutoReview(this, tc, ui, r.Text);
@@ -1554,99 +1680,117 @@ namespace MinGent
                         History.Add(Msg.ToolResult(call, "Not run: the user stopped the assistant.", true, null));
                         continue;
                     }
-                    ToolOutcome outcome;
-                    AgentTool tool;
-                    ToolOutcome pre;
-                    string sig = null;
-                    int worldBefore = guard.World;
-                    bool ran = false;
-                    if (early != null && early.TryGetValue(call, out pre))
+                    bool added = false, ended = false;
+                    try
                     {
-                        outcome = pre;
-                        ran = true;
-                        sig = call.Name + "|" + Canon(call);
-                        if (outcome.Untrusted && !Perms.Tainted) { Perms.Tainted = true; Perms.TaintSource = "a helper's report"; }
-                    }
-                    else if (!byName.TryGetValue(call.Name, out tool))
-                    {
-                        string sug = ToolAliases.Suggest(call.Name, visible);
-                        outcome = ToolOutcome.Fail("There is no tool named '" + call.Name + "'." + (sug != null ? " Did you mean " + sug + "?" : "") + " Available tools: " + string.Join(", ", visible.ToArray()) + ".");
-                        outcome.AddNote(coach.UnknownTool(call.Name));
-                    }
-                    else
-                    {
-                        string fixErr = ArgFixer.Fix(tool, call);
-                        sig = call.Name + "|" + Canon(call);
-                        string refuse = null, refuseSummary = "Not run: same call, same result as the last two times";
-                        if (call.ArgsValid && fixErr == null)
+                        ToolOutcome outcome;
+                        AgentTool tool;
+                        ToolOutcome pre;
+                        string sig = null;
+                        int worldBefore = guard.World;
+                        bool ran = false;
+                        if (early != null && early.TryGetValue(call, out pre))
                         {
-                            refuse = guard.Check(sig, call.Name);
-                            if (refuse == null)
-                            {
-                                refuse = coach.BeforeTool(call.Name, call.Args);
-                                refuseSummary = call.Name == "web_search" ? "Not run: the search engines keep refusing" : "Not run: the site keeps blocking requests";
-                            }
+                            outcome = pre;
+                            ran = true;
+                            sig = call.Name + "|" + Canon(call);
+                            if (outcome.Untrusted && !Perms.Tainted) { Perms.Tainted = true; Perms.TaintSource = "a helper's report"; }
                         }
-                        if (!call.ArgsValid)
-                            outcome = ToolOutcome.Fail(call.Truncated || r.Truncated
-                                ? "Your tool call was cut off by the output limit, so its arguments are incomplete and it was not run. Send smaller pieces: for a long file, write the first part with write_file, then add the rest with write_file and append=true, one part per call."
-                                : "The arguments were not valid JSON: " + Trunc(call.Arguments, 300) + ". Send a JSON object, for example " + Example(tool) + ".");
-                        else if (fixErr != null) outcome = ToolOutcome.Fail(fixErr);
-                        else if (canPlan && Perms.Planning && !PlanMode.Allows(call.Name, call.Args))
+                        else if (!byName.TryGetValue(call.Name, out tool))
                         {
-                            outcome = ToolOutcome.Fail(PlanMode.Refusal(call.Name));
-                            outcome.Summary = "Not run: plan mode is on";
-                            planRefusals++;
-                            if (planRefusals >= 4) planWrap = true;
-                            else if (planRefusals >= 2) outcome.AddNote("That is " + planRefusals + " calls refused because plan mode is on. Changes stay off until the user approves a plan: call present_plan now with what you have found.");
-                        }
-                        else if (refuse != null)
-                        {
-                            outcome = new ToolOutcome();
-                            outcome.Text = refuse;
-                            outcome.Error = true;
-                            outcome.Refused = true;
-                            outcome.Summary = refuseSummary;
-                            coach.CountRefusal();
-                        }
-                        else if (!IsHelper && call.Name.StartsWith("browser_", StringComparison.Ordinal) && BrowserStillHeld(ui, ct))
-                        {
-                            outcome = ToolOutcome.Fail("a helper is still using the built-in browser in the background. Wait for its report, then use the browser.");
-                            outcome.Refused = true;
-                            outcome.Summary = "Not run: a helper is using the browser";
+                            string sug = ToolAliases.Suggest(call.Name, visible);
+                            outcome = ToolOutcome.Fail("There is no tool named '" + call.Name + "'." + (sug != null ? " Did you mean " + sug + "?" : "") + " Available tools: " + string.Join(", ", visible.ToArray()) + ".");
+                            outcome.AddNote(coach.UnknownTool(call.Name));
                         }
                         else
                         {
-                            tc.Call = call;
-                            tc.Browser = !IsHelper && HelperHoldsBrowser ? null : br;
-                            ui.ToolStart(call, tool.Label(call.Args));
-                            try { outcome = tool.Run(tc, call.Args); }
-                            catch (Exception ex) { outcome = ToolOutcome.Fail(call.Name + " crashed: " + ex.Message); }
-                            tc.Browser = br;
-                            ran = true;
-                            if (outcome.Untrusted || tool.UntrustedFor(call.Args))
+                            string fixErr = ArgFixer.Fix(tool, call);
+                            sig = call.Name + "|" + Canon(call);
+                            string refuse = null, refuseSummary = "Not run: same call, same result as the last two times";
+                            if (call.ArgsValid && fixErr == null)
                             {
-                                if (!Perms.Tainted) { Perms.Tainted = true; Perms.TaintSource = tool.Label(call.Args); }
+                                refuse = guard.Check(sig, call.Name);
+                                if (refuse == null)
+                                {
+                                    refuse = coach.BeforeTool(call.Name, call.Args);
+                                    refuseSummary = call.Name == "web_search" ? "Not run: the search engines keep refusing" : "Not run: the site keeps blocking requests";
+                                }
+                            }
+                            if (!call.ArgsValid)
+                                outcome = ToolOutcome.Fail(call.Truncated || r.Truncated
+                                    ? "Your tool call was cut off by the output limit, so its arguments are incomplete and it was not run. Send smaller pieces: for a long file, write the first part with write_file, then add the rest with write_file and append=true, one part per call."
+                                    : "The arguments were not valid JSON: " + Trunc(call.Arguments, 300) + ". Send a JSON object, for example " + Example(tool) + ".");
+                            else if (fixErr != null) outcome = ToolOutcome.Fail(fixErr);
+                            else if (canPlan && Perms.Planning && !PlanMode.Allows(call.Name, call.Args))
+                            {
+                                outcome = ToolOutcome.Fail(PlanMode.Refusal(call.Name));
+                                outcome.Summary = "Not run: plan mode is on";
+                                planRefusals++;
+                                if (planRefusals >= 4) planWrap = true;
+                                else if (planRefusals >= 2) outcome.AddNote("That is " + planRefusals + " calls refused because plan mode is on. Changes stay off until the user approves a plan: call present_plan now with what you have found.");
+                            }
+                            else if (refuse != null)
+                            {
+                                outcome = new ToolOutcome();
+                                outcome.Text = refuse;
+                                outcome.Error = true;
+                                outcome.Refused = true;
+                                outcome.Summary = refuseSummary;
+                                coach.CountRefusal();
+                            }
+                            else if (!IsHelper && call.Name.StartsWith("browser_", StringComparison.Ordinal) && BrowserStillHeld(ui, ct))
+                            {
+                                outcome = ToolOutcome.Fail("a helper is still using the built-in browser in the background. Wait for its report, then use the browser.");
+                                outcome.Refused = true;
+                                outcome.Summary = "Not run: a helper is using the browser";
+                            }
+                            else
+                            {
+                                tc.Call = call;
+                                tc.Browser = !IsHelper && HelperHoldsBrowser ? null : br;
+                                ui.ToolStart(call, tool.Label(call.Args));
+                                try { outcome = tool.Run(tc, call.Args); }
+                                catch (Exception ex) { outcome = ToolOutcome.Fail(call.Name + " crashed: " + ex.Message); }
+                                tc.Browser = br;
+                                ran = true;
+                                if (ct.IsCancelled && outcome != null && outcome.Denied)
+                                {
+                                    outcome = ToolOutcome.Fail("Not run: the user stopped the assistant.");
+                                    outcome.Summary = "stopped";
+                                }
+                                if (outcome.Untrusted || tool.UntrustedFor(call.Args))
+                                {
+                                    if (!Perms.Tainted) { Perms.Tainted = true; Perms.TaintSource = tool.Label(call.Args); }
+                                }
                             }
                         }
+                        coach.AfterTool(call.Name, call.Args, outcome);
+                        if (!Bookkeeping(call, outcome, shown)) busy = true;
+                        if (ran && sig != null) outcome.AddNote(guard.After(sig, call.Name, call.Args, outcome, worldBefore));
+                        if (ran && canPlan && Perms.Planning && call.Name != PlanMode.Tool && call.Name != "ask_user" && call.Name != "todo_write")
+                        {
+                            planCalls++;
+                            if (planCalls == 25 || planCalls == 35) outcome.AddNote("You have made " + planCalls + " research calls in plan mode. Unless something important is still unknown, stop researching and call present_plan with your plan now.");
+                            else if (planCalls >= 45) planWrap = true;
+                        }
+                        ui.ToolEnd(call, outcome);
+                        ended = true;
+                        string text = (outcome.Text ?? "").Replace(InboxIntro, "\n\n(MinGent)" + InboxIntro.Substring(11));
+                        if (outcome.Untrusted) text = WrapUntrusted(call.Name, text);
+                        else text = Defang(text);
+                        text = WithNotes(text, outcome.Note);
+                        Msg result = Msg.ToolResult(call, text, outcome.Error, cfg.Vision ? outcome.Images : null);
+                        if (outcome.Snapshot) result.Snapshot = true;
+                        History.Add(result);
+                        added = true;
                     }
-                    coach.AfterTool(call.Name, call.Args, outcome);
-                    if (!Bookkeeping(call, outcome, shown)) busy = true;
-                    if (ran && sig != null) outcome.AddNote(guard.After(sig, call.Name, call.Args, outcome, worldBefore));
-                    if (ran && canPlan && Perms.Planning && call.Name != PlanMode.Tool && call.Name != "ask_user" && call.Name != "todo_write")
+                    catch (Exception ex)
                     {
-                        planCalls++;
-                        if (planCalls == 25 || planCalls == 35) outcome.AddNote("You have made " + planCalls + " research calls in plan mode. Unless something important is still unknown, stop researching and call present_plan with your plan now.");
-                        else if (planCalls >= 45) planWrap = true;
+                        if (added) throw;
+                        ToolOutcome broke = ToolOutcome.Fail(call.Name + " could not be run: " + ex.Message);
+                        if (!ended) { try { ui.ToolEnd(call, broke); } catch { } }
+                        History.Add(Msg.ToolResult(call, broke.Text, true, null));
                     }
-                    ui.ToolEnd(call, outcome);
-                    string text = (outcome.Text ?? "").Replace(InboxIntro, "\n\n(MinGent)" + InboxIntro.Substring(11));
-                    if (outcome.Untrusted) text = WrapUntrusted(call.Name, text);
-                    else text = Defang(text);
-                    text = WithNotes(text, outcome.Note);
-                    Msg result = Msg.ToolResult(call, text, outcome.Error, cfg.Vision ? outcome.Images : null);
-                    if (outcome.Snapshot) result.Snapshot = true;
-                    History.Add(result);
                 }
                 idleSteps = busy ? 0 : idleSteps + 1;
                 if (planWrap && Perms.Planning && !ct.IsCancelled)
@@ -2373,7 +2517,7 @@ namespace MinGent
             req.Effort = QuickEffort(cfg.Model);
             req.ShowThinking = false;
             LlmResult r = cfg.Backend.Stream(req, null, ct);
-            if (manual && (r.Cancelled || ct.IsCancelled)) return false;
+            if (r.Cancelled || ct.IsCancelled) return !manual;
             if (manual && (r.Error != null || r.Text.Trim().Length < 20))
             {
                 CompactError = r.Error ?? "the model returned an empty summary";
@@ -2410,7 +2554,7 @@ namespace MinGent
         {
             return string.Join("|", new string[] {
                 cfg.Model != null ? cfg.Model.Provider + ":" + cfg.Model.Id : "",
-                browser ? "b" : "", vision ? "v" : "", apps ? "a" : "", memory ? "m" : "", cfg.WebAllowed ? "w" : "", cfg.CustomInstructions ?? "", cfg.ContextTokens < 16000 ? "small" : "" });
+                browser ? "b" : "", vision ? "v" : "", apps ? "a" : "", memory ? "m" : "", cfg.WebAllowed ? "w" : "", cfg.Sandbox ? "s" : "", apps && cfg.OtherApps ? "o" : "", cfg.CustomInstructions ?? "", cfg.ContextTokens < 16000 ? "small" : "" });
         }
 
         public static string Build(AgentConfig cfg, PermissionState perms, string projectNotes, string memory, bool browser, bool vision, bool apps, bool memoryOn)
@@ -2445,7 +2589,7 @@ namespace MinGent
             sb.Append("  then fix what is wrong and test again.\n");
             sb.Append("- When something fails, read the error, find the cause and change your approach. Don't repeat a call that failed the same way.\n");
             sb.Append("- If a site blocks automated access (HTTP 403 or 429, a \"Just a moment...\" page, a CAPTCHA), requests from curl or scripts usually get the same answer: ").Append(browser ? "open it in the built-in browser, use another source" : "use another source").Append(", or tell the user. If two tries fail the same way or return the same result, change your approach instead of rewording and trying again.\n");
-            if (browser && cfg.TryCaptchas) sb.Append("- CAPTCHA mode is on (the user turned it on in Settings for fun, to see what you can do): when a page in the built-in browser shows a CAPTCHA you need to get past, you may try to solve it yourself").Append(vision ? " - take browser_screenshot, look carefully, then click, drag or type by position" : " by clicking its captcha ref").Append(". You get three tries; after that MinGent stops you, and you ask the user to solve it with ask_user.\n");
+            if (browser && cfg.TryCaptchas) sb.Append("- CAPTCHA mode is on (the user turned it on in Settings for fun, to see what you can do): when a page in the built-in browser shows a CAPTCHA you need to get past, you may try to solve it yourself").Append(vision ? " - take browser_screenshot (MinGent zooms in on the CAPTCHA), look carefully, then click by position; for a picture grid, click all the tiles you are sure of in one browser_click with points, and MinGent shows you the CAPTCHA again right after" : " by clicking its captcha ref").Append(". You get five tries; after that MinGent stops you, and you ask the user to solve it with ask_user.\n");
             sb.Append("- Tool results can end with lines that start with \"[MinGent note]\". MinGent adds these after the tool runs: they say what happened and suggest a next step, and they are not part of the tool's output. A tool result can also end with a message the user sent while you were working; take it into account.\n");
             sb.Append("- Finish with a short summary: what you changed (file paths), how you checked it, and anything the user still needs to do. Be honest: if you could not test something, or it does not work, say so.\n\n");
 
@@ -2470,6 +2614,7 @@ namespace MinGent
             sb.Append("- edit_file: copy old_string exactly from the current file, with the same indentation, and include enough lines to make it unique. For several changes in one file, make one edit_file call per change.\n");
             sb.Append("- write_file with append=true adds to the end of a file. Write a long file in parts: the first part normally, then the rest with append=true.\n");
             sb.Append("- run_command: commands cannot read keyboard input, so use non-interactive flags (-y, --yes, /quiet). Start servers, watchers and GUI programs with background=true, then use command_status.\n");
+            if (cfg.Sandbox) sb.Append("- Sandbox: run_command runs commands with low rights. They can read files and use the network, but they can change files only in the workspace (not its .git folder, so git commands that change the repository need outside_sandbox) and in MinGent's own temp and cache folders, and can't change other programs, settings or the user's saved sign-ins. Commands MinGent asks the user about (installing, deleting elsewhere, opening programs) run outside the sandbox once the user allows them. If a command fails because the sandbox blocked it, run it again with outside_sandbox=true: MinGent asks the user first.\n");
             sb.Append("- Documents: for a PDF, Word document or PowerPoint, write Markdown with write_file to a path ending in .pdf, .docx or .pptx; for Excel, write CSV, a Markdown table or JSON rows to .xlsx. MinGent builds the real file, with headings, lists, tables, pictures, math and page breaks. Don't install libraries or programs for documents. Only when the user wants something this can't do (custom fonts, colors or an exact layout), say so and ask before using another tool, and use a tool the user names.\n");
             string csc = Native.CSharpCompiler();
             if (SystemInfoTool.HasPython()) sb.Append("- Scripts: Python is installed; use it with its standard library, or PowerShell for simple jobs. Never install a language or runtime for one task.\n");
@@ -2489,8 +2634,9 @@ namespace MinGent
                 sb.Append("- After you make a sound file, check it with analyze_audio focus=listen before you call it done: it tells you the clicks, fades, pitch and tone you can't hear.\n");
                 if (browser) sb.Append("- Browser: browser_read lists links, buttons and fields with refs like e12. Use browser_click and browser_type with those refs, and read the page again after it changes. browser_click also does right, middle and double clicks and clicks with Ctrl or Shift held; browser_hover, browser_drag and browser_scroll (also inside lists and maps, and sideways) cover the rest of the mouse, and browser_press_key presses any key or shortcut. For just reading documentation, web_fetch is faster.\n");
                 if (browser) sb.Append("- browser_console reads the page's console and runs JavaScript in the page, only to look into it and debug it. Never use it for what the other browser_ tools do: clicking, typing, keys, scrolling, submitting or navigating.\n");
-                sb.Append("- close_pane closes the browser or notes pane: when the user asks (set user_asked), or when you are done with a pane and it shows nothing the user needs.\n");
+                sb.Append("- close_pane closes the browser, its console or the notes pane: when the user asks (set user_asked), or when you are done with a pane and it shows nothing the user needs.\n");
                 if (apps) sb.Append("- Desktop programs: app_read lists a window's controls with refs like a5 for app_click and app_type. It works for programs you started in this chat, including ones Windows opened for your command (Store apps such as Calculator). app_click also does right, middle and double clicks and clicks with Ctrl or Shift held; app_scroll, app_hover and app_drag cover the rest of the mouse, and app_key presses any key or shortcut.\n");
+                if (apps && cfg.OtherApps) sb.Append("- Programs the user opened: only when the task needs one, ask for it with app_access (without app it lists them). Once the user allows it, its windows show up in app_read. Their browsers, File Explorer, terminals and code editors can only be looked at.\n");
                 if (apps) sb.Append("- Terminals: use run_command for commands. Only when the user wants to watch, or for an interactive ssh session, open your own terminal window with run_command (Start-Process wt -ArgumentList '-w','new', or Start-Process powershell where Windows Terminal is missing) and work in it with app_read, app_type (enter=true) and app_key. MinGent checks each command before Enter runs it.\n");
                 sb.Append("- system_info describes this PC (Windows version, hardware, installed developer tools) without running anything.\n");
             }

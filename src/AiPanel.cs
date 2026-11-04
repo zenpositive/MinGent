@@ -151,7 +151,8 @@ namespace MinGent
                 if (queued.Count > 0) EditQueued(queued[at > 0 ? at - 1 : queued.Count - 1]);
                 else if (!running) chat.BeginEdit(chat.LastUserItem());
             };
-            composer.FilesDropped += delegate (string[] files) { AttachFiles(files); composer.FocusInput(); };
+            composer.FilesDropped += delegate (string[] files) { DropFiles(files); };
+            AllowDrop = true;
             composer.Refused += delegate (string why) { Notice(why, 1); };
             chat.AttachmentClicked += OpenAttachment;
             level = settings.AiMode == "auto" ? "auto" : "ask";
@@ -187,7 +188,7 @@ namespace MinGent
         public bool HasChat(string name)
         {
             if (string.IsNullOrEmpty(name) || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) return false;
-            try { return File.Exists(Path.Combine(ChatDir, name)); } catch { return false; }
+            try { return File.Exists(Path.Combine(ChatDir, name)) || File.Exists(Path.Combine(ArchiveDir, name)); } catch { return false; }
         }
 
         public List<string> TakeDeletedChats()
@@ -512,7 +513,7 @@ namespace MinGent
             if (lv == "full" && was != "full")
                 Notice("Full auto is on: the agent asks nothing until you switch it back (click the red switch). It goes back to Auto when you close MinGent." + (LocalModelPicked() ? " " + LocalFullAutoNote : ""), 2);
             ChatItem pending = chat.PendingPermission();
-            if (pending == null || lv == "ask") return;
+            if (pending == null || lv == "ask" || pending.Ask.EvenInFull) return;
             if (lv == "full") { chat.Resolve(pending, pending.Ask.Never ? PermissionDecision.Deny : PermissionDecision.Allow); return; }
             bool allowedCategory = !pending.Ask.Never && session.Perms.AutoAllows(pending.Ask.Category);
             if (allowedCategory || (!pending.Ask.High && pending.Ask.Kind != "read" && pending.Ask.Kind != "web" && pending.Ask.Kind != "console" &&
@@ -991,6 +992,50 @@ namespace MinGent
             }
         }
 
+        public void DropFiles(string[] files)
+        {
+            AttachFiles(files);
+            composer.FocusInput();
+        }
+
+        void ShowDropHint(bool on)
+        {
+            chat.DropHint = on;
+            Color under = Color.Empty;
+            if (on)
+            {
+                Rectangle area = chat.DropArea;
+                area.Offset(chat.Left, chat.Top);
+                if (area.Contains(composer.Bounds)) under = chat.DropFill;
+            }
+            composer.Backdrop = under;
+        }
+
+        protected override void OnDragEnter(DragEventArgs e)
+        {
+            base.OnDragEnter(e);
+            bool files = e.Data != null && e.Data.GetDataPresent(DataFormats.FileDrop);
+            e.Effect = files ? DragDropEffects.Copy : DragDropEffects.None;
+            ShowDropHint(files);
+        }
+
+        protected override void OnDragLeave(EventArgs e)
+        {
+            base.OnDragLeave(e);
+            ShowDropHint(false);
+        }
+
+        protected override void OnDragDrop(DragEventArgs e)
+        {
+            base.OnDragDrop(e);
+            ShowDropHint(false);
+            string[] files = e.Data != null ? e.Data.GetData(DataFormats.FileDrop) as string[] : null;
+            if (files == null || files.Length == 0) return;
+            DropFiles(files);
+            Form f = FindForm();
+            if (f != null) f.Activate();
+        }
+
         public void AttachFiles(string[] paths)
         {
             if (paths == null) return;
@@ -1452,12 +1497,17 @@ namespace MinGent
                     cfg.BrowserAllowed = browserOk;
                     cfg.TryCaptchas = settings.AiCaptcha && browserOk;
                     cfg.SideBySide = settings.AiSideBySide;
+                    cfg.Sandbox = settings.AiSandbox && Sandbox.Supported;
+                    cfg.OtherApps = appsOk && settings.AiOtherApps;
+                    if (!cfg.OtherApps) AppTool.ForgetGrants(sess);
                     if (browserOk) { browser.CaptchaMode = cfg.TryCaptchas; browser.AgentCanSee = cfg.Vision; }
                     cfg.CustomInstructions = settings.AiInstructions;
                     cfg.RunId = run;
                     if (browserOk) browser.SnapshotChars = Math.Max(6000, Math.Min(24000, (int)(cfg.ContextTokens * 0.15 * 3.3)));
                     bool helpersOk = settings.AiHelpers;
                     List<AgentTool> tools = AgentToolbox.Create(settings.AiWeb, browserOk, cfg.Vision, cfg.ContextTokens, memoryOn, appsOk, helpersOk, Helpers.Parallel(cfg));
+                    AgentToolbox.UseSandbox(tools, cfg.Sandbox);
+                    if (cfg.OtherApps) AgentToolbox.UseOtherApps(tools);
                     bool helperTools = false;
                     foreach (AgentTool at in tools) if (at.Name == "delegate") helperTools = true;
                     sess.AutoReview = helperTools && settings.AiAutoReview;
@@ -1659,10 +1709,10 @@ namespace MinGent
             try { FlashWindow(f.Handle, true); } catch { }
         }
 
-        static void Attention(Form f)
+        void Attention(Form f)
         {
             if (f == null || Form.ActiveForm == f) return;
-            if (AppControl.AgentInFront()) AppHighlight.Raise(f);
+            if (AppControl.AgentInFront(settings.AiOtherApps ? AppTool.GrantsOf(session) : null)) AppHighlight.Raise(f);
             FlashTaskbar(f);
         }
 
@@ -1903,6 +1953,9 @@ namespace MinGent
             {
                 curAssistant.Streaming = false;
                 curAssistant.Text = text;
+                curAssistant.Speed = m.Speed;
+                curAssistant.FirstToken = m.FirstToken;
+                curAssistant.SpeedGuess = m.SpeedGuess;
                 if (text.Trim().Length == 0) chat.Items.Remove(curAssistant);
                 chat.Changed(curAssistant);
             }
@@ -1911,6 +1964,9 @@ namespace MinGent
                 ChatItem a = new ChatItem();
                 a.Kind = ChatKind.Assistant;
                 a.Text = text;
+                a.Speed = m.Speed;
+                a.FirstToken = m.FirstToken;
+                a.SpeedGuess = m.SpeedGuess;
                 AddReply(a);
             }
             curAssistant = null;
@@ -2243,6 +2299,85 @@ namespace MinGent
         }
 
         string ChatDir { get { return Path.Combine(Program.DataDir ?? Path.GetTempPath(), "chats"); } }
+        string ArchiveDir { get { return Path.Combine(ChatDir, "archive"); } }
+
+        public bool IsArchived(string path)
+        {
+            try { return string.Equals(Path.GetDirectoryName(Path.GetFullPath(path)).TrimEnd('\\', '/'), Path.GetFullPath(ArchiveDir).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase); }
+            catch { return false; }
+        }
+
+        public int ArchivedCount()
+        {
+            try { return Directory.Exists(ArchiveDir) ? Directory.GetFiles(ArchiveDir, "*.json").Length : 0; }
+            catch { return 0; }
+        }
+
+        static string FreeName(string dir, string name)
+        {
+            string target = Path.Combine(dir, name);
+            string stem = Path.GetFileNameWithoutExtension(name), ext = Path.GetExtension(name);
+            for (int n = 2; File.Exists(target) && n < 1000; n++) target = Path.Combine(dir, stem + "-" + n.ToString(CultureInfo.InvariantCulture) + ext);
+            return target;
+        }
+
+        public void ArchiveChat(string path)
+        {
+            if (string.Equals(path, chatFile, StringComparison.OrdinalIgnoreCase)) WhenIdle("archive the chat", delegate { ArchiveNow(path); });
+            else ArchiveNow(path);
+        }
+
+        void ArchiveNow(string path)
+        {
+            if (string.IsNullOrEmpty(path) || IsArchived(path) || !File.Exists(path)) { Changed(); return; }
+            bool active = string.Equals(path, chatFile, StringComparison.OrdinalIgnoreCase);
+            if (active) SaveChat();
+            try
+            {
+                Directory.CreateDirectory(ArchiveDir);
+                string target = FreeName(ArchiveDir, Path.GetFileName(path));
+                if (active)
+                {
+                    ClearView(false, false);
+                    host.ResetBrowser();
+                }
+                File.Move(path, target);
+                SecureFile.Erase(path + ".tmp");
+            }
+            catch (Exception ex)
+            {
+                Alert.Show(FindForm(), th, "MinGent could not archive this chat: " + ex.Message, Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            titleCache.Remove(path);
+            if (string.Equals(settings.AiLastChat, Path.GetFileName(path), StringComparison.OrdinalIgnoreCase)) { settings.AiLastChat = ""; settings.Save(); }
+            NotesChanged();
+            Changed();
+        }
+
+        public string RestoreChat(string path)
+        {
+            if (string.IsNullOrEmpty(path) || !IsArchived(path) || !File.Exists(path)) return null;
+            try
+            {
+                Directory.CreateDirectory(ChatDir);
+                string target = FreeName(ChatDir, Path.GetFileName(path));
+                File.Move(path, target);
+                titleCache.Remove(path);
+                NotesChanged();
+                Changed();
+                return target;
+            }
+            catch (Exception ex)
+            {
+                Alert.Show(FindForm(), th, "MinGent could not bring this chat back: " + ex.Message, Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return null;
+            }
+        }
+
+        public List<ChatInfo> ListArchived()
+        {
+            return ListIn(ArchiveDir);
+        }
 
         void NewChatFile(string firstText)
         {
@@ -2496,18 +2631,21 @@ namespace MinGent
             List<string> facts = new List<string>();
             lock (session.Remembered) facts.AddRange(session.Remembered);
             ClearView(false, false);
-            try
+            foreach (string dir in new string[] { ChatDir, ArchiveDir })
             {
-                if (Directory.Exists(ChatDir))
-                    foreach (string f in Directory.GetFiles(ChatDir))
-                    {
-                        string ext = Path.GetExtension(f).ToLowerInvariant();
-                        if (ext != ".json" && ext != ".tmp") continue;
-                        if (ext == ".json") foreach (string x in ChatFacts(f)) if (!facts.Contains(x)) facts.Add(x);
-                        if (SecureFile.Erase(f) && ext == ".json") deletedChats.Add(Path.GetFileName(f));
-                    }
+                try
+                {
+                    if (Directory.Exists(dir))
+                        foreach (string f in Directory.GetFiles(dir))
+                        {
+                            string ext = Path.GetExtension(f).ToLowerInvariant();
+                            if (ext != ".json" && ext != ".tmp") continue;
+                            if (ext == ".json") foreach (string x in ChatFacts(f)) if (!facts.Contains(x)) facts.Add(x);
+                            if (SecureFile.Erase(f) && ext == ".json") deletedChats.Add(Path.GetFileName(f));
+                        }
+                }
+                catch { }
             }
-            catch { }
             MemoryStore.Forget(facts);
             titleCache.Clear();
             settings.AiLastChat = "";
@@ -2562,9 +2700,14 @@ namespace MinGent
         public List<ChatInfo> ListChats()
         {
             RecoverTemps();
+            return ListIn(ChatDir);
+        }
+
+        List<ChatInfo> ListIn(string dir)
+        {
             List<ChatInfo> list = new List<ChatInfo>();
             string[] files = new string[0];
-            try { if (Directory.Exists(ChatDir)) files = Directory.GetFiles(ChatDir, "*.json"); } catch { }
+            try { if (Directory.Exists(dir)) files = Directory.GetFiles(dir, "*.json"); } catch { }
             foreach (string f in files)
             {
                 DateTime w;
@@ -2593,6 +2736,7 @@ namespace MinGent
                 Dictionary<string, object> o = Json.O("k", (int)it.Kind, "t", Clip(it.Text, 200000));
                 if (it.Kind == ChatKind.Tool) { o["l"] = it.Label; o["s"] = it.Summary; o["d"] = Clip(it.Detail, it.Under != null ? 8000 : 20000); o["st"] = it.Status; o["i"] = it.Icon; if (it.Report.Length > 0) o["rp"] = Clip(it.Report, 20000); if (it.Under != null) o["up"] = true; }
                 if (it.Kind == ChatKind.Thinking) o["sec"] = it.Seconds;
+                if (it.Kind == ChatKind.Assistant && it.Speed > 0) { o["sp"] = Math.Round(it.Speed, 1); if (it.FirstToken > 0) o["ft"] = Math.Round(it.FirstToken, 2); if (it.SpeedGuess) o["spg"] = true; }
                 if (it.Kind == ChatKind.Activity) { o["sec"] = it.Seconds + (it.Running ? Math.Max(0, (DateTime.UtcNow - it.Started).TotalSeconds) : 0); if (it.Stopped) o["stp"] = true; if (!string.IsNullOrEmpty(it.Label)) o["l"] = it.Label; }
                 if (it.Kind == ChatKind.Permission) { o["l"] = it.Ask.Title; o["dec"] = it.Decision; if (!string.IsNullOrEmpty(it.Ask.Summary)) o["sm"] = it.Ask.Summary; }
                 if (it.Kind == ChatKind.Question) { o["l"] = it.Question != null ? it.Question.Title : ""; o["dec"] = it.Decision; if (it.Question != null && it.Question.Wait) o["w"] = true; }
@@ -2750,6 +2894,7 @@ namespace MinGent
                         else if (it.Icon == "branch") card = it;
                     }
                     if (it.Kind == ChatKind.Thinking) it.Seconds = Json.Num(o, "sec");
+                    if (it.Kind == ChatKind.Assistant) { it.Speed = Json.Num(o, "sp"); it.FirstToken = Json.Num(o, "ft"); it.SpeedGuess = Json.Bool(o, "spg"); }
                     if (it.Kind == ChatKind.Activity) { it.Seconds = Json.Num(o, "sec"); it.Stopped = Json.Bool(o, "stp"); it.Label = Json.Str(o, "l") ?? ""; }
                     if (it.Kind == ChatKind.Permission) { it.Ask = new PermissionAsk(); it.Ask.Title = Json.Str(o, "l") ?? ""; it.Ask.Summary = PermissionAsk.PlainSummary(Json.Str(o, "sm"), 160); it.Decision = Json.Int(o, "dec"); if (it.Decision < 0) continue; }
                     if (it.Kind == ChatKind.Question) { it.Question = new UserQuestion(); it.Question.Title = Json.Str(o, "l") ?? ""; it.Question.Wait = Json.Bool(o, "w"); it.Decision = Json.Int(o, "dec"); if (it.Decision < 0) continue; }
@@ -2786,7 +2931,7 @@ namespace MinGent
                     }
                     session.History.Add(m);
                 }
-            RepairHistory(session.History);
+            AgentSession.RepairHistory(session.History);
             turnCounter = MapTurns(loaded, session.History);
             curTurn = turnCounter;
             session.RestoreTaint();
@@ -3153,25 +3298,6 @@ namespace MinGent
                 for (int k = i + 1; k < e; k++) if (items[k].Kind == ChatKind.Thinking) secs += items[k].Seconds;
                 a.Seconds = secs;
                 items.Insert(i + 1, a);
-            }
-        }
-
-        static void RepairHistory(List<Msg> h)
-        {
-            for (int i = 0; i < h.Count; i++)
-            {
-                Msg m = h[i];
-                if (m.Role != "assistant" || m.ToolCalls == null || m.ToolCalls.Count == 0) continue;
-                HashSet<string> answered = new HashSet<string>();
-                int j = i + 1;
-                while (j < h.Count && h[j].Role == "tool") { answered.Add(h[j].ToolCallId ?? ""); j++; }
-                foreach (ToolCall c in m.ToolCalls)
-                    if (!answered.Contains(c.Id))
-                    {
-                        Msg r = Msg.ToolResult(c, "Not run: the conversation was interrupted.", true, null);
-                        h.Insert(j, r);
-                        j++;
-                    }
             }
         }
 
@@ -4009,6 +4135,7 @@ namespace MinGent
             auto.Chevron = true;
             auto.DangerText = "Full auto";
             auto.MenuRequested += delegate { ShowLevelMenu(); };
+            auto.MouseUp += delegate { if (menuClosedByAuto) BeginInvoke(new Action(delegate { menuClosedByAuto = false; })); };
             tip.SetToolTip(auto, "Auto: the agent acts without asking, except for what you chose in Settings > Safety.\nOff: it asks before commands, web access and changes outside the workspace.\nThe arrow opens Full auto, which asks nothing.");
             tip.SetToolTip(plan, "Plan first: the agent only reads and researches, then shows you a plan.\nNothing changes until you approve it. Shift+Tab turns it on or off.");
             tip.SetToolTip(Model, "Choose the model");
@@ -4021,18 +4148,6 @@ namespace MinGent
             Box.TextChanged += delegate { Relayout(); };
             Box.GotFocus += delegate { Invalidate(); };
             Box.LostFocus += delegate { Invalidate(); };
-            Box.AllowDrop = true;
-            AllowDrop = true;
-            DragEventHandler enter = delegate (object s, DragEventArgs e) { e.Effect = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None; };
-            DragEventHandler drop = delegate (object s, DragEventArgs e)
-            {
-                string[] files = e.Data.GetData(DataFormats.FileDrop) as string[];
-                if (files != null && files.Length > 0 && FilesDropped != null) FilesDropped(files);
-            };
-            Box.DragEnter += enter;
-            Box.DragDrop += drop;
-            DragEnter += enter;
-            DragDrop += drop;
         }
 
         protected override void Dispose(bool disposing)
@@ -4057,6 +4172,7 @@ namespace MinGent
 
         void ShowLevelMenu()
         {
+            if (menuClosedByAuto) { menuClosedByAuto = false; return; }
             string cur = Level;
             ContextMenuStrip m = Menus.Create(th);
             m.Items.Add(Menus.Detail("Ask", "asks before commands, web and outside changes", cur == "ask", delegate { if (LevelChosen != null) LevelChosen("ask"); }));
@@ -4066,9 +4182,17 @@ namespace MinGent
             m.Items.Add(full);
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add(Menus.Item("Choose what Auto asks about...", false, delegate { if (CustomizeAuto != null) CustomizeAuto(this, EventArgs.Empty); }));
-            m.Closed += delegate { BeginInvoke(new Action(delegate { m.Dispose(); })); };
+            m.Closed += delegate (object o, ToolStripDropDownClosedEventArgs ce)
+            {
+                bool overAuto = false;
+                try { overAuto = auto.ClientRectangle.Contains(auto.PointToClient(Control.MousePosition)); } catch { }
+                menuClosedByAuto = ce.CloseReason == ToolStripDropDownCloseReason.AppClicked && overAuto && (Control.MouseButtons & (MouseButtons.Left | MouseButtons.Right)) != MouseButtons.None;
+                BeginInvoke(new Action(delegate { m.Dispose(); }));
+            };
             m.Show(auto, new Point(0, 0), ToolStripDropDownDirection.AboveRight);
         }
+
+        bool menuClosedByAuto;
 
         public bool Plan
         {
@@ -4313,10 +4437,18 @@ namespace MinGent
         Rectangle CtxCloseRect { get { if (string.IsNullOrEmpty(contextLabel) || contextOff) return Rectangle.Empty; Rectangle r = CtxRect; int w = Math.Min(r.Width, CtxTextW + UI.S(52)); return new Rectangle(r.X + w - UI.S(23), r.Y + UI.S(2), UI.S(20), UI.S(20)); } }
         int CtxTextW { get { return string.IsNullOrEmpty(contextLabel) ? 0 : TextRenderer.MeasureText(contextLabel, Font).Width; } }
 
+        Color backdrop = Color.Empty;
+
+        public Color Backdrop
+        {
+            get { return backdrop; }
+            set { if (backdrop == value) return; backdrop = value; Invalidate(); }
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
-            g.Clear(Parent != null ? Parent.BackColor : th.Back);
+            g.Clear(backdrop != Color.Empty ? backdrop : Parent != null ? Parent.BackColor : th.Back);
             Rectangle r = new Rectangle(0, 0, Width - 1, Height - 1);
             Glyphs.FillRound(g, th.InputBack, r, UI.S(18));
             Glyphs.DrawRound(g, Box.Focused ? Theme.Blend(th.InputBorder, th.Fore, 0.35) : th.InputBorder, r, UI.S(18));

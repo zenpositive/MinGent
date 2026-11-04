@@ -843,7 +843,28 @@ namespace MinGent
         public int Pid;
         public string Title = "", Process = "", Class = "";
         public Rectangle Rect;
-        public bool Adopted, Terminal;
+        public bool Adopted, Terminal, Granted;
+        public string Tier = AppTier.Full;
+        public int Id;
+
+        public string Ref(List<AppWindow> all) { return "w" + (Id > 0 ? Id : all.IndexOf(this) + 1).ToString(CultureInfo.InvariantCulture); }
+    }
+
+    static class AppTier
+    {
+        public const string Full = "full", Look = "look", Never = "never";
+    }
+
+    class AppGrant
+    {
+        public string Exe = "", Name = "", Tier = AppTier.Full;
+        public bool SawWeb;
+    }
+
+    class OtherApp
+    {
+        public string Exe = "", Process = "", Name = "", Tier = AppTier.Full;
+        public int Windows;
     }
 
     class AppElement
@@ -909,13 +930,73 @@ namespace MinGent
             "systemsettings", "useraccountcontrolsettings", "consent", "credentialuibroker", "lockapp", "logonui", "securityhealthsystray", "windowsdefender", "msmpeng" };
 
         static readonly HashSet<string> Browsers = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
-            "chrome", "msedge", "firefox", "brave", "opera", "opera_gx", "vivaldi", "iexplore", "arc", "librewolf", "waterfox", "chromium", "yandex", "thorium" };
+            "chrome", "msedge", "firefox", "brave", "opera", "opera_gx", "vivaldi", "iexplore", "arc", "librewolf", "waterfox", "chromium", "yandex", "thorium",
+            "browser", "floorp", "zen", "palemoon", "basilisk", "seamonkey", "maxthon", "whale", "epic", "duckduckgo", "sidekick", "comet", "ladybird", "mullvadbrowser",
+            "iron", "slimjet", "chrome_proxy", "avastbrowser", "avgbrowser", "ccleanerbrowser", "dragon", "cent", "min", "ungoogled-chromium", "supermium", "mercury" };
 
         static readonly HashSet<string> Private = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
             "outlook", "olk", "hxoutlook", "thunderbird", "mailbird", "em client", "mailclient", "teams", "ms-teams", "slack", "discord", "telegram", "whatsapp", "signal", "skype", "zoom", "messenger",
+            "claude", "chatgpt", "copilot", "perplexity", "lm studio", "jan", "msty", "anythingllm", "chatbox", "gpt4all", "ollama app",
+            "element", "viber", "line", "kakaotalk", "wechat", "weixin", "qq", "threema", "wire", "session", "mattermost", "rocket.chat", "zulip", "lync", "jitsi meet",
+            "beeper", "ferdium", "franz", "rambox", "discordptb", "discordcanary", "whatsapp.root", "telegramdesktop", "skypeapp",
+            "msrdc", "rdcman", "mremoteng", "vmconnect", "virtualboxvm", "virtualbox", "vmware", "vmplayer", "royalts", "remotedesktopmanager", "remotedesktopmanager64",
+            "termius", "mobaxterm", "securecrt", "xshell", "winscp", "filezilla", "nxplayer", "moonlight", "logmein", "ultraviewer", "remotepc", "aa_v3", "ammyy_admin",
+            "dwagent", "screenconnect.windowsclient", "connectwisecontrol.client", "bomgar-scc", "g2mui", "zohoassist",
+            "keeweb", "pwsafe", "authy", "authy desktop", "yubioath-desktop", "yubico authenticator", "winauth", "enteauth", "atomic wallet", "wasabi wallet", "sparrow",
+            "bitcoin-qt", "monero-wallet-gui", "electrum-ltc",
             "keepass", "keepassxc", "1password", "bitwarden", "lastpass", "dashlane", "enpass", "roboform", "nordpass", "proton pass", "keeper",
             "mstsc", "teamviewer", "teamviewer_service", "anydesk", "rustdesk", "parsec", "vncviewer", "tvnviewer", "remoting_host", "quickassist", "msra", "splashtop", "supremo",
             "exodus", "electrum", "ledger live", "trezor suite", "metamask" };
+
+        static readonly HashSet<string> Terminals = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+            "cmd", "powershell", "pwsh", "powershell_ise", "conhost", "openconsole", "windowsterminal", "wt", "bash", "wsl", "wslhost", "mintty", "putty", "kitty",
+            "alacritty", "wezterm-gui", "hyper", "tabby", "conemu", "conemu64", "cmder", "fluentterminal" };
+
+        static readonly HashSet<string> Editors = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+            "code", "code - insiders", "codium", "cursor", "windsurf", "trae", "kiro", "zed", "devenv", "idea64", "idea", "pycharm64", "pycharm", "webstorm64", "rider64",
+            "clion64", "goland64", "phpstorm64", "rubymine64", "datagrip64", "rustrover64", "studio64", "fleet", "eclipse", "netbeans64", "qtcreator",
+            "notepad++", "sublime_text", "sublime_merge", "atom", "geany", "kate", "gvim", "vim", "emacs", "runemacs", "neovide", "nvim-qt", "lapce", "rstudio", "spyder",
+            "thonny", "arduino ide", "processing", "codeblocks", "devcpp", "lazarus", "bds", "unity", "unrealeditor", "godot", "blender", "positron", "void", "github desktop",
+            "githubdesktop", "sourcetree", "gitkraken", "fork", "tortoisegitproc", "smartgit" };
+
+        static readonly HashSet<string> SystemTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+            "regedit", "mmc", "taskmgr", "control", "rundll32", "msiexec", "schtasks", "certmgr", "gpedit", "secpol", "netsh", "sc", "diskpart", "systemsettings",
+            "useraccountcontrolsettings", "consent", "credentialuibroker", "lockapp", "logonui", "securityhealthsystray", "securityhealthhost", "windowsdefender", "msmpeng",
+            "winstore.app", "mingent", "justpad", "perfmon", "resmon", "eventvwr", "compmgmt", "devmgmt", "services", "msconfig", "systempropertiesadvanced",
+            "sechealthui", "regedt32", "procexp", "procexp64", "procmon", "procmon64", "autoruns", "autoruns64", "rammap", "rammap64", "tcpview", "tcpview64",
+            "systeminformer", "processhacker", "wf", "gpmc", "lusrmgr", "certlm", "fsquirt", "optionalfeatures", "dfrgui", "cleanmgr", "recoverydrive", "rstrui" };
+
+        public static string TierFor(string process, string cls)
+        {
+            string p = process ?? "";
+            if (SystemTools.Contains(p) || Private.Contains(p) || SystemHosts.Contains(p)) return AppTier.Never;
+            if (Browsers.Contains(p) || Terminals.Contains(p) || Editors.Contains(p) || string.Equals(p, "explorer", StringComparison.OrdinalIgnoreCase) || TerminalClass(cls ?? "") || cls == "PseudoConsoleWindow") return AppTier.Look;
+            return AppTier.Full;
+        }
+
+        public static string NeverWhy(string process)
+        {
+            string p = process ?? "";
+            if (string.Equals(p, "mingent", StringComparison.OrdinalIgnoreCase) || string.Equals(p, "justpad", StringComparison.OrdinalIgnoreCase)) return "it is MinGent itself";
+            if (Private.Contains(p)) return "it handles your messages, passwords, money or remote access";
+            return "it is part of Windows' own settings, security or sign-in";
+        }
+
+        public static string Kind(string process, string cls)
+        {
+            string p = process ?? "";
+            if (Browsers.Contains(p)) return "a web browser";
+            if (string.Equals(p, "explorer", StringComparison.OrdinalIgnoreCase)) return "File Explorer";
+            if (Editors.Contains(p)) return "a code editor";
+            if (Terminals.Contains(p) || TerminalClass(cls ?? "") || cls == "PseudoConsoleWindow") return "a terminal";
+            return "a program";
+        }
+
+        public static IntPtr Foreground()
+        {
+            try { return GetForegroundWindow(); }
+            catch { return IntPtr.Zero; }
+        }
 
         static readonly HashSet<string> Runtimes = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
             "python", "pythonw", "py", "pyw", "node", "electron", "java", "javaw", "dotnet", "deno", "bun", "ruby", "rubyw", "php", "php-cgi", "perl", "lua", "luajit",
@@ -973,7 +1054,7 @@ namespace MinGent
 
         public static void ForgetAdopted() { lock (adoptGate) { adopted.Clear(); launches.Clear(); } }
 
-        public static bool AgentInFront()
+        public static bool AgentInFront(Dictionary<string, AppGrant> grants)
         {
             if (Environment.OSVersion.Platform != PlatformID.Win32NT) return false;
             try
@@ -981,10 +1062,110 @@ namespace MinGent
                 IntPtr fg = GetForegroundWindow();
                 if (fg == IntPtr.Zero) return false;
                 IntPtr root = GetAncestor(fg, 3);
-                foreach (AppWindow w in Windows()) if (w.Hwnd == fg || w.Hwnd == root) return true;
+                foreach (AppWindow w in Windows(grants)) if (w.Hwnd == fg || w.Hwnd == root) return true;
             }
             catch { }
             return false;
+        }
+
+        static bool ExplorerWindow(string process, string cls)
+        {
+            return !string.Equals(process, "explorer", StringComparison.OrdinalIgnoreCase) || cls == "CabinetWClass" || cls == "#32770" || cls == "OperationStatusWindow";
+        }
+
+        static string FriendlyName(string exe, string process)
+        {
+            if (string.Equals(process, "explorer", StringComparison.OrdinalIgnoreCase)) return "File Explorer";
+            try
+            {
+                if (!string.IsNullOrEmpty(exe))
+                {
+                    string d = (FileVersionInfo.GetVersionInfo(exe).FileDescription ?? "").Trim();
+                    d = Regex.Replace(d, @"[\x00-\x1F\x7F""\[\]{}<>`]", " ").Trim();
+                    if (d.Length > 0 && d.Length <= 60) return Regex.Replace(d, @"\s+", " ");
+                }
+            }
+            catch { }
+            return process;
+        }
+
+        public static List<OtherApp> OtherApps()
+        {
+            List<OtherApp> list = new List<OtherApp>();
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) return list;
+            List<IntPtr> jobs = Shell.JobHandles();
+            Dictionary<int, bool> member = new Dictionary<int, bool>(), seen = new Dictionary<int, bool>();
+            Dictionary<string, OtherApp> byExe = new Dictionary<string, OtherApp>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<int, string> names = new Dictionary<int, string>(), exes = new Dictionary<int, string>();
+            bool anyLaunch;
+            lock (adoptGate) anyLaunch = adopted.Count > 0 || launches.Count > 0;
+            EnumProc cb = delegate (IntPtr h, IntPtr l)
+            {
+                try
+                {
+                    if (!IsWindowVisible(h)) return true;
+                    RECT r;
+                    if (!GetWindowRect(h, out r) || r.Right - r.Left < 40 || r.Bottom - r.Top < 30) return true;
+                    if (Cloaked(h)) return true;
+                    int pid;
+                    GetWindowThreadProcessId(h, out pid);
+                    StringBuilder sb = new StringBuilder(256);
+                    GetClassName(h, sb, 256);
+                    string cls = sb.ToString();
+                    if (TerminalClass(cls) && OwnsTerminal(h, pid, cls)) return true;
+                    if (cls == "ApplicationFrameWindow")
+                    {
+                        pid = HostedPid(h);
+                        if (pid == 0) return true;
+                    }
+                    if (pid == 0 || pid == OwnPid || InJob(pid, jobs, member) || (anyLaunch && Adopt(pid, seen))) return true;
+                    string name;
+                    if (!names.TryGetValue(pid, out name))
+                    {
+                        try { using (Process p = Process.GetProcessById(pid)) name = p.ProcessName; } catch { name = null; }
+                        names[pid] = name;
+                        exes[pid] = name == null ? null : ExePath(pid);
+                    }
+                    if (name == null || !ExplorerWindow(name, cls)) return true;
+                    if (string.Equals(name, "explorer", StringComparison.OrdinalIgnoreCase) && cls != "CabinetWClass") return true;
+                    if (SystemHosts.Contains(name)) return true;
+                    string exe = exes[pid] ?? name;
+                    OtherApp app;
+                    if (!byExe.TryGetValue(exe, out app))
+                    {
+                        app = new OtherApp();
+                        app.Exe = exe;
+                        app.Process = name;
+                        app.Tier = TierFor(name, cls);
+                        byExe[exe] = app;
+                    }
+                    app.Windows++;
+                }
+                catch { }
+                return true;
+            };
+            EnumWindows(cb, IntPtr.Zero);
+            GC.KeepAlive(cb);
+            foreach (OtherApp app in byExe.Values)
+            {
+                app.Name = FriendlyName(app.Exe, app.Process);
+                list.Add(app);
+            }
+            list.Sort(delegate (OtherApp x, OtherApp y) { return string.Compare(x.Name, y.Name, StringComparison.OrdinalIgnoreCase); });
+            return list;
+        }
+
+        public static OtherApp FindApp(List<OtherApp> apps, string want)
+        {
+            string w = (want ?? "").Trim().Trim('"', '\'').Trim();
+            if (w.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) w = w.Substring(0, w.Length - 4);
+            if (w.Length == 0) return null;
+            foreach (OtherApp a in apps) if (string.Equals(a.Name, w, StringComparison.OrdinalIgnoreCase) || string.Equals(a.Process, w, StringComparison.OrdinalIgnoreCase)) return a;
+            OtherApp only = null;
+            int n = 0;
+            foreach (OtherApp a in apps)
+                if (a.Name.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0 || a.Process.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0) { only = a; n++; }
+            return n == 1 ? only : null;
         }
 
         static bool Adopt(int pid, Dictionary<int, bool> seen)
@@ -1192,13 +1373,20 @@ namespace MinGent
 
         public static List<AppWindow> Windows()
         {
+            return Windows(null);
+        }
+
+        public static List<AppWindow> Windows(Dictionary<string, AppGrant> grants)
+        {
             List<AppWindow> list = new List<AppWindow>();
             List<IntPtr> jobs = Shell.JobHandles();
             bool anyLaunch;
             lock (adoptGate) anyLaunch = adopted.Count > 0 || launches.Count > 0;
             bool anyTerminal = OwnedTerminals();
-            if (jobs.Count == 0 && !anyLaunch && !anyTerminal) return list;
+            bool anyGrant = grants != null && grants.Count > 0;
+            if (jobs.Count == 0 && !anyLaunch && !anyTerminal && !anyGrant) return list;
             Dictionary<int, bool> member = new Dictionary<int, bool>(), seen = new Dictionary<int, bool>();
+            Dictionary<int, AppGrant> grantOf = new Dictionary<int, AppGrant>();
             EnumProc cb = delegate (IntPtr h, IntPtr l)
             {
                 try
@@ -1212,16 +1400,26 @@ namespace MinGent
                     StringBuilder sb = new StringBuilder(512);
                     GetClassName(h, sb, 256);
                     string cls = sb.ToString();
-                    bool term = TerminalClass(cls);
-                    if (term && !OwnsTerminal(h, pid, cls)) return true;
+                    bool termClass = TerminalClass(cls), term = termClass && OwnsTerminal(h, pid, cls);
+                    if (termClass && !term && !anyGrant) return true;
                     if (cls == "ApplicationFrameWindow")
                     {
                         pid = HostedPid(h);
                         if (pid == 0) return true;
                     }
-                    bool inJob = term || InJob(pid, jobs, member), took = term;
-                    if (!inJob && anyLaunch && Adopt(pid, seen)) { inJob = true; took = true; }
-                    if (!inJob) return true;
+                    bool inJob = term || (!termClass && InJob(pid, jobs, member)), took = term;
+                    if (!inJob && !termClass && anyLaunch && Adopt(pid, seen)) { inJob = true; took = true; }
+                    AppGrant grant = null;
+                    if (!inJob && anyGrant && pid != OwnPid)
+                    {
+                        if (!grantOf.TryGetValue(pid, out grant))
+                        {
+                            string exe = ExePath(pid);
+                            if (exe == null || !grants.TryGetValue(exe.ToLowerInvariant(), out grant)) grant = null;
+                            grantOf[pid] = grant;
+                        }
+                    }
+                    if (!inJob && grant == null) return true;
                     AppWindow w = new AppWindow();
                     w.Hwnd = h;
                     w.Pid = pid;
@@ -1232,6 +1430,14 @@ namespace MinGent
                     GetWindowText(h, sb, sb.Capacity);
                     w.Title = sb.ToString();
                     try { using (Process p = Process.GetProcessById(pid)) w.Process = p.ProcessName; } catch { w.Process = "?"; }
+                    if (grant != null)
+                    {
+                        if (!ExplorerWindow(w.Process, cls)) return true;
+                        string tier = TierFor(w.Process, cls);
+                        if (tier == AppTier.Never) return true;
+                        w.Granted = true;
+                        w.Tier = tier == AppTier.Full ? grant.Tier : tier;
+                    }
                     w.Rect = Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
                     list.Add(w);
                 }
@@ -1262,6 +1468,11 @@ namespace MinGent
         public static string Allowed(AppWindow w)
         {
             if (w.Terminal) return null;
+            if (w.Granted)
+            {
+                if (TierFor(w.Process, w.Class) == AppTier.Never) return "'" + w.Process + "' can't be used because " + NeverWhy(w.Process);
+                return null;
+            }
             if (Blocked.Contains(w.Process)) return "'" + w.Process + "' is a shell or system tool, which the assistant may not control (use run_command for commands)";
             if (Browsers.Contains(w.Process)) return "'" + w.Process + "' is a web browser with the user's own sign-ins, which the assistant may not control. Use MinGent's built-in browser (browser_navigate) instead";
             if (Private.Contains(w.Process)) return "'" + w.Process + "' handles the user's messages, passwords, money or remote access, so the assistant may not control it";
@@ -1332,21 +1543,38 @@ namespace MinGent
 
         public static AppWindow Pick(List<AppWindow> all, string which, out string error)
         {
+            return Pick(all, which, false, out error);
+        }
+
+        public static AppWindow Pick(List<AppWindow> all, string which, bool others, out string error)
+        {
             error = null;
-            if (all.Count == 0) { error = "No window of a program you started is open. Start the program with run_command (background=true), wait a moment, then try again. A program that was already open before your command belongs to the user and can't be controlled."; return null; }
+            if (all.Count == 0)
+            {
+                error = "No window of a program you started is open. Start the program with run_command (background=true), wait a moment, then try again. " +
+                        (others ? "To use a program the user opened themselves, ask for it with app_access first." : "A program that was already open before your command belongs to the user and can't be controlled.");
+                return null;
+            }
             string w = (which ?? "").Trim();
             if (w.Length == 0)
             {
-                IntPtr fg = GetForegroundWindow();
-                foreach (AppWindow x in all) if (x.Hwnd == fg) return x;
-                return all[0];
+                IntPtr fg = Foreground();
+                foreach (AppWindow x in all) if (x.Hwnd == fg && !x.Granted) return x;
+                foreach (AppWindow x in all) if (!x.Granted) return x;
+                error = "Say which window to use with window=\"w...\": windows of the user's own programs are never picked by default.\n" + ListText(all);
+                return null;
             }
             Match m = Regex.Match(w, @"^w(\d+)$", RegexOptions.IgnoreCase);
             if (m.Success)
             {
-                int i = int.Parse(m.Groups[1].Value) - 1;
-                if (i >= 0 && i < all.Count) return all[i];
-                error = "there is no window " + w + "; call app_read to list the windows";
+                int n;
+                if (int.TryParse(m.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out n))
+                {
+                    bool ids = false;
+                    foreach (AppWindow x in all) if (x.Id > 0) { ids = true; if (x.Id == n) return x; }
+                    if (!ids && n >= 1 && n <= all.Count) return all[n - 1];
+                }
+                error = "there is no window " + w + " now (it may have closed); call app_read to list the windows";
                 return null;
             }
             foreach (AppWindow x in all) if (x.Title.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0) return x;
@@ -1357,12 +1585,15 @@ namespace MinGent
         public static string ListText(List<AppWindow> all)
         {
             StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < all.Count; i++)
+            List<AppWindow> order = new List<AppWindow>(all);
+            order.Sort(delegate (AppWindow x, AppWindow y) { return x.Id != y.Id ? x.Id.CompareTo(y.Id) : all.IndexOf(x).CompareTo(all.IndexOf(y)); });
+            foreach (AppWindow w in order)
             {
-                sb.Append("w").Append(i + 1).Append(": \"").Append(all[i].Title).Append("\" (").Append(all[i].Process).Append(", ").Append(all[i].Rect.Width).Append('x').Append(all[i].Rect.Height);
-                if (all[i].Class == "#32770") sb.Append(", dialog");
-                AppWindow d = BlockingDialog(all[i], all);
-                if (d != null) sb.Append(", waiting for w").Append(all.IndexOf(d) + 1);
+                sb.Append(w.Ref(all)).Append(": \"").Append(w.Title).Append("\" (").Append(w.Process).Append(", ").Append(w.Rect.Width).Append('x').Append(w.Rect.Height);
+                if (w.Class == "#32770") sb.Append(", dialog");
+                if (w.Granted) sb.Append(w.Tier == AppTier.Look ? ", the user's, look only" : ", the user's");
+                AppWindow d = BlockingDialog(w, all);
+                if (d != null) sb.Append(", waiting for ").Append(d.Ref(all));
                 sb.Append(")\n");
             }
             return sb.ToString();
@@ -1926,6 +2157,9 @@ namespace MinGent
         public IntPtr ShotWindow = IntPtr.Zero;
         public double ShotScale = 1;
         public int ShotW, ShotH;
+        public readonly Dictionary<string, AppGrant> Grants = new Dictionary<string, AppGrant>(StringComparer.OrdinalIgnoreCase);
+        public readonly Dictionary<IntPtr, KeyValuePair<int, int>> WinIds = new Dictionary<IntPtr, KeyValuePair<int, int>>();
+        public int NextWin = 1;
     }
 
     abstract class AppTool : AgentTool
@@ -1945,22 +2179,113 @@ namespace MinGent
 
         protected static Dictionary<string, object> WindowArg() { return P("string", "Which window: w1, w2... from app_read, or part of its title (default: the program's front window)"); }
 
+        public static void ForgetGrants(AgentSession session)
+        {
+            AppSession st;
+            lock (states) if (session == null || !states.TryGetValue(session, out st)) return;
+            lock (st.Grants) st.Grants.Clear();
+        }
+
+        public static Dictionary<string, AppGrant> GrantsOf(AgentSession session)
+        {
+            AppSession st;
+            lock (states) if (session == null || !states.TryGetValue(session, out st)) return null;
+            lock (st.Grants) return new Dictionary<string, AppGrant>(st.Grants, StringComparer.OrdinalIgnoreCase);
+        }
+
+        protected static Dictionary<string, AppGrant> Grants(ToolContext ctx)
+        {
+            if (ctx.Cfg == null || !ctx.Cfg.OtherApps) return null;
+            AppSession st = State(ctx);
+            lock (st.Grants) return new Dictionary<string, AppGrant>(st.Grants, StringComparer.OrdinalIgnoreCase);
+        }
+
+        protected static List<AppWindow> All(ToolContext ctx)
+        {
+            AppSession st = State(ctx);
+            List<AppWindow> all = AppControl.Windows(Grants(ctx));
+            lock (st.WinIds)
+            {
+                foreach (AppWindow w in all)
+                {
+                    KeyValuePair<int, int> known;
+                    if (st.WinIds.TryGetValue(w.Hwnd, out known) && known.Value == w.Pid) w.Id = known.Key;
+                    else
+                    {
+                        w.Id = st.NextWin++;
+                        st.WinIds[w.Hwnd] = new KeyValuePair<int, int>(w.Id, w.Pid);
+                    }
+                }
+            }
+            return all;
+        }
+
+        protected static AppGrant GrantFor(ToolContext ctx, AppWindow w)
+        {
+            string exe = AppControl.ExePath(w.Pid);
+            if (exe == null) return null;
+            AppSession st = State(ctx);
+            AppGrant g;
+            lock (st.Grants) return st.Grants.TryGetValue(exe.ToLowerInvariant(), out g) ? g : null;
+        }
+
+        protected virtual string Act { get { return "look"; } }
+
+        public static string TierGate(AppWindow w, string act)
+        {
+            if (w == null || !w.Granted || w.Tier == AppTier.Full) return null;
+            if (act == "look" || act == "scroll" || act == "hover") return null;
+            string kind = AppControl.Kind(w.Process, w.Class);
+            return "'" + w.Process + "' is " + kind + " the user opened, so you may only look at it: app_read, app_screenshot, app_scroll and app_hover. " +
+                   (kind == "a web browser" ? "To open pages, click or type on the web, use MinGent's own browser (browser_navigate)." :
+                    kind == "a terminal" ? "Run commands with run_command instead." :
+                    kind == "File Explorer" ? "Work with files through your file tools instead." :
+                    "Change files with your file tools and run commands with run_command instead.");
+        }
+
         protected string Gate(ToolContext ctx, AppWindow w, bool acting)
         {
-            return Gate(ctx, w, acting, false);
+            return Gate(ctx, w, acting, false, acting ? Act : "look");
         }
 
         protected string Gate(ToolContext ctx, AppWindow w, bool acting, bool cancelOnly)
         {
+            return Gate(ctx, w, acting, cancelOnly, acting ? Act : "look");
+        }
+
+        protected string Gate(ToolContext ctx, AppWindow w, bool acting, bool cancelOnly, string act)
+        {
             if (Environment.OSVersion.Platform != PlatformID.Win32NT) return "app control only works on Windows";
             string why = AppControl.Allowed(w);
             if (why != null) return why;
-            bool early = ctx.Cfg.SideBySide && !w.Adopted && !Refused(ctx, w);
+            string tier = TierGate(w, act);
+            if (tier != null) return tier;
+            bool arrange = ctx.Cfg.SideBySide && !w.Granted;
+            bool early = arrange && !w.Adopted && !Refused(ctx, w);
             if (early) SideBySide(ctx, w);
             AppHighlight.Show(w.Hwnd);
-            string denied = Check(ctx, w, acting, cancelOnly);
+            string denied = Check(ctx, w, acting, cancelOnly, act);
             if (denied != null) { AppHighlight.Hide(); return denied; }
-            if (!early && ctx.Cfg.SideBySide) SideBySide(ctx, w);
+            if (!early && arrange) SideBySide(ctx, w);
+            return null;
+        }
+
+        static string GrantCheck(ToolContext ctx, AppWindow w, bool acting, bool tainted)
+        {
+            AppGrant g = GrantFor(ctx, w);
+            if (g == null) return "The user has not allowed '" + w.Process + "' in this chat. Ask for it with app_access first.";
+            if (!acting || !tainted || g.SawWeb) return null;
+            PermissionAsk a = new PermissionAsk();
+            a.Kind = "app";
+            a.EvenInFull = true;
+            a.AllowRemember = false;
+            a.Category = "";
+            a.Title = "Keep letting the agent use " + g.Name;
+            a.Detail = g.Exe;
+            a.Reason = "This chat has read web content since you allowed " + g.Name + ", and a page could have slipped in instructions. The agent wants to " + (g.Tier == AppTier.Full ? "click and type" : "click") + " in it again.";
+            a.Key = "appgrant-web:" + g.Exe.ToLowerInvariant();
+            if (!ctx.Approve(a)) return "The user did not allow using " + g.Name + " again after this chat read web content. Don't try to reach it another way.";
+            g.SawWeb = true;
             return null;
         }
 
@@ -1984,13 +2309,18 @@ namespace MinGent
             return w.Terminal ? exe + "#" + w.Hwnd.ToInt64().ToString(CultureInfo.InvariantCulture) : exe;
         }
 
-        static string Check(ToolContext ctx, AppWindow w, bool acting, bool cancelOnly)
+        static string Check(ToolContext ctx, AppWindow w, bool acting, bool cancelOnly, string act)
         {
             PermissionState ps = ctx.Session.Perms;
             bool tainted = ps.WebGuard && ps.Tainted;
             if (w.Terminal && !acting && ps.Auto) return null;
             if (acting && !cancelOnly && AppControl.IsFileDialog(w))
             {
+                if (w.Granted)
+                {
+                    string again = GrantCheck(ctx, w, true, tainted);
+                    if (again != null) return again;
+                }
                 PermissionAsk fd = new PermissionAsk();
                 fd.Kind = "app";
                 fd.Category = ctx.Guarded(PermissionCategory.Launch);
@@ -2001,6 +2331,7 @@ namespace MinGent
                 if (!ctx.Approve(fd)) return "The user did not allow using this file dialog.";
                 return null;
             }
+            if (w.Granted) return GrantCheck(ctx, w, act != "look" && act != "scroll" && act != "hover", tainted);
             bool trusted = !w.Adopted && AppControl.Trusted(w, ctx.Workspace);
             if (ps.Auto && !(acting && tainted) && (trusted || (!acting && !w.Adopted))) return null;
             string exe = AppControl.ExePath(w.Pid) ?? w.Process;
@@ -2024,16 +2355,23 @@ namespace MinGent
 
         protected static AppWindow Find(ToolContext ctx, Dictionary<string, object> a, out string error)
         {
-            List<AppWindow> all = AppControl.Windows();
-            return AppControl.Pick(all, S(a, "window"), out error);
+            List<AppWindow> all = All(ctx);
+            bool named = (S(a, "window") ?? "").Trim().Length > 0;
+            bool refs = (S(a, "ref") ?? "").Trim().Length > 0 || (S(a, "to_ref") ?? "").Trim().Length > 0;
+            if (!named && refs)
+            {
+                IntPtr from = State(ctx).RefsWindow;
+                foreach (AppWindow x in all) if (from != IntPtr.Zero && x.Hwnd == from) { error = null; return x; }
+            }
+            return AppControl.Pick(all, S(a, "window"), ctx.Cfg.OtherApps, out error);
         }
 
-        protected static string Waiting(AppWindow w)
+        protected static string Waiting(ToolContext ctx, AppWindow w)
         {
-            List<AppWindow> all = AppControl.Windows();
+            List<AppWindow> all = All(ctx);
             AppWindow d = AppControl.BlockingDialog(w, all);
             if (d == null) return null;
-            string id = "w" + (all.IndexOf(d) + 1).ToString(CultureInfo.InvariantCulture);
+            string id = d.Ref(all);
             return "\"" + (w.Title.Length > 0 ? w.Title : w.Process) + "\" is waiting for its dialog \"" + d.Title + "\" (" + id + "), so it does not take clicks or keys now. Use that dialog first: app_read with window=\"" + id + "\" shows it; finish it or press Escape there to cancel it.";
         }
 
@@ -2068,13 +2406,18 @@ namespace MinGent
             return null;
         }
 
-        protected static AppWindow RefWindow(Dictionary<string, object> a, AppWindow w, AppSession st, params string[] refKeys)
+        protected static AppWindow RefWindow(ToolContext ctx, Dictionary<string, object> a, AppWindow w, AppSession st, out string error, params string[] refKeys)
         {
+            error = null;
             bool anyRef = false;
             foreach (string k in refKeys) if (!string.IsNullOrEmpty((S(a, k) ?? "").Trim())) anyRef = true;
-            if (!anyRef || st.RefsWindow == w.Hwnd || S(a, "window") != null) return w;
-            foreach (AppWindow x in AppControl.Windows()) if (x.Hwnd == st.RefsWindow) return x;
-            return w;
+            if (!anyRef || st.RefsWindow == w.Hwnd) return w;
+            List<AppWindow> all = All(ctx);
+            AppWindow owner = null;
+            foreach (AppWindow x in all) if (x.Hwnd == st.RefsWindow) owner = x;
+            if (owner == null) { error = "those refs came from a window that is gone now; call app_read again"; return null; }
+            if (S(a, "window") != null) { error = "those refs came from " + owner.Ref(all) + " (\"" + owner.Title + "\"), not from the window you named. Use window=\"" + owner.Ref(all) + "\", or call app_read on the window you mean first."; return null; }
+            return owner;
         }
 
         protected static string PasteGate(ToolContext ctx, AppWindow w)
@@ -2114,19 +2457,24 @@ namespace MinGent
             for (int i = 0; i < 30 && !ctx.Ct.IsCancelled; i++)
             {
                 if (!AppControl.Exists(w.Hwnd) || AppControl.Enabled(w.Hwnd)) break;
-                AppWindow d = AppControl.BlockingDialog(w, AppControl.Windows());
+                AppWindow d = AppControl.BlockingDialog(w, All(ctx));
                 if (d != null)
                 {
                     ctx.Ct.Sleep(350);
-                    foreach (AppWindow x in AppControl.Windows()) if (x.Hwnd == d.Hwnd) d = x;
+                    foreach (AppWindow x in All(ctx)) if (x.Hwnd == d.Hwnd) d = x;
                     note = "The program opened the dialog \"" + d.Title + "\".";
                     return d;
                 }
                 ctx.Ct.Sleep(100);
             }
-            List<AppWindow> all = AppControl.Windows();
+            List<AppWindow> all = All(ctx);
             if (all.Count == 0) return null;
             string e2;
+            if (!w.Granted) return AppControl.Pick(all, null, out e2) ?? all[0];
+            IntPtr fg = AppControl.Foreground();
+            foreach (AppWindow x in all) if (x.Hwnd == fg && x.Pid == w.Pid) return x;
+            foreach (AppWindow x in all) if (x.Hwnd == w.Hwnd) return x;
+            foreach (AppWindow x in all) if (x.Pid == w.Pid) return x;
             return AppControl.Pick(all, null, out e2) ?? all[0];
         }
 
@@ -2313,24 +2661,120 @@ namespace MinGent
         }
     }
 
+    class AppAccessTool : AppTool
+    {
+        public override string Name { get { return "app_access"; } }
+        public override string Description { get { return "Ask to use a program the user opened themselves (one you didn't start). Without app it lists the open programs you can ask for. With app MinGent asks the user, and once they allow it, its windows show up in app_read for the rest of this chat. Web browsers, File Explorer, terminals and code editors can only be looked at."; } }
+        public override Dictionary<string, object> Schema { get { return Obj("app", P("string", "The program's name from the list, e.g. \"Notepad\""), false); } }
+        public override string Label(Dictionary<string, object> a) { string n = (S(a, "app") ?? "").Trim(); return n.Length == 0 ? "List the open programs" : "Ask to use " + (n.Length > 40 ? n.Substring(0, 40) + "\u2026" : n); }
+        public override bool Untrusted { get { return true; } }
+
+        static string TierNote(string tier)
+        {
+            return tier == AppTier.Look ? "look only" : "look, click and type";
+        }
+
+        public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
+        {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) return ToolOutcome.Fail("app control only works on Windows");
+            List<OtherApp> apps = AppControl.OtherApps();
+            Dictionary<string, AppGrant> have = Grants(ctx);
+            string want = (S(a, "app") ?? "").Trim();
+            if (want.Length == 0)
+            {
+                StringBuilder sb = new StringBuilder();
+                List<string> allowed = new List<string>();
+                foreach (OtherApp x in apps)
+                {
+                    if (x.Tier == AppTier.Never) continue;
+                    if (have.ContainsKey(x.Exe.ToLowerInvariant())) { allowed.Add(x.Name); continue; }
+                    sb.Append("- ").Append(x.Name).Append(" (").Append(x.Process).Append(", ").Append(x.Windows).Append(x.Windows == 1 ? " window" : " windows");
+                    if (x.Tier != AppTier.Full) sb.Append(", ").Append(TierNote(x.Tier));
+                    sb.Append(")\n");
+                }
+                string head = allowed.Count > 0 ? "Already allowed in this chat (see app_read): " + string.Join(", ", allowed.ToArray()) + ".\n" : "";
+                if (sb.Length == 0) return ToolOutcome.Ok(head + "No other programs you could ask for are open. Programs for mail, chat, passwords, money, remote access and Windows' own settings are never offered.", "No programs to ask for");
+                ToolOutcome lo = ToolOutcome.Ok(head + "Programs the user has open that you can ask to use:\n" + sb + "Ask with app_access app=\"<name>\" only when the task needs that program; MinGent asks the user first.", "Listed open programs");
+                lo.Untrusted = true;
+                return lo;
+            }
+            OtherApp hit = AppControl.FindApp(apps, want);
+            if (hit == null)
+            {
+                string tier = AppControl.TierFor(want.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? want.Substring(0, want.Length - 4) : want, "");
+                if (tier == AppTier.Never) return ToolOutcome.Fail("MinGent never lets the agent use " + want + ", because " + AppControl.NeverWhy(want) + ".");
+                return ToolOutcome.Fail("No open program matches \"" + want + "\". Call app_access without app to list them, and use a name from that list.");
+            }
+            if (hit.Tier == AppTier.Never) return ToolOutcome.Fail("MinGent never lets the agent use " + hit.Name + ", because " + AppControl.NeverWhy(hit.Process) + ".");
+            string key = hit.Exe.ToLowerInvariant();
+            if (!have.ContainsKey(key))
+            {
+                PermissionState ps = ctx.Session.Perms;
+                bool tainted = ps.WebGuard && ps.Tainted;
+                string kind = AppControl.Kind(hit.Process, "");
+                PermissionAsk ask = new PermissionAsk();
+                ask.Kind = "app";
+                ask.EvenInFull = true;
+                ask.AllowRemember = false;
+                ask.Category = "";
+                ask.High = hit.Tier != AppTier.Look;
+                ask.Title = (hit.Tier == AppTier.Look ? "Let the agent look at " : "Let the agent use ") + hit.Name;
+                ask.Detail = hit.Exe;
+                ask.Where = "Until this chat ends";
+                ask.Reason = hit.Tier == AppTier.Full ? "You opened this program yourself. The agent will see its windows and can click, type and press keys in them, like a person at your PC. Whatever the program can do, such as running macros or scripts, the agent can do in it too." :
+                             kind == "a web browser" ? "You opened this browser yourself. The agent will see its windows, including the pages you have open, but can't click or type in them; for the web it uses MinGent's own browser." :
+                             kind == "File Explorer" ? "You opened File Explorer yourself. The agent will see its windows, but can't click or type in them; it works with files through its own file tools." :
+                             kind == "a terminal" ? "You opened this terminal yourself. The agent will see what it shows, but can't click or type in it, so it can't run anything there." :
+                             "You opened this editor yourself. The agent will see its windows, but can't click or type in them; it changes files with its own file tools.";
+                if (tainted) ask.Reason += " This chat has read web content (" + ps.TaintSource + "), so make sure a page didn't slip in this request.";
+                ask.Key = "appgrant:" + key;
+                if (!ctx.Approve(ask))
+                {
+                    ToolOutcome d = ToolOutcome.Fail("The user did not allow using " + hit.Name + ". Don't try to reach it another way; continue without it or ask the user.");
+                    d.Denied = true;
+                    d.Summary = "Not allowed";
+                    return d;
+                }
+                AppGrant g = new AppGrant();
+                g.Exe = hit.Exe;
+                g.Name = hit.Name;
+                g.Tier = hit.Tier;
+                g.SawWeb = tainted;
+                AppSession st = State(ctx);
+                lock (st.Grants) st.Grants[key] = g;
+            }
+            List<AppWindow> mine = new List<AppWindow>();
+            List<AppWindow> all = All(ctx);
+            foreach (AppWindow w in all) if (w.Granted && string.Equals(AppControl.ExePath(w.Pid) ?? "", hit.Exe, StringComparison.OrdinalIgnoreCase)) mine.Add(w);
+            StringBuilder ws = new StringBuilder();
+            foreach (AppWindow w in mine) ws.Append(w.Ref(all)).Append(": \"").Append(w.Title).Append("\"\n");
+            ToolOutcome o = ToolOutcome.Ok("You may use " + hit.Name + " in this chat (" + TierNote(hit.Tier) + "). " +
+                (mine.Count > 0 ? "Its windows:\n" + ws + "Read one with app_read window=\"" + mine[0].Ref(all) + "\"." : "It has no window open right now; it shows up in app_read when it has one."),
+                "Allowed: " + hit.Name);
+            o.Untrusted = true;
+            return o;
+        }
+    }
+
     class AppReadTool : AppTool
     {
         public override string Name { get { return "app_read"; } }
-        public override string Description { get { return "Test a desktop program you started (with run_command, background=true): lists its windows and the controls of one window (buttons, fields, text, menus) with refs like a12 for app_click and app_type. Only programs started by you in this chat can be read, including ones Windows opened for your command (such as Store apps)."; } }
+        public bool Others;
+        public override string Description { get { return "Test a desktop program you started (with run_command, background=true): lists its windows and the controls of one window (buttons, fields, text, menus) with refs like a12 for app_click and app_type. Only programs started by you in this chat can be read, including ones Windows opened for your command (such as Store apps)" + (Others ? ", and programs the user allowed with app_access." : "."); } }
         public override Dictionary<string, object> Schema { get { return Obj("window", WindowArg(), false); } }
         public override string Label(Dictionary<string, object> a) { string w = S(a, "window"); return "Read the app window" + (string.IsNullOrEmpty(w) ? "" : " " + w); }
         public override bool Untrusted { get { return true; } }
 
         public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
         {
-            List<AppWindow> all = AppControl.Windows();
+            List<AppWindow> all = All(ctx);
             string err;
-            AppWindow w = AppControl.Pick(all, S(a, "window"), out err);
+            AppWindow w = AppControl.Pick(all, S(a, "window"), ctx.Cfg.OtherApps, out err);
             if (w == null) return ToolOutcome.Fail(err);
             string g = Gate(ctx, w, false);
             if (g != null) { ToolOutcome d = ToolOutcome.Fail(g); d.Denied = g.StartsWith("The user"); return d; }
-            string list = all.Count > 1 ? "Windows of your programs:\n" + AppControl.ListText(all) : null;
-            string wait = Waiting(w);
+            string list = all.Count > 1 ? "Windows you can use:\n" + AppControl.ListText(all) : null;
+            string wait = Waiting(ctx, w);
             if (wait != null) list = (list != null ? list : "") + wait;
             string text = Read(ctx, w, State(ctx), list);
             ToolOutcome o = ToolOutcome.Ok(text, w.Process + " window");
@@ -2371,7 +2815,7 @@ namespace MinGent
                 st.ShotW = iw;
                 st.ShotH = ih;
             }
-            string wait = Waiting(w);
+            string wait = Waiting(ctx, w);
             ToolOutcome o = ToolOutcome.Ok("Screenshot of \"" + w.Title + "\" (" + w.Process + "), " + iw + "x" + ih + " pixels. app_click x/y uses these pixel positions (0,0 is the window's top-left corner, including its title bar)." + (wait != null ? "\n" + wait : ""), iw + "x" + ih);
             o.Images = new List<ImageData>(new ImageData[] { img });
             o.Untrusted = true;
@@ -2429,12 +2873,15 @@ namespace MinGent
             if (r.Length > 0)
             {
                 if (!st.Refs.TryGetValue(r, out el)) return ToolOutcome.Fail(r + " is not a known ref. Call app_read first (refs change when the window changes).");
-                w = RefWindow(a, w, st, "ref");
+                string rwhy;
+                w = RefWindow(ctx, a, w, st, out rwhy, "ref");
+                if (w == null) return ToolOutcome.Fail(rwhy);
             }
             else if (a == null || !a.ContainsKey("x") || !a.ContainsKey("y")) return ToolOutcome.Fail("give a ref from app_read, or x and y from app_screenshot");
-            string waiting = Waiting(w);
+            string waiting = Waiting(ctx, w);
             if (waiting != null) return ToolOutcome.Fail(waiting);
-            string g = Gate(ctx, w, true);
+            bool leftOnly = mouse.Button == "left" && !mouse.Ctrl && !mouse.Shift && !mouse.Alt && mouse.HoldMs == 0;
+            string g = Gate(ctx, w, true, false, leftOnly ? "click" : "click+");
             if (g != null) return Denied(g);
             if (w.Terminal && mouse.Button != "left") return ToolOutcome.Fail("in a terminal, right and middle clicks paste the clipboard, so the agent can't use them. Type with app_type instead.");
             if (w.Terminal && el != null && ClipboardGuard.PasteLabel(el.Name)) return ToolOutcome.Fail("in a terminal, type the text with app_type instead of pasting it, so MinGent can check each command before it runs");
@@ -2488,6 +2935,7 @@ namespace MinGent
     class AppTypeTool : AppTool
     {
         public override string Name { get { return "app_type"; } }
+        protected override string Act { get { return "type"; } }
         public override string Description { get { return "Type text into a desktop program you started, like a person at the keyboard. Give a ref from app_read to click into that field first (otherwise it types where the cursor is). Set enter=true to press Enter afterwards."; } }
         public override Dictionary<string, object> Schema
         {
@@ -2513,9 +2961,10 @@ namespace MinGent
             string r = (S(a, "ref") ?? "").Trim();
             AppElement el = null;
             if (r.Length > 0 && !st.Refs.TryGetValue(r, out el)) return ToolOutcome.Fail(r + " is not a known ref. Call app_read first.");
-            if (el != null && st.RefsWindow != w.Hwnd && S(a, "window") == null)
-                foreach (AppWindow x in AppControl.Windows()) if (x.Hwnd == st.RefsWindow) w = x;
-            string waiting = Waiting(w);
+            string rerr;
+            w = RefWindow(ctx, a, w, st, out rerr, "ref");
+            if (w == null) return ToolOutcome.Fail(rerr);
+            string waiting = Waiting(ctx, w);
             if (waiting != null) return ToolOutcome.Fail(waiting);
             string g = Gate(ctx, w, true);
             if (g != null) { ToolOutcome d = ToolOutcome.Fail(g); d.Denied = g.StartsWith("The user"); return d; }
@@ -2578,6 +3027,7 @@ namespace MinGent
     class AppKeyTool : AppTool
     {
         public override string Name { get { return "app_key"; } }
+        protected override string Act { get { return "key"; } }
         public override string Description
         {
             get
@@ -2621,7 +3071,7 @@ namespace MinGent
             string err;
             AppWindow w = Find(ctx, a, out err);
             if (w == null) return ToolOutcome.Fail(err);
-            string waiting = Waiting(w);
+            string waiting = Waiting(ctx, w);
             if (waiting != null) return ToolOutcome.Fail(waiting);
             string g = Gate(ctx, w, true, escOnly);
             if (g != null) return Denied(g);
@@ -2654,6 +3104,7 @@ namespace MinGent
     class AppScrollTool : AppTool
     {
         public override string Name { get { return "app_scroll"; } }
+        protected override string Act { get { return "scroll"; } }
         public override string Description
         {
             get
@@ -2688,8 +3139,10 @@ namespace MinGent
             AppWindow w = Find(ctx, a, out err);
             if (w == null) return ToolOutcome.Fail(err);
             AppSession st = State(ctx);
-            w = RefWindow(a, w, st, "ref");
-            string waiting = Waiting(w);
+            string rwhy;
+            w = RefWindow(ctx, a, w, st, out rwhy, "ref");
+            if (w == null) return ToolOutcome.Fail(rwhy);
+            string waiting = Waiting(ctx, w);
             if (waiting != null) return ToolOutcome.Fail(waiting);
             string g = Gate(ctx, w, true);
             if (g != null) return Denied(g);
@@ -2709,6 +3162,7 @@ namespace MinGent
     class AppHoverTool : AppTool
     {
         public override string Name { get { return "app_hover"; } }
+        protected override string Act { get { return "hover"; } }
         public override string Description { get { return "Move the mouse over a control (ref from app_read) or a position (x/y from app_screenshot) in a desktop program you started, without clicking - to show a tooltip or open a hover menu."; } }
         public override Dictionary<string, object> Schema
         {
@@ -2729,8 +3183,10 @@ namespace MinGent
             AppWindow w = Find(ctx, a, out err);
             if (w == null) return ToolOutcome.Fail(err);
             AppSession st = State(ctx);
-            w = RefWindow(a, w, st, "ref");
-            string waiting = Waiting(w);
+            string rwhy;
+            w = RefWindow(ctx, a, w, st, out rwhy, "ref");
+            if (w == null) return ToolOutcome.Fail(rwhy);
+            string waiting = Waiting(ctx, w);
             if (waiting != null) return ToolOutcome.Fail(waiting);
             string g = Gate(ctx, w, true);
             if (g != null) return Denied(g);
@@ -2748,6 +3204,7 @@ namespace MinGent
     class AppDragTool : AppTool
     {
         public override string Name { get { return "app_drag"; } }
+        protected override string Act { get { return "drag"; } }
         public override string Description
         {
             get
@@ -2778,8 +3235,10 @@ namespace MinGent
             AppWindow w = Find(ctx, a, out err);
             if (w == null) return ToolOutcome.Fail(err);
             AppSession st = State(ctx);
-            w = RefWindow(a, w, st, "ref", "to_ref");
-            string waiting = Waiting(w);
+            string rwhy;
+            w = RefWindow(ctx, a, w, st, out rwhy, "ref", "to_ref");
+            if (w == null) return ToolOutcome.Fail(rwhy);
+            string waiting = Waiting(ctx, w);
             if (waiting != null) return ToolOutcome.Fail(waiting);
             string g = Gate(ctx, w, true);
             if (g != null) return Denied(g);

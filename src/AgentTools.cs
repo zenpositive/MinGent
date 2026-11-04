@@ -1417,6 +1417,23 @@ namespace MinGent
     class RunCommandTool : AgentTool
     {
         static readonly Dictionary<string, string> HelperEnv = new Dictionary<string, string> { { "BROWSER", "none" } };
+        public bool Sandboxed;
+
+        public static string GitAlarm(ToolContext ctx, ShellJob j)
+        {
+            if (j == null || j.GitWarned || !j.Sandboxed || !Sandbox.GitReplaced(j.GitWatch)) return null;
+            j.GitWarned = true;
+            if (ctx != null && ctx.Ui != null) ctx.Ui.Notice("A sandboxed command replaced the .git folder in " + Path.GetDirectoryName(j.GitWatch) + ". Git run outside the sandbox there, by you, your editor or an approved command, would use what is in it now, hooks and settings included. Check it before you use git in that folder.", 2);
+            return "[MinGent] Warning: this sandboxed command replaced the workspace's .git folder. Git run outside the sandbox there would use it, hooks and settings included. MinGent told the user. Don't run git outside the sandbox in that folder until the user has checked it.";
+        }
+
+        public static string SandboxHint(ShellJob j, string output)
+        {
+            if (j == null || !j.Sandboxed || j.ExitCode == 0 || string.IsNullOrEmpty(output) || !Sandbox.Blocked.IsMatch(output)) return null;
+            return "[MinGent] The sandbox may have blocked this. Sandboxed commands can change files only in the workspace" +
+                (j.SandboxNote != null ? " (and not even there right now: " + j.SandboxNote + ")" : ", not in its .git folder,") +
+                " and in MinGent's own temp and cache folders, and they can't change other programs, settings or the user's saved sign-ins. If the command needs more, run it again with outside_sandbox=true; MinGent asks the user first.";
+        }
 
         static ToolOutcome Waited(ToolContext ctx, double seconds, string said, int timeout)
         {
@@ -1444,12 +1461,18 @@ namespace MinGent
             {
                 Dictionary<string, object> shell = P("string", "powershell (default) or cmd");
                 shell["enum"] = Json.A("powershell", "cmd");
-                return Obj("command", P("string", "The command or script to run"), true,
+                Dictionary<string, object> o = Obj("command", P("string", "The command or script to run"), true,
                            "description", P("string", "A few plain words saying what the command does, shown to the user when MinGent asks before running it, e.g. \"Install the project's packages\""), false,
                            "cwd", P("string", "Working folder (default: the workspace)"), false,
                            "shell", shell, false,
                            "timeout_seconds", P("integer", "Stop the command after this many seconds (default 120, max 1800)"), false,
                            "background", P("boolean", "Start it in the background and return immediately"), false);
+                if (Sandboxed)
+                {
+                    Dictionary<string, object> props = (Dictionary<string, object>)o["properties"];
+                    props["outside_sandbox"] = P("boolean", "Run it without the sandbox. Only for a command that needs to change files outside the workspace, change other programs or settings, or use the user's saved sign-ins, usually after it failed in the sandbox. MinGent asks the user first.");
+                }
+                return o;
             }
         }
         public override string Label(Dictionary<string, object> a)
@@ -1521,6 +1544,8 @@ namespace MinGent
             }
             PermissionState ps = ctx.Session.Perms;
             PermissionAsk ask = null;
+            bool terminal = !ctx.Session.IsHelper && TerminalRules.OpensTerminal(cmd);
+            bool askOut = Sandboxed && danger == null && (B(a, "outside_sandbox", false) || terminal);
             if (danger != null)
             {
                 ask = new PermissionAsk();
@@ -1529,6 +1554,14 @@ namespace MinGent
                 ask.AllowRemember = false;
                 if (category == PermissionCategory.Never) ask.Never = true;
                 else ask.Category = ctx.Guarded(category ?? "");
+            }
+            else if (askOut)
+            {
+                ask = new PermissionAsk();
+                ask.High = true;
+                ask.Category = "";
+                ask.Reason = terminal ? "It opens a terminal window, and MinGent can't sandbox what gets typed into it." : "The agent asked to run it without the sandbox, so it can change files outside the work folder, other programs and settings.";
+                if (ps.WebGuard && ps.Tainted) ask.Reason += " This chat has read web content (" + ps.TaintSource + "), so make sure a page didn't slip in this request.";
             }
             else if (!ps.Auto)
             {
@@ -1540,14 +1573,17 @@ namespace MinGent
                 ask = new PermissionAsk();
                 ask.Reason = "This chat has read web content (" + ps.TaintSource + "), so commands need your OK in case a page tried to slip in instructions.";
             }
+            bool quietlyAllowed = danger != null && ask != null && !ps.Full && ps.Auto && !ask.Never && ps.AutoAllows(ask.Category);
+            bool low = Sandboxed && !askOut && (danger == null || quietlyAllowed);
+            string where = "Runs in " + cwd + (shell == "cmd" ? " with cmd.exe" : " with " + Shell.PowerShellName) + (!Sandboxed ? "" : low ? ", in the sandbox" : ", outside the sandbox");
             if (ask != null)
             {
                 ask.Kind = "command";
-                ask.Title = bg ? "Start a background command" : "Run a command";
-                ask.Summary = PermissionAsk.PlainSummary(S(a, "description"), 160);
+                ask.Title = askOut ? (bg ? "Start a background command outside the sandbox" : "Run a command outside the sandbox") : bg ? "Start a background command" : "Run a command";
+                ask.Summary = CommandWords.Explain(S(a, "description"), original);
                 ask.Detail = cmd;
-                ask.Where = "Runs in " + cwd + (shell == "cmd" ? " with cmd.exe" : " with " + Shell.PowerShellName);
-                ask.Key = danger != null ? "" : "cmd:" + shell + ":" + cmd.Trim();
+                ask.Where = where;
+                ask.Key = danger != null ? "" : (askOut ? "sbx:" : "cmd:") + shell + ":" + cmd.Trim();
                 if (!ctx.Approve(ask))
                 {
                     ToolOutcome d = ToolOutcome.Fail("The user chose not to run this command. Do not run it another way; continue without it or ask the user.");
@@ -1558,11 +1594,43 @@ namespace MinGent
             }
             if (plainWait) return Waited(ctx, waitFor, said, timeout);
             bool launch = danger != null && category == PermissionCategory.Launch;
-            bool terminal = !ctx.Session.IsHelper && TerminalRules.OpensTerminal(cmd);
             if (terminal) AppControl.BeforeTerminal();
+            string sandboxNote = null;
+            if (low)
+            {
+                if (Sandbox.Pending(ctx.Workspace)) ctx.Ui.ToolOutput(ctx.Call, "Setting up the sandbox for this folder. This happens once and can take a while in a big folder.");
+                sandboxNote = Sandbox.Prepare(ctx.Workspace, ctx.Ct, delegate (int n) { ctx.Ui.ToolOutput(ctx.Call, "Setting up the sandbox for this folder: " + n.ToString("N0", CultureInfo.InvariantCulture) + " files and folders so far. This happens once."); });
+                if (ctx.Ct.IsCancelled) return ToolOutcome.Fail("stopped by the user");
+            }
+            Dictionary<string, string> env = ctx.Session.IsHelper ? HelperEnv : null;
+            string gitWatch = low ? Sandbox.GitWatch(ctx.Workspace) : null;
             DateTime launchAt = DateTime.UtcNow;
-            ShellJob j = Shell.Start(cmd, shell, cwd, bg, ctx.Session.IsHelper ? HelperEnv : null, out err);
+            bool lowFailed;
+            ShellJob j = Shell.Start(cmd, shell, cwd, bg, env, low, out err, out lowFailed);
+            if (j == null && lowFailed)
+            {
+                PermissionAsk fb = new PermissionAsk();
+                fb.Kind = "command";
+                fb.High = true;
+                fb.Category = "";
+                fb.Title = bg ? "Start a background command outside the sandbox" : "Run a command outside the sandbox";
+                fb.Reason = "MinGent couldn't start the sandbox: " + err + ".";
+                fb.Summary = CommandWords.Explain(S(a, "description"), original);
+                fb.Detail = cmd;
+                fb.Where = "Runs in " + cwd + (shell == "cmd" ? " with cmd.exe" : " with " + Shell.PowerShellName) + ", outside the sandbox";
+                fb.Key = "sbx:" + shell + ":" + cmd.Trim();
+                if (!ctx.Approve(fb))
+                {
+                    ToolOutcome d = ToolOutcome.Fail("Not run: MinGent couldn't start the sandbox (" + err + "), and the user chose not to run the command outside it. Do not run it another way; continue without it or ask the user.");
+                    d.Denied = true;
+                    d.Summary = "Not run";
+                    return d;
+                }
+                launchAt = DateTime.UtcNow;
+                j = Shell.Start(cmd, shell, cwd, bg, env, false, out err, out lowFailed);
+            }
             if (j == null) return ToolOutcome.Fail(err);
+            if (j.Sandboxed) { j.SandboxNote = sandboxNote; j.GitWatch = gitWatch; }
             if (terminal) AppControl.WatchTerminals(launchAt, DateTime.UtcNow.AddSeconds(20));
             if (launch && bg) AppControl.LaunchWindow(launchAt, launchAt.AddSeconds(30));
             bool network = CommandSafety.LooksNetwork(cmd);
@@ -1576,6 +1644,10 @@ namespace MinGent
                 if (j.Exited)
                 {
                     string h0 = CommandHelp.Hint(original, first, j.ExitCode, false, shell);
+                    string sh0 = SandboxHint(j, first);
+                    if (sh0 != null) h0 = h0 != null ? h0 + "\n" + sh0 : sh0;
+                    string ga0 = GitAlarm(ctx, j);
+                    if (ga0 != null) h0 = h0 != null ? h0 + "\n" + ga0 : ga0;
                     string bh;
                     string bk = BlockCheck.FromCommand(original, first, out bh);
                     ToolOutcome fo = ToolOutcome.Ok(prefix + "The command finished right away (exit code " + j.ExitCode + "):\n" + Shell.ForModel(first, bk == "bot" ? 1200 : 12000) + (h0 != null ? "\n" + h0 : ""), "Exited " + j.ExitCode);
@@ -1634,6 +1706,10 @@ namespace MinGent
             string hint = CommandHelp.Hint(original, output, j.ExitCode, timedOut, shell);
             if (hint != null) sb.Append('\n').Append(hint);
             else if (timedOut) sb.Append("\nThe command was stopped. For long-running processes use background=true.");
+            string boxed = timedOut || waitingForInput ? null : SandboxHint(j, output);
+            if (boxed != null) sb.Append('\n').Append(boxed);
+            string alarm = GitAlarm(ctx, j);
+            if (alarm != null) sb.Append('\n').Append(alarm);
             ToolOutcome o = ToolOutcome.Ok(sb.ToString(), block == "bot" ? "Blocked by bot protection (" + status + ")" : status);
             o.Error = false;
             o.Failed = j.ExitCode != 0 || timedOut || waitingForInput || j.Ending.Length > 0 || block != null;
@@ -1689,8 +1765,13 @@ namespace MinGent
             }
             else
             {
-                string hint = CommandHelp.Hint(j.Command, j.Text(Math.Max(0, j.Length - 20000)), j.ExitCode, false, j.Shell);
+                string tail = j.Text(Math.Max(0, j.Length - 20000));
+                string hint = CommandHelp.Hint(j.Command, tail, j.ExitCode, false, j.Shell);
                 if (hint != null && j.ExitCode != 0) sb.Append('\n').Append(hint);
+                string boxed = j.Ending.Length > 0 ? null : RunCommandTool.SandboxHint(j, tail);
+                if (boxed != null) sb.Append('\n').Append(boxed);
+                string alarm = RunCommandTool.GitAlarm(ctx, j);
+                if (alarm != null) sb.Append('\n').Append(alarm);
             }
             ToolOutcome o = ToolOutcome.Ok(sb.ToString(), state);
             o.Untrusted = CommandSafety.LooksNetwork(j.Command);
@@ -1832,7 +1913,7 @@ namespace MinGent
             get
             {
                 return (inBrowser
-                           ? "Search the web in the built-in browser pane (Google; Bing or DuckDuckGo when Google has nothing or asks for a check). The results page stays open there, in place of the page that was open. "
+                           ? "Search the web in the built-in browser pane (Google; Bing or DuckDuckGo when Google has nothing or its CAPTCHA is skipped). The results page stays open there, in place of the page that was open. "
                            : "Search the web (DuckDuckGo, or Bing when DuckDuckGo has nothing). ") +
                        "Returns up to 10 results with title, address, date when known and a short snippet. " +
                        "For news, releases, versions, prices or anything else that changes, set recent or put the year in the query. Snippets are short and can be out of date: " +
@@ -1867,7 +1948,14 @@ namespace MinGent
             string res = null;
             if (inBrowser && ctx.Browser != null && ctx.Browser.Available && (ctx.Session == null || !ctx.Session.IsHelper))
             {
-                res = Web.BrowserSearch(ctx.Browser, q, recent, ctx.Ct, out n, out state);
+                res = Web.BrowserSearch(ctx.Browser.OpenSearch, delegate (CancelToken c) { return GoogleCheck(ctx); }, q, recent, ctx.Ct, out n, out state);
+                if (state == "stopped")
+                {
+                    ToolOutcome st = ToolOutcome.Fail("Stopped.");
+                    st.Summary = "Stopped";
+                    return st;
+                }
+                if (state == "captcha") return HandCheck(ctx, res);
                 if (n == 0 && state == "browser") res = null;
             }
             if (res == null) res = Web.Search(q, recent, ctx.Ct, out n, out state);
@@ -1876,6 +1964,51 @@ namespace MinGent
             o.Untrusted = true;
             o.Error = n == 0;
             if (n == 0) o.Block = state == "refused" || state == "unrelated" ? "engines" : state;
+            return o;
+        }
+
+        static Web.CheckAnswer GoogleCheck(ToolContext ctx)
+        {
+            AgentSession s = ctx.Session;
+            if (ctx.Cfg.TryCaptchas && s != null && !s.GoogleHanded)
+            {
+                s.GoogleHanded = true;
+                return Web.CheckAnswer.Agent;
+            }
+            if (ctx.Ui == null) return Web.CheckAnswer.Skipped;
+            IBrowserBridge br = ctx.Browser;
+            CancelToken ct = ctx.Ct;
+            UserQuestion uq = new UserQuestion();
+            uq.Wait = true;
+            uq.FreeText = false;
+            uq.Host = "www.google.com";
+            uq.Title = "Solve Google's CAPTCHA to search with Google";
+            uq.Detail = "It's in the browser pane. Once you're through, the search carries on with Google by itself. Skip it and the agent searches with Bing instead.";
+            uq.Options.Add("Done");
+            uq.Options.Add("Skip Google");
+            uq.DoneWhen = delegate { return (br.CurrentUrl ?? "").IndexOf("/sorry/", StringComparison.OrdinalIgnoreCase) < 0 && br.CheckCleared(ct); };
+            br.ShowToUser();
+            ctx.Ui.Phase("Waiting for you to solve Google's CAPTCHA");
+            UserAnswer a = ctx.Ui.AskUser(uq, ct);
+            if (a == null || a.Cancelled || ct.IsCancelled) return Web.CheckAnswer.Stopped;
+            if (a.Choice == 1) return Web.CheckAnswer.Skipped;
+            if (a.Choice < 0 && !a.Auto) return Web.CheckAnswer.Wrote;
+            ctx.Ui.Phase("Searching the web");
+            return Web.CheckAnswer.Cleared;
+        }
+
+        static ToolOutcome HandCheck(ToolContext ctx, string lead)
+        {
+            string text;
+            string err = ctx.Browser.Read(ctx.Ct, out text);
+            StringBuilder sb = new StringBuilder(lead);
+            sb.Append(" CAPTCHA mode is on, so try to get through it yourself. Once you're through, Google shows the results there: read them with browser_read.");
+            if (err == null && !string.IsNullOrEmpty(text)) sb.Append("\n\n").Append(text);
+            string note = ctx.Browser.PageNote;
+            if (!string.IsNullOrEmpty(note)) sb.Append("\n\n").Append(note);
+            ToolOutcome o = ToolOutcome.Ok(sb.ToString(), "Google asks for a CAPTCHA");
+            o.Untrusted = true;
+            o.Snapshot = err == null && text != null && text.IndexOf("\nURL: ", StringComparison.Ordinal) >= 0;
             return o;
         }
     }
@@ -2326,25 +2459,35 @@ namespace MinGent
 
         public delegate string PageOpener(string url, CancelToken ct, out string html, out string finalUrl);
 
+        public enum CheckAnswer { Stopped, Cleared, Skipped, Wrote, Agent }
+
+        public delegate CheckAnswer GoogleCheck(CancelToken ct);
+
         public static string BrowserSearch(IBrowserBridge br, string query, string recent, CancelToken ct, out int count, out string state)
         {
-            return BrowserSearch(br.OpenSearch, query, recent, ct, out count, out state);
+            return BrowserSearch(br.OpenSearch, null, query, recent, ct, out count, out state);
         }
 
         public static string BrowserSearch(PageOpener open, string query, string recent, CancelToken ct, out int count, out string state)
+        {
+            return BrowserSearch(open, null, query, recent, ct, out count, out state);
+        }
+
+        public static string BrowserSearch(PageOpener open, GoogleCheck check, string query, string recent, CancelToken ct, out int count, out string state)
         {
             count = 0;
             state = "ok";
             string df = recent == "day" ? "d" : recent == "week" ? "w" : recent == "month" ? "m" : recent == "year" ? "y" : null;
             string when = recent == null || recent.Length == 0 ? "" : " (from the past " + recent + ")";
-            bool refused = false, normal = false, unrelated = false, opened = false;
+            bool refused = false, normal = false, unrelated = false, opened = false, asked = false;
             string err = null, note = "";
             List<string> engines = new List<string>();
             if (DateTime.UtcNow >= GoogleRest) engines.Add("Google");
             engines.Add("Bing");
             engines.Add("DuckDuckGo");
-            foreach (string engine in engines)
+            for (int k = 0; k < engines.Count; k++)
             {
+                string engine = engines[k];
                 if (ct != null && ct.IsCancelled) { state = "browser"; return "Stopped."; }
                 bool google = engine == "Google", bing = engine == "Bing";
                 string url = google ? GoogleBase + Uri.EscapeDataString(query) + GoogleFilter(recent)
@@ -2378,7 +2521,21 @@ namespace MinGent
                                 : bing ? BingRefusal.IsMatch(html ?? "") : DuckRefusal.IsMatch(html ?? ""))
                 {
                     refused = true;
-                    if (google) GoogleRest = DateTime.UtcNow.AddMinutes(30);
+                    if (google && check != null && !asked)
+                    {
+                        asked = true;
+                        CheckAnswer a = check(ct);
+                        if (a == CheckAnswer.Stopped || (ct != null && ct.IsCancelled)) { state = "stopped"; return "Stopped."; }
+                        if (a == CheckAnswer.Agent) { state = "captcha"; return "Google answered this search with a CAPTCHA instead of results. The check is open in the browser pane."; }
+                        if (a == CheckAnswer.Cleared) { k--; continue; }
+                        if (a == CheckAnswer.Skipped)
+                        {
+                            GoogleRest = DateTime.UtcNow.AddMinutes(30);
+                            note = "(The user skipped Google's CAPTCHA, so this comes from another engine. MinGent tries Google again in 30 minutes.)\n";
+                        }
+                        else note = "(Google asked for a CAPTCHA, and the user wrote to you instead of solving it. Their message follows: do what it says. Meanwhile this comes from another engine.)\n";
+                    }
+                    else if (google) GoogleRest = DateTime.UtcNow.AddMinutes(30);
                 }
                 else normal = true;
             }
@@ -3163,7 +3320,7 @@ namespace MinGent
             return ctx.Approve(a) ? null : "The user did not allow browsing " + host + ".";
         }
 
-        public const int CaptchaLimit = 3;
+        public const int CaptchaLimit = 5;
 
         protected static string CaptchaTurn(ToolContext ctx)
         {
@@ -3331,6 +3488,23 @@ namespace MinGent
             return fresh;
         }
 
+        protected static void LookAfterCaptcha(ToolContext ctx, ToolOutcome o)
+        {
+            if (o == null || o.Error || !ctx.Cfg.TryCaptchas || !ctx.Cfg.Vision || ctx.Session.IsHelper || ctx.Browser == null) return;
+            if (!ctx.Ct.Sleep(900)) return;
+            ImageData img;
+            int w, h;
+            string e = ctx.Browser.CaptchaShot(ctx.Ct, out img, out w, out h);
+            bool zoomed = e == null && img != null;
+            if (e == null && img == null) e = ctx.Browser.Screenshot(ctx.Ct, out img, out w, out h);
+            if (e != null || img == null) return;
+            Looked(ctx);
+            ctx.Session.BrowserMovedTo = null;
+            o.Images = new List<ImageData>(new ImageData[] { img });
+            o.AddNote(zoomed ? "This is the CAPTCHA now, zoomed in (picture below, " + w + " x " + h + " pixels). Positions for the next browser_click are pixels in this picture."
+                             : "The CAPTCHA is gone from view; this is the page now (picture below, " + w + " x " + h + " pixels).");
+        }
+
         protected static ToolOutcome Act(ToolContext ctx, string err, string summary, string label)
         {
             string dl = HandleDownload(ctx);
@@ -3478,6 +3652,9 @@ namespace MinGent
                 {
                     props.AddRange(new object[] { "x", P("number", "Pixels from the left of the last screenshot (only when there is no ref)"), false });
                     props.AddRange(new object[] { "y", P("number", "Pixels from the top of the last screenshot (only when there is no ref)"), false });
+                    Dictionary<string, object> pts = P("array", "CAPTCHA picture grids only: several [x, y] positions from the last screenshot, clicked in order");
+                    pts["items"] = Json.O("type", "array", "items", Json.O("type", "number"));
+                    props.AddRange(new object[] { "points", pts, false });
                 }
                 props.AddRange(new object[] { "button", button, false });
                 props.AddRange(new object[] { "double", P("boolean", "Double-click"), false });
@@ -3490,14 +3667,75 @@ namespace MinGent
         public override string Label(Dictionary<string, object> a)
         {
             string r = S(a, "ref");
+            List<double[]> many = Points(a);
+            if (many != null && many.Count > 0) return "Click " + many.Count + (many.Count == 1 ? " spot" : " spots") + " in the CAPTCHA";
             string verb = B(a, "double", false) || I(a, "clicks", 1) == 2 ? "Double-click " : (S(a, "button") ?? "").StartsWith("right", StringComparison.OrdinalIgnoreCase) || B(a, "right", false) ? "Right-click " : "Click ";
             if (string.IsNullOrEmpty(r) && a != null && a.ContainsKey("x")) return verb + "at " + D(a, "x", 0).ToString("0", CultureInfo.InvariantCulture) + ", " + D(a, "y", 0).ToString("0", CultureInfo.InvariantCulture);
             return verb + r;
         }
 
+        static List<double[]> Points(Dictionary<string, object> a)
+        {
+            List<object> raw = a != null ? Json.List(a, "points") : null;
+            if (raw == null) return null;
+            List<double[]> l = new List<double[]>();
+            foreach (object o in raw)
+            {
+                List<object> pair = o as List<object>;
+                Dictionary<string, object> obj = o as Dictionary<string, object>;
+                double x, y;
+                if (pair != null && pair.Count >= 2 && pair[0] is double && pair[1] is double) { x = (double)pair[0]; y = (double)pair[1]; }
+                else if (obj != null && obj.ContainsKey("x") && obj.ContainsKey("y")) { x = Json.Num(obj, "x"); y = Json.Num(obj, "y"); }
+                else return new List<double[]>();
+                l.Add(new double[] { x, y });
+            }
+            return l;
+        }
+
+        ToolOutcome ClickMany(ToolContext ctx, List<double[]> pts, MouseSpec mouse)
+        {
+            if (pts.Count == 0) return ToolOutcome.Fail("points must be a list of [x, y] pairs, like [[120, 240], [260, 240]]");
+            if (pts.Count > 16) return ToolOutcome.Fail("give at most 16 points at once");
+            ToolOutcome stale = Stale(ctx);
+            if (stale != null) return stale;
+            string g = Gate(ctx, null);
+            if (g != null) { ToolOutcome d = ToolOutcome.Fail(g); d.Denied = true; return d; }
+            foreach (double[] p in pts)
+            {
+                string kind;
+                bool sens;
+                string e = ctx.Browser.PointInfo(p[0], p[1], ctx.Ct, out kind, out sens);
+                if (e != null) return ToolOutcome.Fail(e);
+                if (!kind.StartsWith("a CAPTCHA box", StringComparison.Ordinal))
+                    return ToolOutcome.Fail("points is only for clicking several tiles of a CAPTCHA picture grid, and " + p[0].ToString("0", CultureInfo.InvariantCulture) + ", " + p[1].ToString("0", CultureInfo.InvariantCulture) + " is not inside one. Click other things one at a time.");
+            }
+            if (ctx.Session.IsHelper) return HelperCaptcha();
+            if (!ctx.Cfg.TryCaptchas) return ToolOutcome.Fail("These positions are inside a CAPTCHA. The agent only solves CAPTCHAs when CAPTCHA mode is on in Settings: ask the user to solve it.");
+            string stop = CaptchaTurn(ctx);
+            if (stop != null) return ToolOutcome.Fail(stop);
+            string summary = null, err = null;
+            for (int i = 0; i < pts.Count; i++)
+            {
+                if (i > 0 && !ctx.Ct.Sleep(350)) return ToolOutcome.Fail("stopped");
+                err = ctx.Browser.ClickAt(pts[i][0], pts[i][1], mouse, ctx.Ct, out summary);
+                if (err != null) { err = "Clicked " + i + " of " + pts.Count + " points, then: " + err; break; }
+            }
+            ToolOutcome o = Act(ctx, err, err == null ? "Clicked " + pts.Count + (pts.Count == 1 ? " spot" : " spots") + " in the CAPTCHA, in order." : summary, "Clicked " + pts.Count + " spots in the CAPTCHA");
+            LookAfterCaptcha(ctx, o);
+            return o;
+        }
+
         public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
         {
             string r = (S(a, "ref") ?? "").Trim();
+            List<double[]> many = byPosition && r.Length == 0 ? Points(a) : null;
+            if (many != null)
+            {
+                string perr;
+                MouseSpec pm = MouseSpec.From(S(a, "button"), B(a, "right", false), B(a, "double", false), I(a, "clicks", 1), S(a, "modifiers"), I(a, "hold_ms", 0), out perr);
+                if (pm == null) return ToolOutcome.Fail(perr);
+                return ClickMany(ctx, many, pm);
+            }
             bool pos = byPosition && r.Length == 0 && a != null && a.ContainsKey("x") && a.ContainsKey("y");
             if (r.Length == 0 && !pos) return ToolOutcome.Fail(byPosition ? "give ref (like e12, from browser_read), or x and y (pixels in the last browser_screenshot)" : "ref is required");
             string merr;
@@ -3864,13 +4102,23 @@ namespace MinGent
         {
             string g = Gate(ctx, null);
             if (g != null) { ToolOutcome d = ToolOutcome.Fail(g); d.Denied = true; return d; }
-            ImageData img;
-            int w, h;
-            string err = ctx.Browser.Screenshot(ctx.Ct, out img, out w, out h);
+            ImageData img = null;
+            int w = 0, h = 0;
+            string err = null;
+            bool zoomed = false;
+            if (ctx.Cfg.TryCaptchas && !ctx.Session.IsHelper)
+            {
+                err = ctx.Browser.CaptchaShot(ctx.Ct, out img, out w, out h);
+                zoomed = err == null && img != null;
+                if (!zoomed) err = null;
+            }
+            if (!zoomed) err = ctx.Browser.Screenshot(ctx.Ct, out img, out w, out h);
             if (err != null) return ToolOutcome.Fail(err);
             Looked(ctx);
             ctx.Session.BrowserMovedTo = null;
-            ToolOutcome o = ToolOutcome.Ok("Screenshot of " + ctx.Browser.CurrentUrl + " (shown below, " + w + " x " + h + " pixels). To click something that browser_read does not list, call browser_click with x and y in these pixels.", "Screenshot");
+            ToolOutcome o = ToolOutcome.Ok(zoomed
+                ? "Screenshot of the CAPTCHA on " + ctx.Browser.CurrentUrl + ", zoomed in so it is easier to see (shown below, " + w + " x " + h + " pixels). Click in it with browser_click and x and y in these pixels; to pick several picture tiles at once, give points."
+                : "Screenshot of " + ctx.Browser.CurrentUrl + " (shown below, " + w + " x " + h + " pixels). To click something that browser_read does not list, call browser_click with x and y in these pixels.", zoomed ? "Screenshot of the CAPTCHA" : "Screenshot");
             o.Images = new List<ImageData>(new ImageData[] { img });
             o.Untrusted = true;
             return o;
@@ -4079,7 +4327,13 @@ namespace MinGent
             }
             string answer = ans.Choice >= 0 && ans.Choice < q.Options.Count ? q.Options[ans.Choice] : (ans.Text ?? "").Trim();
             string shown = answer.Replace('\n', ' ');
-            return ToolOutcome.Ok("The user answered: " + answer, shown.Length > 120 ? shown.Substring(0, 120) + "..." : shown);
+            string said = "The user answered: " + answer;
+            if (StopWords.Says(answer))
+            {
+                string stopped = ctx.Session.StopWork();
+                said += "\n\n" + AgentSession.StopNote + (stopped.Length > 0 ? "\n\n" + stopped : "");
+            }
+            return ToolOutcome.Ok(said, shown.Length > 120 ? shown.Substring(0, 120) + "..." : shown);
         }
     }
 
@@ -4185,6 +4439,11 @@ namespace MinGent
             if (said.Length == 0)
                 return ToolOutcome.Ok("The user wants to keep planning but did not say what to change." + mode + " End your turn now with one short question asking what they would like to change in the plan.", "Keep planning");
             string shown = said.Replace('\n', ' ');
+            if (StopWords.Says(said))
+            {
+                string stopped = ctx.Session.StopWork();
+                return ToolOutcome.Ok("The user said: " + said + "\n\n" + AgentSession.StopNote + (stopped.Length > 0 ? "\n\n" + stopped : ""), shown.Length > 120 ? shown.Substring(0, 120) + "..." : shown);
+            }
             return ToolOutcome.Ok("The user wants to keep planning and said: " + said + mode + "\nRevise the plan (research more if you need to), then call present_plan again.", shown.Length > 120 ? shown.Substring(0, 120) + "..." : shown);
         }
     }
@@ -4192,13 +4451,13 @@ namespace MinGent
     class ClosePaneTool : AgentTool
     {
         public override string Name { get { return "close_pane"; } }
-        public override string Description { get { return "Close MinGent's browser pane or notes pane. Use it when the user asks you to close one, or when you are done with a pane and it shows nothing the user needs (for example the browser after you finished checking the pages you opened). Set user_asked to true only when the user asked you to close it. Closing only hides the pane: open pages and notes stay, and it opens again when needed."; } }
+        public override string Description { get { return "Close MinGent's browser pane, the console under the browser page, or the notes pane. Use it when the user asks you to close one, or when you are done with a pane and it shows nothing the user needs (for example the browser after you finished checking the pages you opened). Set user_asked to true only when the user asked you to close it. Closing only hides the pane: open pages and notes stay, and it opens again when needed."; } }
         public override Dictionary<string, object> Schema
         {
             get
             {
-                Dictionary<string, object> pane = P("string", "browser, notes or both");
-                pane["enum"] = Json.A("browser", "notes", "both");
+                Dictionary<string, object> pane = P("string", "browser, console, notes or both (browser and notes)");
+                pane["enum"] = Json.A("browser", "console", "notes", "both");
                 return Obj("pane", pane, true, "user_asked", P("boolean", "true when the user asked you to close it"), false);
             }
         }
@@ -4207,6 +4466,7 @@ namespace MinGent
         {
             string p = (S(a, "pane") ?? S(a, "target") ?? S(a, "name") ?? "").Trim().ToLowerInvariant();
             if (p.Contains("both") || p.Contains("all") || (p.Contains("browser") && (p.Contains("note") || p.Contains("editor")))) return "both";
+            if (p.Contains("console") || p.Contains("devtools") || p.Contains("drawer")) return "console";
             if (p.Contains("note") || p.Contains("editor") || p.Contains("pad") || p.Contains("text")) return "notes";
             if (p.Contains("browser") || p.Contains("web") || p.Contains("page")) return "browser";
             return p;
@@ -4215,16 +4475,21 @@ namespace MinGent
         public override string Label(Dictionary<string, object> a)
         {
             string p = Pane(a);
-            return p == "notes" ? "Close the notes" : p == "both" ? "Close the browser and notes" : "Close the browser";
+            return p == "notes" ? "Close the notes" : p == "both" ? "Close the browser and notes" : p == "console" ? "Close the console" : "Close the browser";
         }
 
         public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
         {
             string p = Pane(a);
-            if (p != "browser" && p != "notes" && p != "both") return ToolOutcome.Fail("pane must be browser, notes or both");
+            if (p != "browser" && p != "notes" && p != "both" && p != "console") return ToolOutcome.Fail("pane must be browser, console, notes or both");
             bool asked = B(a, "user_asked", false);
             List<string> said = new List<string>();
             bool closed = false, kept = false;
+            if (p == "console")
+            {
+                string s = ctx.Browser == null ? "The console is not open." : ctx.Browser.CloseConsoleForAgent(asked);
+                return ToolOutcome.Ok(s, s.StartsWith("Closed", StringComparison.Ordinal) ? "Closed" : s.IndexOf("stays open", StringComparison.Ordinal) >= 0 ? "Left open for the user" : "Already closed");
+            }
             if (p != "notes")
             {
                 string s = ctx.Browser == null ? "The browser pane is not open." : ctx.Browser.CloseForAgent(asked);
@@ -4273,6 +4538,30 @@ namespace MinGent
 
     static class AgentToolbox
     {
+        public static void UseOtherApps(List<AgentTool> tools)
+        {
+            if (tools == null) return;
+            int at = -1;
+            for (int i = 0; i < tools.Count; i++)
+            {
+                if (tools[i] is AppAccessTool) return;
+                AppReadTool r = tools[i] as AppReadTool;
+                if (r != null) { r.Others = true; at = i; }
+            }
+            if (at < 0) return;
+            tools.Insert(at + 1, new AppAccessTool());
+        }
+
+        public static void UseSandbox(List<AgentTool> tools, bool on)
+        {
+            if (tools == null) return;
+            foreach (AgentTool t in tools)
+            {
+                RunCommandTool r = t as RunCommandTool;
+                if (r != null) r.Sandboxed = on;
+            }
+        }
+
         public static List<AgentTool> ForHelper(string kind) { return ForHelper(kind, true); }
 
         public static List<AgentTool> ForHelper(string kind, bool web) { return ForHelper(kind, web, false, false); }

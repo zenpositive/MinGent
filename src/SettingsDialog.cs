@@ -26,10 +26,41 @@ namespace MinGent
             try { using (System.IO.Stream s = typeof(MainForm).Assembly.GetManifestResourceStream("MinGent.ico")) if (s != null) Icon = new Icon(s); } catch { }
         }
 
+        bool cloaked, revealed;
+        System.Windows.Forms.Timer reveal;
+
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
             Native.SetTitleBar(this, Th);
+            if (revealed || cloaked || !Native.Cloak(this, true)) return;
+            cloaked = true;
+            reveal = new System.Windows.Forms.Timer();
+            reveal.Interval = 700;
+            reveal.Tick += delegate { Reveal(); };
+            reveal.Start();
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            Reveal();
+        }
+
+        void Reveal()
+        {
+            if (reveal != null) { reveal.Stop(); reveal.Dispose(); reveal = null; }
+            revealed = true;
+            if (!cloaked) return;
+            cloaked = false;
+            Native.PaintNow(this);
+            Native.Cloak(this, false);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && reveal != null) { reveal.Stop(); reveal.Dispose(); reveal = null; }
+            base.Dispose(disposing);
         }
 
         public void Retheme(Theme t)
@@ -146,7 +177,7 @@ namespace MinGent
         string AccentChoice { get { return accentBox.SelectedIndex == 1 ? "windows" : "green"; } }
 
         public const string ResetPrompt = "Reset every setting to its default?\n\nThe theme, tools, what Auto asks about, the agent's folder and everything else on these pages go back to how MinGent comes. Your chats, memory, API keys, instructions, models and offline mode stay.";
-        SwitchRow offline, netLog, errorLog, lmUnload, engineUpdates, autoSave, openFiles, showThinking, sendContext, web, browserOn, guard, appsOn, sideBySide, memoryOn, helpersOn, autoReview, captcha;
+        SwitchRow offline, netLog, errorLog, lmUnload, engineUpdates, autoSave, openFiles, showThinking, sendContext, web, browserOn, guard, appsOn, sideBySide, memoryOn, helpersOn, autoReview, captcha, sandbox, otherApps;
         readonly Dictionary<string, SwitchRow> autoAsk = new Dictionary<string, SwitchRow>();
         readonly List<string> pageTitles = new List<string>();
 
@@ -503,8 +534,9 @@ namespace MinGent
             c = NewCard(p);
             web = Switch(c, "Web search and web pages", "Search the web and read pages and YouTube videos. With the built-in browser on, searches open there so you can see them. When this is off, the agent still opens addresses on this PC or your local network. " + Cap(Tokens(new WebSearchTool())) + ".", s.AiWeb);
             browserOn = Switch(c, "Built-in browser", "Open pages, click, type and scroll in MinGent's own browser, which has its own sign-ins. Each chat starts on a new page. " + Cap(Tokens(AgentToolbox.BrowserTools(true))) + "; off by itself when the model's context is under 16K.", s.AiBrowser);
-            captcha = Switch(c, "Let the agent try CAPTCHAs (experimental)", "Off (the default): CAPTCHAs are left to you. On: the agent may try to solve them in its own browser, just to see what the model can do; after three failed tries it hands the CAPTCHA to you. A reCAPTCHA logo on a page is never treated as a check.", s.AiCaptcha);
+            captcha = Switch(c, "Let the agent try CAPTCHAs (experimental)", "Off (the default): CAPTCHAs are left to you. On: the agent may try to solve them in its own browser, just to see what the model can do; after five failed tries it hands the CAPTCHA to you. A reCAPTCHA logo on a page is never treated as a check.", s.AiCaptcha);
             appsOn = Switch(c, "Programs it starts itself", "Read their windows, click, type and scroll in them. Programs that were already open stay off limits. Store apps and other programs that Windows opens for it need your OK first (except in Full auto). " + Cap(Tokens(AgentToolbox.AppTools(true))) + "; off by itself under 24K.", s.AiApps);
+            otherApps = Switch(c, "Programs you opened yourself", "The agent can ask to use a program that was already open. You decide for each program, once in each chat, also in Full auto. Browsers, File Explorer, terminals and code editors can only be looked at. Mail, chat, AI chat apps, password managers, money and remote-access programs are never offered. Needs \"Programs it starts itself\". " + Cap(Tokens(new AppAccessTool())) + ".", s.AiOtherApps);
             sideBySide = Switch(c, "Put MinGent and the program side by side", "When the agent starts working in a program that covers MinGent, MinGent takes one half of the screen and the program the other. MinGent gets its old size back when the program closes.", s.AiSideBySide);
             helpersOn = Switch(c, "Helper agents", "Hands focused tasks to helpers, each with a fresh context, which keeps the agent's own context small and gives its work an independent check. On a local model they run one after another, so they take extra time; with a cloud model they can run at the same time. " + Cap(Tokens(new DelegateTool(false))) + ".", s.AiHelpers);
             autoReview = Switch(c, "Review big changes", "When the agent changes a lot of code, a helper reviews the work before it answers.", s.AiAutoReview);
@@ -563,13 +595,18 @@ namespace MinGent
             console.CheckedChanged += delegate { if (!console.Checked && !reverting) BeginInvoke(new Action(delegate { ConfirmConsoleOff(console); })); };
             Place(p, c);
 
+            Section(p, "Sandbox", null);
+            c = NewCard(p);
+            sandbox = Switch(c, "Run the agent's commands in a sandbox (experimental)", "Commands run with low rights: they can read files and use the internet, but they can change files only in the work folder, not in its .git folder, and can't change other programs, settings or your saved sign-ins. A command runs outside the sandbox only when you allow it, or in Full auto. To let commands work in a folder, MinGent allows low-rights programs to change files there, and that stays when you turn this off. Turn this off if a tool stops working.", s.AiSandbox);
+            Place(p, c);
+
             Section(p, "Always on", "These limits apply in every mode, also in Full auto.");
             c = NewCard(p);
             c.Dividers = false;
             string[] rules = {
                 "The agent's file tools never write into Windows, Program Files or MinGent's own data, also not through links. Commands are limited by Windows permissions instead.",
                 "Sending one of your saved API keys to a website or over the internet asks you first, and Full auto refuses it.",
-                "The agent only controls programs it started, never browsers, mail, chat, password managers or remote-access tools.",
+                "The agent controls only programs it started, and programs you opened yourself only after you allow each one in that chat. It never controls mail, chat, password managers, money or remote-access programs, and it can only look at a browser, File Explorer, terminal or code editor you opened.",
                 "Web pages and documents reach the model marked as untrusted data, with a note not to follow them.",
                 "Changes made with the agent's file tools can be undone with the Undo link under the reply, or Ctrl+Z in the notes tab. Changes made by commands can't.",
                 "Commands run with MinGent's rights, so start MinGent normally, not as administrator. Closing MinGent stops everything it started: commands, the built-in engine, and models it loaded in LM Studio." };
@@ -736,6 +773,8 @@ namespace MinGent
             s.AiSideBySide = sideBySide.Checked;
             s.AiWebGuard = guard.Checked;
             s.AiCaptcha = captcha.Checked;
+            s.AiSandbox = sandbox.Checked;
+            s.AiOtherApps = otherApps.Checked;
             s.Offline = offline.Checked;
             s.KeepNetLog = netLog.Checked;
             s.KeepErrorLog = errorLog.Checked;

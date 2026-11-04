@@ -398,6 +398,7 @@ namespace MinGent
         public int TrainContext, PartIndex, PartCount;
         public bool IsProjector, Thinking, NativeEffort, CanStopThinking, ToolTemplate, OwnDownload, Helper, Incomplete;
         public string ProjectorPath, Error;
+        public List<string> EffortNames;
         public double? Temp, TopP, MinP;
         public int? TopK;
         public DateTime Modified;
@@ -723,6 +724,7 @@ namespace MinGent
                 if (string.IsNullOrEmpty(m.ParamsText) && g.ParameterCount > 0) m.ParamsText = FormatParams(g.ParameterCount);
                 ModelTraits.FromTemplate(g.ChatTemplate, out m.ToolTemplate, out m.Thinking, out m.NativeEffort);
                 m.CanStopThinking = ModelTraits.CanStopThinking(g.ChatTemplate);
+                m.EffortNames = m.NativeEffort ? ModelTraits.EffortNames(g.ChatTemplate) : null;
                 m.Temp = g.Temp; m.TopP = g.TopP; m.MinP = g.MinP; m.TopK = g.TopK;
                 string nm = !string.IsNullOrEmpty(g.Name) ? g.Name : null;
                 m.DisplayName = nm ?? CleanName(fi.Name);
@@ -1113,6 +1115,20 @@ namespace MinGent
         public static bool CanStopThinking(string template)
         {
             return (template ?? "").IndexOf("enable_thinking", StringComparison.Ordinal) >= 0;
+        }
+
+        static readonly string[] EffortWords = { "none", "minimal", "low", "medium", "high", "xhigh", "max" };
+
+        public static List<string> EffortNames(string template)
+        {
+            string t = template ?? "";
+            if (t.IndexOf("reasoning_effort", StringComparison.Ordinal) < 0) return null;
+            List<string> found = new List<string>();
+            foreach (string w in EffortWords)
+                if (t.IndexOf("'" + w + "'", StringComparison.Ordinal) >= 0 || t.IndexOf("\"" + w + "\"", StringComparison.Ordinal) >= 0) found.Add(w);
+            int levels = 0;
+            foreach (string w in found) if (w != "none") levels++;
+            return levels >= 2 ? found : null;
         }
 
         public static bool IsProjectorName(string fileName)

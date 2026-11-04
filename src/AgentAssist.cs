@@ -608,13 +608,13 @@ namespace MinGent
 
         static int ToInt(object o)
         {
-            if (o is double) return (int)Math.Max(int.MinValue, Math.Min(int.MaxValue, (double)o));
+            if (o is double) return (int)Math.Max(-int.MaxValue, Math.Min(int.MaxValue, (double)o));
             if (o is bool) return (bool)o ? 1 : 0;
             int n;
             string s = o as string;
             if (s != null && int.TryParse(s.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out n)) return n;
             double d;
-            if (s != null && double.TryParse(s.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out d)) return (int)d;
+            if (s != null && double.TryParse(s.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out d)) return (int)Math.Max(-int.MaxValue, Math.Min(int.MaxValue, d));
             return 0;
         }
 
@@ -1901,6 +1901,39 @@ namespace MinGent
         }
     }
 
+    static class StopWords
+    {
+        const string Lead = @"(?:^|[.!?;:,\n(]|\b(?:ok|okay|please|pls|plz|just|now|so|and|hey|wait|alright|then|you|to|guys|lol|bro|man)\b)\s*";
+        const RegexOptions Opt = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+        static readonly Regex Whole = new Regex(@"^\W*(?:(?:ok|okay|pls|please|plz|wait|hey|no|just|alright|guys|lol)[\s,!.]+)*(?:stop|quit|halt|pause|cancel|abort|enough|hold\s+on|never\s*mind|nvm|forget\s+(?:it|about\s+it)|leave\s+it(?:\s+(?:there|for\s+now|as\s+is|at\s+that))?|that'?s\s+(?:enough|all)(?:\s+for\s+now)?|don'?t\s+(?:continue|bother))(?:[\s,]+(?:it|now|please|pls|plz|there|here|for\s+now|thanks|thank\s+you|thx|right\s+now|immediately))*\W*$", Opt);
+        static readonly Regex[] Rules = {
+            new Regex(Lead + @"(?:stop|quit|halt|cease|pause)\s+(?:working|work|everything|now|here|there|immediately|right\s+(?:now|there|here)|for\s+(?:now|today|the\s+day))\b", Opt),
+            new Regex(Lead + @"(?:stop|quit|cease)\s+(?:working\s+|work\s+)?on\s+(?:this|that|it|everything|(?:the|this|that|my|our)\s+[\w-]+)\b", Opt),
+            new Regex(Lead + @"(?:stop|quit|halt|pause|cancel|abort)\s+(?:it|this|that|everything|all\s+(?:of\s+)?(?:this|that|it))(?=\s*(?:$|[.!,;?]|now\b|please\b|pls\b|right\b|immediately\b|for\b|and\b))", Opt),
+            new Regex(Lead + @"(?:stop|quit|halt|pause)\s+(?:what\s+you(?:'re|\s+are|re)\s+doing|doing\s+(?:this|that|it|anything))", Opt),
+            new Regex(@"\bthat'?s\s+enough(?:\s+for\s+(?:now|today))?\s*(?:$|[.!,;])", Opt),
+            new Regex(Lead + @"(?:don'?t|dont|do\s+not)\s+(?:continue|keep\s+going|go\s+on|proceed|do\s+anything\s+(?:else|more)|change\s+anything\s+(?:else|more)|make\s+(?:any\s+)?more\s+changes|touch\s+anything(?:\s+else)?)\b", Opt),
+            new Regex(@"\bno\s+more\s+(?:changes|work|edits|fixes)\b", Opt)
+        };
+        static readonly Regex Conditional = new Regex(@"\b(?:if|when|whenever|unless|once|until|after|before|in\s+case)\b", Opt);
+        static readonly Regex Work = new Regex(@"\b(?:add|fix|make|change|create|write|build|run|test|update|implement|set|remove|delete|deploy|install|open|use|try|rename|move|copy|put|edit|refactor|commit|push|merge|revert|undo|instead|then|button|shortcut|flag|option|setting|feature|function|method|step|limit)\b", Opt);
+
+        public static bool Says(string text)
+        {
+            string t = (text ?? "").Trim();
+            if (t.Length == 0 || t.Length > 2000) return false;
+            if (Whole.IsMatch(t)) return true;
+            if (t.Length > 160 || Conditional.IsMatch(t)) return false;
+            foreach (Regex r in Rules)
+            {
+                Match m = r.Match(t);
+                if (!m.Success) continue;
+                return !Work.IsMatch(t.Remove(m.Index, m.Length));
+            }
+            return false;
+        }
+    }
+
     class RunCoach
     {
         public int Nudges;
@@ -2069,7 +2102,8 @@ namespace MinGent
                 }
                 foreach (string p in paths)
                 {
-                    string ext = System.IO.Path.GetExtension(p).ToLowerInvariant();
+                    int dot = p.LastIndexOf('.'), cut = Math.Max(p.LastIndexOf('\\'), p.LastIndexOf('/'));
+                    string ext = dot > cut ? p.Substring(dot).ToLowerInvariant() : "";
                     if (CodeExt.Contains(ext) && !unverified.Contains(p)) unverified.Add(p);
                 }
                 return;

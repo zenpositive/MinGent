@@ -176,6 +176,7 @@ namespace MinGent
             }
             if (cmd.Length == 0) return null;
             a.Detail = cmd;
+            a.Summary = CommandWords.Describe(cmd);
             if (TerminalRules.Expands(cmd))
             {
                 a.Title = act == null ? "Run a command in the terminal" : act + " in the terminal";

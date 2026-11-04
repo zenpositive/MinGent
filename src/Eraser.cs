@@ -18,7 +18,16 @@ namespace MinGent
             string legacy = null;
             try { legacy = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), Program.LegacyName); } catch { }
             if (legacy != null && !Same(legacy, Program.DataDir) && LooksOurs(legacy)) l.Add(legacy);
+            string low = null;
+            try { low = Sandbox.LowRoot; } catch { }
+            if (!string.IsNullOrEmpty(low) && Directory.Exists(low)) l.Add(low);
             return l;
+        }
+
+        static bool SandboxFolder(string dir)
+        {
+            try { return Same(dir, Sandbox.LowRoot); }
+            catch { return false; }
         }
 
         public static List<string> TempFolders()
@@ -249,7 +258,7 @@ namespace MinGent
             catch { return; }
             if (InAny(di.FullName, r.KeepDirs)) return;
             bool link = (di.Attributes & FileAttributes.ReparsePoint) != 0;
-            if (link && !root)
+            if (link && (!root || SandboxFolder(di.FullName)))
             {
                 r.Links.Add(di.FullName);
                 try { Directory.Delete(dir, false); } catch { r.Left.Add(dir); }

@@ -66,7 +66,7 @@ namespace MinGent
             t.ToggleOn = Blend(accent, C(0xFFFFFF), 0.78);
             t.FindMark = C(0xE2A400);
             t.StatusLikeChrome();
-            t.Side = C(0xF7F7F7); t.SideHover = C(0xECECEC); t.SideSel = C(0xE3E3E3); t.Pane = C(0xFFFFFF);
+            t.Side = C(0xF7F7F7); t.SideHover = C(0xEEEEEE); t.SideSel = C(0xE1E1E1); t.Pane = C(0xFFFFFF);
             t.Card = C(0xFFFFFF); t.CardBorder = C(0xE4E4E4); t.CardHover = C(0xF5F5F5);
             t.Ctl = C(0xFFFFFF); t.CtlHover = C(0xF3F3F3); t.CtlBorder = C(0xD0D0D0);
             t.Well = C(0xFBFBFB); t.WellBorder = C(0x8A8A8A); t.Track = C(0xE8E8E8);
@@ -99,7 +99,7 @@ namespace MinGent
             t.ToggleOn = Blend(accent, C(0x202020), 0.62);
             t.FindMark = C(0xC8963E);
             t.StatusLikeChrome();
-            t.Side = C(0x181818); t.SideHover = C(0x252525); t.SideSel = C(0x2C2C2C); t.Pane = C(0x1E1E1E);
+            t.Side = C(0x181818); t.SideHover = C(0x222222); t.SideSel = C(0x313131); t.Pane = C(0x1E1E1E);
             t.Card = C(0x2A2A2A); t.CardBorder = C(0x343434); t.CardHover = C(0x313131);
             t.Ctl = C(0x363636); t.CtlHover = C(0x3E3E3E); t.CtlBorder = C(0x484848);
             t.Well = C(0x1E1E1E); t.WellBorder = C(0x767676); t.Track = C(0x1C1C1C);

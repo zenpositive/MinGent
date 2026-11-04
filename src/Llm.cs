@@ -99,6 +99,8 @@ namespace MinGent
         public string ToolCallId, ToolName;
         public bool ToolError;
         public string Reasoning;
+        public double Speed, FirstToken;
+        public bool SpeedGuess;
         public string RawProvider;
         public List<object> RawBlocks;
         public string Compact;
@@ -142,7 +144,7 @@ namespace MinGent
         public List<ToolSpec> Tools = new List<ToolSpec>();
         public int MaxTokens = 8192;
         public string Effort;
-        public bool ShowThinking = true;
+        public bool ShowThinking = true, NoCalls;
     }
 
     class LlmResult
@@ -155,7 +157,7 @@ namespace MinGent
         public string Error;
         public int Status;
         public bool ConnectFailed, Unauthorized, Retryable, ContextOverflow, Cancelled, Interrupted, SawEnd, EngineGone, ParseFailure;
-        public int InputTokens, OutputTokens;
+        public int InputTokens, OutputTokens, HiddenReasoningTokens;
         public bool Truncated { get { return Stop == "length"; } }
 
         public Msg ToMessage()
@@ -671,6 +673,7 @@ namespace MinGent
 
         string BuildBody(LlmRequest req, string effort, bool usage, bool noTools, bool reasoningBack)
         {
+            noTools = noTools || req.Tools.Count == 0;
             List<object> msgs = new List<object>();
             int lastUser = -1;
             for (int i = req.Messages.Count - 1; i >= 0; i--) if (req.Messages[i].Role == "user" && !req.Messages[i].Hidden) { lastUser = i; break; }
@@ -773,7 +776,7 @@ namespace MinGent
                 foreach (ToolSpec t in req.Tools)
                     tools.Add(Json.O("type", "function", "function", Json.O("name", t.Name, "description", t.Description, "parameters", t.Schema)));
                 body["tools"] = tools;
-                body["tool_choice"] = "auto";
+                body["tool_choice"] = req.NoCalls ? "none" : "auto";
             }
             if (OfficialOpenAi) body["max_completion_tokens"] = req.MaxTokens;
             else if (req.MaxTokens > 0) body["max_tokens"] = affordable > 0 ? Math.Min(req.MaxTokens, affordable) : req.MaxTokens;
@@ -1031,7 +1034,7 @@ namespace MinGent
         static void Usage(object o, LlmResult r)
         {
             int pt = Json.Int(o, "usage", "prompt_tokens"), ct = Json.Int(o, "usage", "completion_tokens");
-            if (pt > 0) { r.InputTokens = pt; r.OutputTokens = ct; }
+            if (pt > 0) { r.InputTokens = pt; r.OutputTokens = ct; r.HiddenReasoningTokens = Json.Int(o, "usage", "completion_tokens_details", "reasoning_tokens"); }
         }
 
         static string ErrorOf(object o)
@@ -1513,7 +1516,7 @@ namespace MinGent
                 List<object> tools = new List<object>();
                 foreach (ToolSpec t in req.Tools) tools.Add(Json.O("type", "function", "name", t.Name, "description", t.Description, "parameters", t.Schema, "strict", false));
                 body["tools"] = tools;
-                body["tool_choice"] = "auto";
+                body["tool_choice"] = req.NoCalls ? "none" : "auto";
             }
             return Json.Write(body);
         }
@@ -1580,6 +1583,7 @@ namespace MinGent
                             finalOutput = Json.List(o, "response", "output");
                             res.InputTokens = Json.Int(o, "response", "usage", "input_tokens");
                             res.OutputTokens = Json.Int(o, "response", "usage", "output_tokens");
+                            res.HiddenReasoningTokens = Json.Int(o, "response", "usage", "output_tokens_details", "reasoning_tokens");
                             res.Stop = "__end__";
                             break;
                         case "response.incomplete":
@@ -1588,6 +1592,7 @@ namespace MinGent
                             incomplete = Json.Str(o, "response", "incomplete_details", "reason") ?? "incomplete";
                             res.InputTokens = Json.Int(o, "response", "usage", "input_tokens");
                             res.OutputTokens = Json.Int(o, "response", "usage", "output_tokens");
+                            res.HiddenReasoningTokens = Json.Int(o, "response", "usage", "output_tokens_details", "reasoning_tokens");
                             res.Stop = "__end__";
                             break;
                         case "response.failed":
