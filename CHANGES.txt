@@ -1,6 +1,40 @@
 MinGent - what changed
 ======================
 
+Version 1.1.0 beta
+- With Claude, OpenAI, Gemini or OpenRouter, the file reads, file searches
+  and page reads the agent asks for in one step run at the same time, and the
+  agent can send an explorer to research in the background while it keeps
+  working. The explorer's report shows up in the chat, and the agent waits
+  for it before its final answer. Local models work as before.
+- Searching text can show the lines around each match, list just the
+  matching files with how many matches each has, and page through long
+  results.
+- The agent no longer tries to solve CAPTCHAs through the browser console.
+  On websites the console refuses code that reaches into a CAPTCHA, and any
+  code while one is showing, and the agent is told to solve it by looking
+  and clicking, or to ask you.
+- Web pages, model cards and documents built to keep MinGent busy can't
+  stall it: turning them into text stops after a few seconds. A page or
+  document then comes through as plain text, and a model card shows without
+  its description.
+- The chat no longer freezes on a reply with thousands of blank lines, which
+  local models sometimes write.
+- On the first screen, "Use a cloud model" opens Settings right at the cloud
+  API keys, and so do the API key items in the model menu.
+- Every clickable control shows the hand pointer, including the model button
+  and the switches, lists and buttons in Settings.
+- Picking another model while the agent works says that the agent finishes
+  the current task with the model it started with, then the new one takes
+  over.
+- Permission questions say "work folder", like Settings.
+- In Full auto, when MinGent turns something down by itself, like sending
+  one of your API keys to a website, the agent is told nobody was asked, so
+  it doesn't say you declined.
+- When you press Stop while a helper works in the background, the agent is
+  always told that its report won't come, instead of sometimes getting
+  "stopped by the user" as if it were the report.
+
 Version 1.0.9 beta
 - CAPTCHA mode no longer makes the page blink while it waits. To see when
   the pictures stop changing, MinGent now watches the browser's own screen

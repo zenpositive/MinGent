@@ -6,10 +6,10 @@ the web and uses its own built-in browser, showing every step as it works.
 It has its own notepad for your notes and for the files it works on.
 
 It runs models on your PC with its built-in engine, or Claude, Gemini,
-OpenAI or OpenRouter models with your own API key. It doesn't control your
-other programs, only the ones it starts itself. While it tests one of those,
-it moves your mouse pointer and types into that window, so leave the mouse
-alone until it is done.
+OpenAI or OpenRouter models with your own API key. It controls only the
+programs it starts itself, and a program you opened only if you allow that
+one program. While it uses one, it moves your mouse pointer and types into
+that window, so leave the mouse alone until it is done.
 
 No dependency tree: no installer, no packages, no plugins and no automatic
 updates.
@@ -20,7 +20,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.0.9 beta: it works, and it still has rough edges. Report
+This is version 1.1.0 beta: it works, and it still has rough edges. Report
 problems at https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -87,7 +87,7 @@ sign-ins. MinGent has none of that.
   Full auto asks nothing. The check reads the command; it can't see what a
   script does once it runs.
 To check a download, compare its SHA-256 with the one on the release page.
-In PowerShell: Get-FileHash .\MinGent-1.0.9-beta.zip
+In PowerShell: Get-FileHash .\MinGent-1.1.0-beta.zip
 
 
 YOUR OWN ICON
@@ -433,10 +433,18 @@ Helpers
   Gemini or OpenRouter, explorers can run at the same time; reviewers and
   general helpers run one at a time, since they share the browser and the
   work folder.
+- With Claude, OpenAI, Gemini or OpenRouter, the agent can also start an
+  explorer in the background and keep working while it researches. Its report
+  shows up in the chat when it is done, and the agent waits for it before it
+  gives its final answer.
 
 Tools
 - Every tool the agent has is part of MinGent's own C# code: there are no
   plugins, no MCP servers and nothing that is downloaded while it runs.
+- With Claude, OpenAI, Gemini or OpenRouter, the file reads, file searches and
+  page reads the agent asks for in one step run at the same time, up to six at
+  once. A read that comes after a change in the same step waits for that
+  change. With a local model they run one after another.
 - Each tool's description takes room in the model's context, which matters
   with a small local model. Settings > Agent > Tools switches whole groups on
   or off and shows what each one costs: web search (about 200 tokens), the
@@ -664,8 +672,9 @@ THE BROWSER
   is told what happened and what else it can try, and "verify you are human"
   checks get a few seconds to finish by themselves. CAPTCHAs are left to you:
   the agent stops and asks you to complete them. (Settings > Agent has an
-  experimental switch that lets the agent try them itself. Its screenshots
-  then zoom in on the CAPTCHA, or add a zoomed picture of one that sits
+  experimental switch that lets the agent try them itself, the way a person
+  does: from what it sees, with clicks and typing. Its screenshots then
+  zoom in on the CAPTCHA, or add a zoomed picture of one that sits
   inside the page. It picks several picture tiles and Verify in one step,
   types the characters of a text CAPTCHA, and sees the CAPTCHA again after
   every click in it. After five answers that fail it hands the CAPTCHA to you;
@@ -716,9 +725,11 @@ THE BROWSER
   or windows - so those keep going through the checks for buy, password and
   account buttons. It also refuses code that hides what it runs (eval, code
   in strings, encoded text, calls through computed names), and on websites
-  network requests and reading cookies, storage, saved sign-ins or form
-  fields. Like the command checks, this reads the code: it catches the
-  common cases, not every possible trick.
+  network requests, reading cookies, storage, saved sign-ins or form fields,
+  code that reaches into a CAPTCHA, and any code while a CAPTCHA is showing:
+  CAPTCHAs are only ever solved by looking at them and clicking or typing.
+  Like the command checks, this reads the code: it catches the common
+  cases, not every possible trick.
 
 
 NOTES
@@ -915,6 +926,11 @@ SECURITY / ATTACK SURFACE
   injects no scripts into web pages; the agent's page reading runs in an
   isolated script context through the browser's own debugging interface, which
   is not exposed on any network port.
+- Pages, model cards and documents built to keep MinGent busy (with thousands
+  of unclosed tags or comments, for example) can't stall it: turning them into
+  text stops after a few seconds. A page or document then comes through as
+  plain text without its layout, and a model card shows without its
+  description.
 - Desktop program control is limited to processes the agent started inside its
   own job objects, plus programs Windows started for one of its program-opening
   commands while that command ran (it asks before using those, also in Auto
