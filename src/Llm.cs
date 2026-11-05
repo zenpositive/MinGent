@@ -20,7 +20,7 @@ namespace MinGent
         public string Id = "", Name = "", Arguments = "";
         public string Signature, Under;
         public Dictionary<string, object> Implied;
-        public bool Truncated;
+        public bool Truncated, AutoRefused;
         Dictionary<string, object> parsed;
         bool parsedTried;
 

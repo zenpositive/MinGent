@@ -617,6 +617,20 @@ namespace MinGent
         static readonly Regex FormWord = new Regex(@"(?:^|[^a-z])form|Form", RegexOptions.CultureInvariant);
         static readonly Regex WidgetWord = new Regex(@"modal|Modal|dialog|Dialog|Dropdown|dropdown|Collapse|Offcanvas|offcanvas|Popover|popover|Tooltip|tooltip|Toast", RegexOptions.CultureInvariant);
         static readonly Regex EditableWord = new Regex(@"contenteditable|textarea|textbox|activeelement|iscontenteditable", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+        static readonly Regex CaptchaTerm = new Regex(@"captcha|turnstile|arkose|geetest|perimeterx|datadome|awswaf|yidun|cf[-_]chl|challenges\.cloudflare\.com", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+        public static string CaptchaWord(string code)
+        {
+            string s = code ?? "";
+            Match m = CaptchaTerm.Match(s);
+            if (!m.Success) return null;
+            int a = m.Index, b = m.Index + m.Length;
+            while (a > 0 && a > m.Index - 30 && WordChar(s[a - 1])) a--;
+            while (b < s.Length && b < m.Index + m.Length + 30 && WordChar(s[b])) b++;
+            return s.Substring(a, b - a).Trim('.', '-');
+        }
+
+        static bool WordChar(char c) { return char.IsLetterOrDigit(c) || c == '_' || c == '$' || c == '.' || c == '-'; }
 
         public static string Message(string kind, string what)
         {

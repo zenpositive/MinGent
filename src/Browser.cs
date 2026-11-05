@@ -1888,8 +1888,8 @@ namespace MinGent
             {
                 bool typedCheck = Json.Bool(v, "captchaPicture") && Json.Bool(v, "captchaAnswer");
                 pageNote = HostLabel(url) + " shows a human-verification check (CAPTCHA). CAPTCHA mode is on (the user turned it on in Settings), so you may try to solve it yourself: " +
-                           (AgentCanSee ? (typedCheck ? "take browser_screenshot (MinGent adds a zoomed copy of the CAPTCHA picture), then type the characters it shows into its answer box with browser_type and submit."
-                                                      : "take browser_screenshot, then click, drag or type in it by position (browser_click with x and y). Look carefully before each click.") + " When MinGent says the tries are used up, ask the user to solve it with ask_user."
+                           (AgentCanSee ? "what it shows can only be seen in a screenshot. " + (typedCheck ? "Take browser_screenshot (MinGent adds a zoomed copy of the CAPTCHA picture), then type the characters it shows into its answer box with browser_type and submit."
+                                                      : "Take browser_screenshot, then click, drag or type in it by position (browser_click with x and y). Look carefully before each click.") + " When MinGent says the tries are used up, ask the user to solve it with ask_user."
                                         : "this model can't see images, so you can only click the captcha refs in the page text. If that does not get through, ask the user to solve it with ask_user.");
             }
             else if (lastChallenge)
@@ -1911,7 +1911,7 @@ namespace MinGent
                             : AgentCanSee ? "CAPTCHA mode is on, so when the form needs it you may try it yourself: take browser_screenshot (MinGent adds a zoomed copy of the CAPTCHA)" + (box.Length == 0 && typed ? ", then type the characters it shows into its answer box with browser_type." : ", then do what it asks with browser_click or browser_drag by position.") + " If it does not let you through, ask the user."
                             : "CAPTCHA mode is on, but this model can't see pictures, so ask the user to solve it with ask_user when the form needs it.");
             if (Json.Bool(v, "modal")) sb.Append("Note: a dialog is open on top of the page. Deal with it first (for example accept or close it).\n");
-            if (Json.Int(v, "xframes") > 0) sb.Append("Note: parts of this page are frames from other sites, which can't be read as text here.\n");
+            if (Json.Int(v, "xframes") > 0) sb.Append("Note: parts of this page are frames from other sites, which can't be read as text here").Append(AgentCanSee ? "; browser_screenshot shows them.\n" : ".\n");
             sb.Append('\n');
             string body = Json.Str(v, "text") ?? "";
             sb.Append(body.Trim().Length > 0 ? body.TrimEnd() : "(the page shows no text)");
@@ -3433,6 +3433,15 @@ namespace MinGent
 
         public bool CaptchaTyped { get { return captchaTyped; } }
 
+        public bool CaptchaShowing(CancelToken ct)
+        {
+            if (!ready || wv == null) return false;
+            lock (opLock)
+            {
+                return CaptchaOpen(ct);
+            }
+        }
+
         public string CaptchaCloseUp(CancelToken ct, out ImageData image, out int width, out int height)
         {
             image = null;
@@ -3861,11 +3870,11 @@ namespace MinGent
             try { BeginInvoke(new Action(delegate { if (Visible) ShowConsole(true, false); else drawer.View.ScrollToEnd(); })); } catch { }
         }
 
-        public void ConsoleRefused(string code, string why)
+        public void ConsoleRefused(string code, string why, bool show)
         {
             consoleLog.Add("input", code, true);
             consoleLog.Add("refused", why, true);
-            OpenForAgent();
+            if (show) OpenForAgent();
         }
 
         public string ConsoleNews()

@@ -1555,7 +1555,15 @@ namespace MinGent
             return text;
         }
 
+        static readonly TimeSpan CardTime = TimeSpan.FromSeconds(2);
+
         public static string Summary(string card)
+        {
+            try { return CardSummary(card, DateTime.UtcNow + CardTime); }
+            catch (RegexMatchTimeoutException) { return null; }
+        }
+
+        static string CardSummary(string card, DateTime until)
         {
             string t = (card ?? "").Replace("\r\n", "\n");
             if (t.StartsWith("---"))
@@ -1563,26 +1571,28 @@ namespace MinGent
                 int end = t.IndexOf("\n---", 3, StringComparison.Ordinal);
                 if (end > 0) t = t.Substring(end + 4);
             }
-            t = Regex.Replace(t, @"<!--.*?-->", " ", RegexOptions.Singleline);
-            t = Regex.Replace(t, @"```.*?```", "\n\n", RegexOptions.Singleline);
-            t = Regex.Replace(t, @"<(script|style)\b.*?</\1>", " ", RegexOptions.Singleline | RegexOptions.IgnoreCase);
-            t = Regex.Replace(t, @"!\[[^\]]*\]\([^)]*\)", " ");
-            t = Regex.Replace(t, @"\[([^\]]*)\]\([^)]*\)", "$1");
-            t = Regex.Replace(t, @"<br\s*/?>", "\n", RegexOptions.IgnoreCase);
-            t = Regex.Replace(t, @"</?(p|div|h\d|ul|ol|li|table|tr)\b[^>]*>", "\n\n", RegexOptions.IgnoreCase);
-            t = Regex.Replace(t, @"<[^>]+>", " ");
+            t = Web.TimedReplace(t, @"<!--.*?-->", " ", RegexOptions.Singleline, until);
+            t = Web.TimedReplace(t, @"```.*?```", "\n\n", RegexOptions.Singleline, until);
+            t = Web.TimedReplace(t, @"<(script|style)\b.*?</\1>", " ", RegexOptions.Singleline | RegexOptions.IgnoreCase, until);
+            t = Web.TimedReplace(t, @"!\[[^\]]*\]\([^)]*\)", " ", RegexOptions.None, until);
+            t = Web.TimedReplace(t, @"\[([^\]]*)\]\([^)]*\)", "$1", RegexOptions.None, until);
+            t = Web.TimedReplace(t, @"<br\s*/?>", "\n", RegexOptions.IgnoreCase, until);
+            t = Web.TimedReplace(t, @"</?(p|div|h\d|ul|ol|li|table|tr)\b[^>]*>", "\n\n", RegexOptions.IgnoreCase, until);
+            t = Web.TimedReplace(t, @"<[^>]+>", " ", RegexOptions.None, until);
             t = System.Net.WebUtility.HtmlDecode(t);
-            foreach (string block in Regex.Split(t, @"\n\s*\n"))
+            foreach (string block in Regex.Split(t, @"\n\s*\n", RegexOptions.None, Web.Scan(until)))
             {
+                if (DateTime.UtcNow > until) return null;
                 string b = block.Trim();
-                if (b.Length < 60 || b.StartsWith("#") || b.StartsWith("|") || b.StartsWith(">") || b.StartsWith("-") || b.StartsWith("*") || Regex.IsMatch(b, @"^\d+\.")) continue;
-                b = Regex.Replace(b, @"[*_`]+", "");
-                b = Regex.Replace(b, @"\s+", " ").Trim();
+                if (b.Length < 60 || b.StartsWith("#") || b.StartsWith("|") || b.StartsWith(">") || b.StartsWith("-") || b.StartsWith("*") || Regex.IsMatch(b, @"^\d+\.", RegexOptions.None, Web.Scan(until))) continue;
+                b = Web.TimedReplace(b, @"[*_`]+", "", RegexOptions.None, until);
+                b = Web.TimedReplace(b, @"\s+", " ", RegexOptions.None, until).Trim();
                 if (b.Split(' ').Length < 9 || CardNoise.IsMatch(b.Length > 160 ? b.Substring(0, 160) : b)) continue;
-                MatchCollection sentences = Regex.Matches(b, @"[^.!?]+(?:[.!?](?=\s|$)|$)");
+                MatchCollection sentences = Regex.Matches(b, @"[^.!?]+(?:[.!?](?=\s|$)|$)", RegexOptions.None, Web.Scan(until));
                 StringBuilder sb = new StringBuilder();
                 foreach (Match m in sentences)
                 {
+                    if (DateTime.UtcNow > until) return null;
                     string sentence = m.Value.Trim();
                     if (sentence.Length == 0) continue;
                     if (sb.Length > 0 && sb.Length + sentence.Length > 320) break;

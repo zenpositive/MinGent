@@ -21,6 +21,7 @@ namespace MinGent
             Glyph = glyph;
             Toggle = toggle;
             Font = UI.Font;
+            Cursor = Cursors.Hand;
         }
 
         public void SetTheme(Theme t) { th = t; Invalidate(); }
@@ -295,6 +296,7 @@ namespace MinGent
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             SetStyle(ControlStyles.Selectable, false);
             TabStop = false;
+            Cursor = Cursors.IBeam;
             Box.BorderStyle = BorderStyle.None;
             Box.Font = UI.Font;
             Controls.Add(Box);

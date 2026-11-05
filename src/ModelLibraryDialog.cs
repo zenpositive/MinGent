@@ -290,7 +290,7 @@ namespace MinGent
             bool sb = !Thumb().IsEmpty && Track().Contains(e.Location);
             int row, btn;
             HitTest(e.Location, out row, out btn);
-            if (row != hoverRow || btn != hoverBtn || sb != sbHover) { hoverRow = row; hoverBtn = btn; sbHover = sb; Cursor = btn >= 0 ? Cursors.Hand : Cursors.Default; Invalidate(); }
+            if (row != hoverRow || btn != hoverBtn || sb != sbHover) { hoverRow = row; hoverBtn = btn; sbHover = sb; Cursor = !sb && (btn >= 0 || (row >= 0 && RowClicked != null)) ? Cursors.Hand : Cursors.Default; Invalidate(); }
             string hint = null;
             foreach (KeyValuePair<Rectangle, string> s in tipSpots) if (s.Key.Contains(e.Location)) { hint = s.Value; break; }
             if (hint != tipShown) { tipShown = hint; tip.SetToolTip(this, hint); }

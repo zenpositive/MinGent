@@ -243,7 +243,12 @@ namespace MinGent
         {
             base.OnShown(e);
             nav.Focus();
+            if (showPage != null && showAt != null) showPage.ScrollTo(Math.Max(0, showAt.Top - UI.S(8)), false);
         }
+
+        Label cloudHeading;
+        ScrollHost showPage;
+        Control showAt;
 
         int X0 { get { return UI.S(14); } }
         int Y(ScrollHost p) { return (int)p.Tag; }
@@ -252,8 +257,14 @@ namespace MinGent
 
         public void OpenPage(string title)
         {
-            int i = pageTitles.IndexOf(title ?? "");
-            if (i >= 0) Select(i);
+            bool cloud = title == "Cloud models";
+            int i = pageTitles.IndexOf(cloud ? "Models" : title ?? "");
+            if (i < 0) return;
+            Select(i);
+            if (!cloud || cloudHeading == null) return;
+            showPage = pages[i];
+            showAt = cloudHeading;
+            if (Visible) showPage.ScrollTo(Math.Max(0, showAt.Top - UI.S(8)), false);
         }
 
         ScrollHost AddPage(string title, string glyph)
@@ -289,7 +300,7 @@ namespace MinGent
             if (nav.SelectedIndex != i) nav.SelectedIndex = i;
         }
 
-        void Section(ScrollHost p, string title, string desc)
+        Label Section(ScrollHost p, string title, string desc)
         {
             if (Y(p) > UI.S(90)) Advance(p, UI.S(14));
             Label l = Dialogs.MakeLabel(title, Th, false);
@@ -301,6 +312,7 @@ namespace MinGent
             Advance(p, h + UI.S(4));
             if (!string.IsNullOrEmpty(desc)) Note(p, desc);
             else Advance(p, UI.S(4));
+            return l;
         }
 
         void Note(ScrollHost p, string text)
@@ -474,7 +486,7 @@ namespace MinGent
             engineUpdates = Switch(c, "Offer newer llama.cpp releases", "MinGent installs the llama.cpp release it was tested with. On: Models also offers newer releases from GitHub, checked only against GitHub's own checksums.", s.OfferEngineUpdates);
             Place(p, c);
 
-            Section(p, "Cloud models", "With a cloud model, your messages and the files the agent reads go to that provider. Keys are encrypted with your Windows account and only sent to their own provider.");
+            cloudHeading = Section(p, "Cloud models", "With a cloud model, your messages and the files the agent reads go to that provider. Keys are encrypted with your Windows account and only sent to their own provider.");
             c = NewCard(p);
             anthropicKey = KeyRow(c, "Claude API key", "From platform.claude.com", "anthropic", "https://platform.claude.com/settings/keys", s.KeyAnthropic);
             openaiKey = KeyRow(c, "OpenAI API key", "From platform.openai.com", "openai", "https://platform.openai.com/api-keys", s.KeyOpenAi);

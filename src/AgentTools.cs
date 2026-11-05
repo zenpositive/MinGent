@@ -725,7 +725,7 @@ namespace MinGent
                 PermissionAsk ask = new PermissionAsk();
                 ask.Kind = "write";
                 ask.Category = ctx.Guarded(PermissionCategory.Delete);
-                ask.Title = isDir ? "Delete a folder outside the workspace" : "Delete a file outside the workspace";
+                ask.Title = isDir ? "Delete a folder outside the work folder" : "Delete a file outside the work folder";
                 ask.High = true;
                 ask.Detail = full + (through ? " (really " + realPath + ")" : "") + (isDir && !link ? (tooMany ? " (a large folder)" : " (" + files.Count + (files.Count == 1 ? " file)" : " files)")) : "");
                 ask.Key = "delete:" + full;
@@ -1297,26 +1297,41 @@ namespace MinGent
     class SearchTextTool : AgentTool
     {
         public override string Name { get { return "search_text"; } }
-        public override string Description { get { return "Search inside files below a folder (default: the workspace) and in open tabs. Returns matches as path:line: text. Plain text and case-insensitive by default; set regex for a regular expression. file_pattern limits which files are searched, e.g. \"*.cs\"."; } }
+        public override string Description { get { return "Search inside files below a folder (default: the workspace) and in open tabs. Returns matches as path:line: text. Plain text and case-insensitive by default; set regex for a regular expression. file_pattern limits which files are searched, e.g. \"*.cs\". context shows lines around each match, output \"files\" lists only the files with their match counts, and offset pages through long results."; } }
         public override Dictionary<string, object> Schema
         {
             get
             {
+                Dictionary<string, object> output = P("string", "\"lines\" (default) for the matching lines, \"files\" for the matching files and how many matches each has");
+                output["enum"] = Json.A("lines", "files");
                 return Obj("query", P("string", "Text or regular expression to find"), true,
                            "path", P("string", "Folder or file to search (default: the workspace)"), false,
                            "regex", P("boolean", "Treat query as a regular expression"), false,
                            "case_sensitive", P("boolean", "Match case"), false,
-                           "file_pattern", P("string", "Only search files whose name matches this glob, e.g. *.py"), false);
+                           "file_pattern", P("string", "Only search files whose name matches this glob, e.g. *.py"), false,
+                           "context", P("integer", "Lines to show before and after each match, up to 5"), false,
+                           "output", output, false,
+                           "offset", P("integer", "Skip this many results to see the ones after the first page"), false);
             }
         }
-        public override string Label(Dictionary<string, object> a) { return "Search for \u201C" + Trunc(S(a, "query"), 40) + "\u201D"; }
-        static string Trunc(string s, int n) { s = s ?? ""; return s.Length > n ? s.Substring(0, n) + "\u2026" : s; }
+        public override string Label(Dictionary<string, object> a) { return "Search for “" + Trunc(S(a, "query"), 40) + "”"; }
+        static string Trunc(string s, int n) { s = s ?? ""; return s.Length > n ? s.Substring(0, n) + "…" : s; }
+
+        class Find
+        {
+            public Regex Rx;
+            public int Context, Skip, Limit, Seen, Hits, More, Files, Total;
+            public bool FileList;
+            public readonly StringBuilder Out = new StringBuilder();
+        }
 
         public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
         {
             string q = S(a, "query");
             if (string.IsNullOrEmpty(q)) return ToolOutcome.Fail("query is required");
             bool isRegex = B(a, "regex", false), cs = B(a, "case_sensitive", false);
+            int context = Math.Max(0, Math.Min(5, I(a, "context", 0))), skip = Math.Max(0, I(a, "offset", 0));
+            bool fileList = string.Equals((S(a, "output") ?? "").Trim(), "files", StringComparison.OrdinalIgnoreCase);
             string note = "";
             Regex rx = null;
             if (isRegex)
@@ -1333,32 +1348,35 @@ namespace MinGent
             if (root == null) return ToolOutcome.Fail(err);
             if (!File.Exists(root) && !Directory.Exists(root))
                 return ToolOutcome.Fail("not found: " + root + "." + PathHelp.Describe(PathHelp.Similar(root, ctx.Workspace, ctx.Ct, true), ctx.Workspace));
-            StringBuilder sb = new StringBuilder();
-            int hits = 0, more = 0, files = 0;
-            SearchAll(ctx, root, rx, nameRx, sb, ref hits, ref more, ref files);
-            if (hits == 0 && !isRegex && LooksLikeRegex(q))
+            Find st = SearchAll(ctx, root, rx, nameRx, context, skip, fileList);
+            if (st.Total == 0 && !isRegex && LooksLikeRegex(q))
             {
                 Regex r2 = null;
                 try { r2 = new Regex(q, (cs ? RegexOptions.None : RegexOptions.IgnoreCase) | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(200)); } catch { }
                 if (r2 != null)
                 {
-                    SearchAll(ctx, root, r2, nameRx, sb, ref hits, ref more, ref files);
-                    if (hits > 0) note += "(No plain-text matches, so \"" + q + "\" was searched as a regular expression.) ";
+                    Find s2 = SearchAll(ctx, root, r2, nameRx, context, skip, fileList);
+                    if (s2.Total > 0) { st = s2; note += "(No plain-text matches, so \"" + q + "\" was searched as a regular expression.) "; }
                 }
             }
-            if (hits == 0 && cs)
+            if (st.Total == 0 && cs)
             {
                 Regex r3 = new Regex(isRegex ? q : Regex.Escape(q), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(200));
-                SearchAll(ctx, root, r3, nameRx, sb, ref hits, ref more, ref files);
-                if (hits > 0) note += "(No case-sensitive matches; these ignore case.) ";
+                Find s3 = SearchAll(ctx, root, r3, nameRx, context, skip, fileList);
+                if (s3.Total > 0) { st = s3; note += "(No case-sensitive matches; these ignore case.) "; }
             }
-            if (hits == 0)
+            if (st.Total == 0)
             {
                 string tip = q.Trim().IndexOf(' ') > 0 ? " Try a shorter query, such as one distinctive word." : nameRx != null ? " Try without file_pattern." : "";
-                return ToolOutcome.Ok("No matches for \"" + q + "\" in " + files + " files under " + root + " (and the open tabs)." + tip, "No matches");
+                return ToolOutcome.Ok("No matches for \"" + q + "\" in " + st.Files + " files under " + root + " (and the open tabs)." + tip, "No matches");
             }
-            string head = note + (hits + more) + ((hits + more) == 1 ? " match" : " matches") + (more > 0 ? " (first " + hits + " shown)" : "") + " under " + root + ":\n";
-            ToolOutcome o = ToolOutcome.Ok(head + sb.ToString(), (hits + more) + " matches");
+            string found = st.Total + (st.Total == 1 ? " match" : " matches") + (fileList ? " in " + st.Seen + (st.Seen == 1 ? " file" : " files") : "");
+            string head = note + found;
+            if (st.Hits == 0) head += " under " + root + "; offset " + skip + " is past the last one.\n";
+            else if (skip == 0 && st.More > 0 && !fileList && context == 0) head += " (first " + st.Hits + " shown) under " + root + ":\n";
+            else if (skip > 0 || st.More > 0) head += " under " + root + "; showing " + (skip + 1) + "-" + (skip + st.Hits) + (st.More > 0 ? ", offset=" + (skip + st.Hits) + " shows the next ones" : "") + ":\n";
+            else head += " under " + root + ":\n";
+            ToolOutcome o = ToolOutcome.Ok(head + st.Out.ToString(), st.Total + " matches");
             o.Untrusted = AgentPaths.Foreign(root);
             return o;
         }
@@ -1369,10 +1387,15 @@ namespace MinGent
                    Regex.IsMatch(q, @"\\[swdbSWDB.()\[\]{}*+?^$|/\\-]");
         }
 
-        static void SearchAll(ToolContext ctx, string root, Regex rx, Regex nameRx, StringBuilder sb, ref int hits, ref int more, ref int files)
+        static Find SearchAll(ToolContext ctx, string root, Regex rx, Regex nameRx, int context, int skip, bool fileList)
         {
-            sb.Length = 0;
-            hits = more = files = 0;
+            Find st = new Find();
+            st.Rx = rx;
+            st.Context = context;
+            st.Skip = skip;
+            st.FileList = fileList;
+            st.Limit = fileList ? 200 : context == 0 ? 120 : Math.Max(20, 120 / (1 + context));
+            int cap = fileList ? 20000 : skip + 5000;
             HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (TabInfo tab in ctx.Editor.Tabs(true))
             {
@@ -1381,7 +1404,7 @@ namespace MinGent
                 if (nameRx != null && !nameRx.IsMatch(System.IO.Path.GetFileName(tab.Path ?? tab.Title))) continue;
                 if (tab.Path != null) seen.Add(tab.Path);
                 if (tab.TooLarge) continue;
-                Scan(tab.Path != null ? ToolKit.Rel(tab.Path, root) : tab.Title, tab.Text ?? "", rx, sb, ref hits, ref more);
+                Scan(tab.Path != null ? ToolKit.Rel(tab.Path, root) : tab.Title, tab.Text ?? "", st);
             }
             if (File.Exists(root))
             {
@@ -1389,12 +1412,10 @@ namespace MinGent
                 {
                     int enc; string eol, err;
                     string text = ToolKit.ReadDisk(root, out enc, out eol, out err);
-                    if (text != null) { files++; Scan(root, text, rx, sb, ref hits, ref more); }
+                    if (text != null) { st.Files++; Scan(root, text, st); }
                 }
-                return;
+                return st;
             }
-            int h = hits, m = more, f = files;
-            StringBuilder outSb = sb;
             ToolKit.Walk(root, delegate (string path)
             {
                 if (seen.Contains(path)) return true;
@@ -1404,29 +1425,66 @@ namespace MinGent
                 int enc; string eol, e2;
                 string text = ToolKit.ReadDisk(path, out enc, out eol, out e2);
                 if (text == null) return true;
-                f++;
-                Scan(ToolKit.Rel(path, root), text, rx, outSb, ref h, ref m);
-                return h + m < 5000;
+                st.Files++;
+                Scan(ToolKit.Rel(path, root), text, st);
+                return st.Total < cap;
             }, ctx.Ct, 20000);
-            hits = h;
-            more = m;
-            files = f;
+            return st;
         }
 
-        static void Scan(string label, string text, Regex rx, StringBuilder sb, ref int hits, ref int more)
+        static void Scan(string label, string text, Find st)
         {
             string[] lines = Document.NormalizeNewlines(text).Split('\n');
+            List<int> shown = null;
+            HashSet<int> hit = st.Context > 0 && !st.FileList ? new HashSet<int>() : null;
+            int count = 0;
             for (int i = 0; i < lines.Length; i++)
             {
                 bool m;
-                try { m = rx.IsMatch(lines[i]); } catch (RegexMatchTimeoutException) { m = false; }
+                try { m = st.Rx.IsMatch(lines[i]); } catch (RegexMatchTimeoutException) { m = false; }
                 if (!m) continue;
-                if (hits >= 120) { more++; continue; }
-                string l = lines[i].Trim();
-                if (l.Length > 240) l = l.Substring(0, 240) + "...";
-                sb.Append(label).Append(':').Append(i + 1).Append(": ").Append(l).Append('\n');
-                hits++;
+                count++;
+                st.Total++;
+                if (st.FileList) continue;
+                if (hit != null) hit.Add(i);
+                st.Seen++;
+                if (st.Seen <= st.Skip) continue;
+                if (st.Hits >= st.Limit) { st.More++; continue; }
+                if (shown == null) shown = new List<int>();
+                shown.Add(i);
+                st.Hits++;
             }
+            if (count == 0) return;
+            if (st.FileList)
+            {
+                st.Seen++;
+                if (st.Seen <= st.Skip) return;
+                if (st.Hits >= st.Limit) { st.More++; return; }
+                st.Hits++;
+                st.Out.Append(label).Append(" (").Append(count).Append(count == 1 ? " match)\n" : " matches)\n");
+                return;
+            }
+            if (shown == null) return;
+            if (hit == null)
+            {
+                foreach (int i in shown) Line(st.Out, label, i, lines[i].Trim(), ':');
+                return;
+            }
+            int end = -1;
+            foreach (int i in shown)
+            {
+                int from = Math.Max(0, i - st.Context), to = Math.Min(lines.Length - 1, i + st.Context);
+                if (from <= end) from = end + 1;
+                else if (st.Out.Length > 0) st.Out.Append("--\n");
+                for (int k = from; k <= to; k++) Line(st.Out, label, k, lines[k].TrimEnd(), hit.Contains(k) ? ':' : '-');
+                end = Math.Max(end, to);
+            }
+        }
+
+        static void Line(StringBuilder sb, string label, int i, string l, char mark)
+        {
+            if (l.Length > 240) l = l.Substring(0, 240) + "...";
+            sb.Append(label).Append(mark).Append(i + 1).Append(mark).Append(' ').Append(l).Append('\n');
         }
     }
 
@@ -2767,12 +2825,20 @@ namespace MinGent
         public static string LandingInPage(string body)
         {
             if (string.IsNullOrEmpty(body)) return null;
-            Match m = Regex.Match(body, "<meta[^>]+http-equiv=[\"']?refresh[^>]+content=\"[^\"]*?url=\\s*'?([^\"'>\\s]+)", RegexOptions.IgnoreCase);
-            if (!m.Success) m = Regex.Match(body, "<meta[^>]+http-equiv=[\"']?refresh[^>]+content='[^']*?url=\\s*\"?([^\"'>\\s]+)", RegexOptions.IgnoreCase);
+            try { return Landing(body); }
+            catch (RegexMatchTimeoutException) { return null; }
+        }
+
+        static string Landing(string body)
+        {
+            DateTime until = DateTime.UtcNow + PageTime;
+            Match m = Regex.Match(body, "<meta[^>]+http-equiv=[\"']?refresh[^>]+content=\"[^\"]*?url=\\s*'?([^\"'>\\s]+)", RegexOptions.IgnoreCase, Scan(until));
+            if (!m.Success) m = Regex.Match(body, "<meta[^>]+http-equiv=[\"']?refresh[^>]+content='[^']*?url=\\s*\"?([^\"'>\\s]+)", RegexOptions.IgnoreCase, Scan(until));
             if (m.Success) return Outside(WebUtility.HtmlDecode(m.Groups[1].Value));
             if (body.IndexOf("Redirect Notice", StringComparison.OrdinalIgnoreCase) < 0 && body.IndexOf("trying to send you to", StringComparison.OrdinalIgnoreCase) < 0) return null;
-            foreach (Match a in Regex.Matches(body, "<a\\b[^>]*\\bhref=\"(https?://[^\"]+)\"", RegexOptions.IgnoreCase))
+            foreach (Match a in Regex.Matches(body, "<a\\b[^>]*\\bhref=\"(https?://[^\"]+)\"", RegexOptions.IgnoreCase, Scan(until)))
             {
+                if (DateTime.UtcNow > until) return null;
                 string href = WebUtility.HtmlDecode(a.Groups[1].Value);
                 Uri u;
                 if (Uri.TryCreate(href, UriKind.Absolute, out u) && !GoogleHost.IsMatch(u.Host) && !GoogleGate.IsMatch(u.Host) && !u.Host.EndsWith(".google.com", StringComparison.OrdinalIgnoreCase)) return Outside(href);
@@ -3236,17 +3302,68 @@ namespace MinGent
             return w;
         }
 
-        public static string HtmlToText(string html)
+        static readonly TimeSpan PageTime = TimeSpan.FromSeconds(3), ScanTime = TimeSpan.FromSeconds(1);
+
+        public static TimeSpan Left(DateTime until)
         {
-            string s = Regex.Replace(html, "<!--.*?-->", "", RegexOptions.Singleline);
-            s = Regex.Replace(s, "<(script|style|noscript|svg|template|iframe|head|nav|footer|form|button|select)\\b[^>]*>.*?</\\1\\s*>", " ", RegexOptions.Singleline | RegexOptions.IgnoreCase);
-            s = Regex.Replace(s, "<a\\b[^>]*href=\"(https?://[^\"]+)\"[^>]*>(.*?)</a>", "$2 ($1)", RegexOptions.Singleline | RegexOptions.IgnoreCase);
-            s = Regex.Replace(s, "<li\\b[^>]*>", "\n- ", RegexOptions.IgnoreCase);
-            s = Regex.Replace(s, "<h([1-6])\\b[^>]*>", "\n\n# ", RegexOptions.IgnoreCase);
-            s = Regex.Replace(s, "<(br|/p|/div|/li|/tr|/h[1-6]|/pre|/table|/section|/article|/blockquote)[^>]*>", "\n", RegexOptions.IgnoreCase);
-            s = Regex.Replace(s, "<(td|th)\\b[^>]*>", " | ", RegexOptions.IgnoreCase);
-            s = Regex.Replace(s, "<[^>]+>", "");
-            s = WebUtility.HtmlDecode(s);
+            TimeSpan left = until - DateTime.UtcNow;
+            if (left <= TimeSpan.Zero) throw new RegexMatchTimeoutException();
+            return left;
+        }
+
+        public static TimeSpan Scan(DateTime until)
+        {
+            TimeSpan left = Left(until);
+            return left < ScanTime ? left : ScanTime;
+        }
+
+        public static string TimedReplace(string input, string pattern, string replacement, RegexOptions options, DateTime until)
+        {
+            bool expand = replacement.IndexOf('$') >= 0;
+            return Regex.Replace(input, pattern, delegate (Match m)
+            {
+                if (DateTime.UtcNow > until) throw new RegexMatchTimeoutException();
+                return expand ? m.Result(replacement) : replacement;
+            }, options, Scan(until));
+        }
+
+        static string Shape(string html, DateTime until)
+        {
+            string s = TimedReplace(html, "<!--.*?-->", "", RegexOptions.Singleline, until);
+            s = TimedReplace(s, "<(script|style|noscript|svg|template|iframe|head|nav|footer|form|button|select)\\b[^>]*>.*?</\\1\\s*>", " ", RegexOptions.Singleline | RegexOptions.IgnoreCase, until);
+            s = TimedReplace(s, "<a\\b[^>]*href=\"(https?://[^\"]+)\"[^>]*>(.*?)</a>", "$2 ($1)", RegexOptions.Singleline | RegexOptions.IgnoreCase, until);
+            s = TimedReplace(s, "<li\\b[^>]*>", "\n- ", RegexOptions.IgnoreCase, until);
+            s = TimedReplace(s, "<h([1-6])\\b[^>]*>", "\n\n# ", RegexOptions.IgnoreCase, until);
+            s = TimedReplace(s, "<(br|/p|/div|/li|/tr|/h[1-6]|/pre|/table|/section|/article|/blockquote)[^>]*>", "\n", RegexOptions.IgnoreCase, until);
+            s = TimedReplace(s, "<(td|th)\\b[^>]*>", " | ", RegexOptions.IgnoreCase, until);
+            s = TimedReplace(s, "<[^>]+>", "", RegexOptions.None, until);
+            return WebUtility.HtmlDecode(s);
+        }
+
+        static string StripTags(string html)
+        {
+            StringBuilder sb = new StringBuilder(html.Length);
+            int i = 0;
+            while (i < html.Length)
+            {
+                int open = html.IndexOf('<', i);
+                if (open < 0) { sb.Append(html, i, html.Length - i); break; }
+                sb.Append(html, i, open - i);
+                int close = html.IndexOf('>', open + 1);
+                if (close < 0) break;
+                sb.Append(' ');
+                i = close + 1;
+            }
+            return WebUtility.HtmlDecode(sb.ToString());
+        }
+
+        public static string HtmlToText(string html) { return HtmlToText(html, DateTime.UtcNow + PageTime); }
+
+        public static string HtmlToText(string html, DateTime until)
+        {
+            string s;
+            try { s = Shape(html ?? "", until); }
+            catch (RegexMatchTimeoutException) { s = StripTags(html ?? ""); }
             StringBuilder sb = new StringBuilder();
             int blank = 0;
             foreach (string raw in s.Replace("\r", "").Split('\n'))
@@ -3404,7 +3521,7 @@ namespace MinGent
                 a.AllowRemember = false;
                 a.Title = "Download " + name;
                 a.Detail = url;
-                a.Reason = "The page wants to save " + name + " (" + BrowserPane.FormatBytes(bytes) + ") into the downloads folder of the workspace." +
+                a.Reason = "The page wants to save " + name + " (" + BrowserPane.FormatBytes(bytes) + ") into the work folder's downloads folder." +
                            (risky ? " Files like this can run programs or hold files that do." : "");
                 ok = ctx.Approve(a);
             }
@@ -3531,7 +3648,7 @@ namespace MinGent
             o.Images = new List<ImageData>(new ImageData[] { img });
             ImageData near = zoomed ? null : CloseUp(ctx);
             if (near != null) o.Images.Add(near);
-            o.AddNote(zoomed ? "This is the CAPTCHA now, zoomed in (picture below, " + w + " x " + h + " pixels). Positions for the next browser_click are pixels in this picture. If a picture in it is still loading or fading in, take browser_screenshot again before you pick it or press Verify."
+            o.AddNote(zoomed ? "This is the CAPTCHA now, zoomed in (picture below, " + w + " x " + h + " pixels); everything you need is in it. Positions for the next browser_click are pixels in this picture. If a picture in it is still loading or fading in, take browser_screenshot again before you pick it or press Verify."
                              : near != null ? "This is the page now (first picture, " + w + " x " + h + " pixels), with the CAPTCHA on it zoomed in as the second picture so it is easier to read. Positions for the next browser_click are pixels in the first picture."
                              : "This is the page now (picture below, " + w + " x " + h + " pixels); no CAPTCHA puzzle is open. Positions for the next browser_click are pixels in this picture.");
             o.AddNote(CaptchaTip(ctx));
@@ -4213,7 +4330,7 @@ namespace MinGent
             ctx.Session.BrowserMovedTo = null;
             ImageData near = !zoomed && ctx.Cfg.TryCaptchas && ctx.Cfg.Vision && !ctx.Session.IsHelper ? CloseUp(ctx) : null;
             ToolOutcome o = ToolOutcome.Ok(zoomed
-                ? "Screenshot of the CAPTCHA on " + ctx.Browser.CurrentUrl + ", zoomed in so it is easier to see (shown below, " + w + " x " + h + " pixels). Click in it with browser_click and x and y in these pixels; to pick several picture tiles at once, give points."
+                ? "Screenshot of the CAPTCHA on " + ctx.Browser.CurrentUrl + ", zoomed in so it is easier to see (shown below, " + w + " x " + h + " pixels); everything you need is in it. Click in it with browser_click and x and y in these pixels; to pick several picture tiles at once, give points."
                 : near != null ? "Screenshot of " + ctx.Browser.CurrentUrl + " (first picture, " + w + " x " + h + " pixels), with the CAPTCHA on it zoomed in as the second picture so it is easier to read. To click, call browser_click with x and y in the pixels of the first picture."
                 : "Screenshot of " + ctx.Browser.CurrentUrl + " (shown below, " + w + " x " + h + " pixels). To click something that browser_read does not list, call browser_click with x and y in these pixels.", zoomed ? "Screenshot of the CAPTCHA" : "Screenshot");
             o.Images = new List<ImageData>(new ImageData[] { img });
@@ -4278,10 +4395,12 @@ namespace MinGent
             }
             if (code.Length > 20000) return ToolOutcome.Fail("The code is " + code.Length.ToString(CultureInfo.InvariantCulture) + " characters long; the console takes up to 20000. Run it in smaller pieces.");
             string url = ctx.Browser.CurrentUrl ?? "";
-            string no = ConsoleCheck.Refusal(code, !BrowserPane.ThisPc(url));
+            bool website = !BrowserPane.ThisPc(url);
+            string captcha = website ? CaptchaRefusal(ctx, code) : null;
+            string no = captcha ?? ConsoleCheck.Refusal(code, website);
             if (no != null)
             {
-                ctx.Browser.ConsoleRefused(code, no);
+                ctx.Browser.ConsoleRefused(code, no, captcha == null);
                 ToolOutcome r = ToolOutcome.Fail(no);
                 r.Summary = "Not run";
                 return r;
@@ -4292,6 +4411,19 @@ namespace MinGent
             ToolOutcome o = Result(e2, result, "Ran code in the console", true);
             o.Detail = code + "\n\n" + (e2 ?? result ?? "");
             return o;
+        }
+
+        static string CaptchaRefusal(ToolContext ctx, string code)
+        {
+            string word = ConsoleCheck.CaptchaWord(code);
+            bool showing = word == null && ctx.Browser.CaptchaShowing(ctx.Ct);
+            if (word == null && !showing) return null;
+            string next = ctx.Session.IsHelper ? "Helpers don't solve CAPTCHAs: if you need this page, say in your report that it needs the user."
+                        : !ctx.Cfg.TryCaptchas ? "CAPTCHA mode is off, so ask the user to solve it with ask_user."
+                        : ctx.Cfg.Vision ? "Take browser_screenshot and solve it by clicking, dragging or typing in it by position."
+                        : "Click its captcha ref from browser_read, or ask the user to solve it with ask_user.";
+            if (showing) return "Not run: a CAPTCHA is showing on this page, and the console runs no code on a website while one is. " + next + " Once it's gone, the console runs code again.";
+            return "Not run: this code reaches into a CAPTCHA (" + word + "). MinGent never reads, solves or gets around a CAPTCHA with code. " + next;
         }
     }
 

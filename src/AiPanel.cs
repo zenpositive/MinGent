@@ -415,8 +415,8 @@ namespace MinGent
             {
                 chat.EmptyTitle = "Let's get you a model";
                 chat.EmptyActions.Add(new KeyValuePair<string, Action>("Download a free model", delegate { host.ShowModelLibrary(); }));
-                chat.EmptyActions.Add(new KeyValuePair<string, Action>("Use a cloud model", delegate { host.ShowSettings(); }));
-                chat.EmptyText = "Models from the library run on this PC, so nothing leaves it. With an API key, Claude, Gemini or OpenAI models work too.";
+                chat.EmptyActions.Add(new KeyValuePair<string, Action>("Use a cloud model", delegate { host.ShowSettings("Cloud models"); }));
+                chat.EmptyText = "Models from the library run on this PC, so nothing leaves it. With an API key, models from Claude, OpenAI, Gemini or OpenRouter work too.";
             }
             else
             {
@@ -767,7 +767,7 @@ namespace MinGent
             EngineRelease upd = EngineUpdates.Available;
             if (upd != null) m.Items.Add(Menus.Item("Update llama.cpp to " + upd.Version + "...", false, delegate { host.ShowModelLibrary(); }));
             m.Items.Add(Menus.Item("Download or manage models...", false, delegate { host.ShowModelLibrary(); }));
-            m.Items.Add(Menus.Item("API keys and model settings...", false, delegate { host.ShowSettings(); }));
+            m.Items.Add(Menus.Item("API keys and model settings...", false, delegate { host.ShowSettings("Cloud models"); }));
             ToolStripMenuItem again = Menus.Item(refreshing ? "Checking for models..." : "Refresh", false, delegate { RefreshConnection(true); });
             again.Enabled = !refreshing;
             m.Items.Add(again);
@@ -815,7 +815,7 @@ namespace MinGent
             if (list.Count == 0)
             {
                 if (ModelEntry.IsCloud(provider))
-                    m.Items.Add(Menus.Item(ps.NeedsKey ? "Check the API key..." : ps.Configured ? "API key settings..." : "Add an API key...", false, delegate { host.ShowSettings("Models"); }));
+                    m.Items.Add(Menus.Item(ps.NeedsKey ? "Check the API key..." : ps.Configured ? "API key settings..." : "Add an API key...", false, delegate { host.ShowSettings("Cloud models"); }));
                 else if (provider == "engine")
                     m.Items.Add(Menus.Item(Engine.Instance.Installed ? "Download a model..." : "Set up the built-in engine...", false, delegate { host.ShowModelLibrary(); }));
             }
@@ -853,6 +853,11 @@ namespace MinGent
             settings.AiModel = modelRef;
             settings.Save();
             UpdateModelChip();
+            if (running)
+            {
+                ModelEntry picked = catalog == null ? null : catalog.Find(modelRef);
+                Notice("The agent finishes this task with the model it started with, then " + (picked != null ? picked.Display : "the new model") + " takes over.", 0);
+            }
             if (level == "full" && !wasLocal && LocalModelPicked()) Notice("Full auto is still on. " + LocalFullAutoNote, 2);
             if (modelRef.StartsWith("lmstudio:") && modelRef.Length > 9)
             {
@@ -1601,7 +1606,13 @@ namespace MinGent
                 bool settingsFix = error.IndexOf("Settings", StringComparison.Ordinal) >= 0 || error.IndexOf("API key", StringComparison.OrdinalIgnoreCase) >= 0;
                 bool modelFix = error.IndexOf("model menu", StringComparison.OrdinalIgnoreCase) >= 0 || error.IndexOf("Choose", StringComparison.Ordinal) >= 0;
                 if (libraryFix) { err.ActionLabel = "Open the model library"; err.Action = delegate { host.ShowModelLibrary(); }; }
-                else if (settingsFix) { err.ActionLabel = "Open settings"; err.Action = delegate { host.ShowSettings(); }; }
+                else if (settingsFix)
+                {
+                    System.Text.RegularExpressions.Match at = System.Text.RegularExpressions.Regex.Match(error, @"Settings > (General|Models|Agent|Memory|Safety|Privacy)\b");
+                    string page = error.IndexOf("API key", StringComparison.OrdinalIgnoreCase) >= 0 ? "Cloud models" : at.Success ? at.Groups[1].Value : null;
+                    err.ActionLabel = "Open settings";
+                    err.Action = delegate { host.ShowSettings(page); };
+                }
                 else if (modelFix) { err.ActionLabel = "Choose a model"; err.Action = delegate { ShowModelMenu(); }; }
                 else
                 {
@@ -2205,7 +2216,7 @@ namespace MinGent
             }
         }
 
-        static readonly System.Text.RegularExpressions.Regex PlanStep = new System.Text.RegularExpressions.Regex(@"^\s*(\d{1,2}[.)]|[-*\u2022])\s+\S", System.Text.RegularExpressions.RegexOptions.Multiline | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        static readonly System.Text.RegularExpressions.Regex PlanStep = new System.Text.RegularExpressions.Regex(@"^[^\S\n]*(\d{1,2}[.)]|[-*\u2022])\s+\S", System.Text.RegularExpressions.RegexOptions.Multiline | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
         void OfferPlan()
         {
@@ -3337,7 +3348,7 @@ namespace MinGent
             m.Items.Add(Menus.Item("Show thinking", settings.AiShowThinking, delegate { settings.AiShowThinking = !settings.AiShowThinking; settings.Save(); }));
             m.Items.Add(Menus.Item("Send the notes selection with messages", settings.AiSendContext, delegate { settings.AiSendContext = !settings.AiSendContext; settings.Save(); if (ContextToggled != null) ContextToggled(this, EventArgs.Empty); }));
             m.Items.Add(new ToolStripSeparator());
-            m.Items.Add(Menus.Item("Open the workspace folder", false, delegate
+            m.Items.Add(Menus.Item("Open the work folder", false, delegate
             {
                 bool d;
                 string ws = host.WorkspaceFolder(out d);
@@ -3659,6 +3670,7 @@ namespace MinGent
             Font = UI.Font;
             AccessibleRole = AccessibleRole.ButtonDropDown;
             AccessibleName = "Model";
+            Cursor = Cursors.Hand;
         }
 
         public void SetTheme(Theme t) { th = t; Invalidate(); }
@@ -3838,6 +3850,7 @@ namespace MinGent
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             SetStyle(ControlStyles.Selectable, false);
             Font = UI.Font;
+            Cursor = Cursors.Hand;
         }
 
         public void SetTheme(Theme t) { th = t; Invalidate(); }

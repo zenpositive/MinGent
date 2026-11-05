@@ -94,6 +94,7 @@ namespace MinGent
         string CaptchaCloseUp(CancelToken ct, out ImageData image, out int width, out int height);
         string CaptchaName { get; }
         bool CaptchaTyped { get; }
+        bool CaptchaShowing(CancelToken ct);
         string ElementInfo(string refId, CancelToken ct, out string kind, out bool sensitive);
         string PointInfo(double x, double y, CancelToken ct, out string kind, out bool sensitive);
         bool PendingDownload(out string name, out string url, out long bytes);
@@ -109,7 +110,7 @@ namespace MinGent
         string CloseConsoleForAgent(bool userAsked);
         string ConsoleRead(CancelToken ct, out string text);
         string ConsoleRun(string code, string checkedUrl, CancelToken ct, out string result);
-        void ConsoleRefused(string code, string why);
+        void ConsoleRefused(string code, string why, bool show);
         string ConsoleNews();
     }
 
@@ -748,7 +749,11 @@ namespace MinGent
         {
             PermissionState ps = Session.Perms;
             if (Ct.IsCancelled) return false;
-            if (ps.Full && !ask.EvenInFull) return !ask.Never;
+            if (ps.Full && !ask.EvenInFull)
+            {
+                if (ask.Never && Call != null) Call.AutoRefused = true;
+                return !ask.Never;
+            }
             if (ps.Auto && !ask.Never && ps.AutoAllows(ask.Category)) return true;
             lock (ps.AskLock)
             {
@@ -805,7 +810,7 @@ namespace MinGent
             if (ps.Auto && !guard) return null;
             PermissionAsk a = new PermissionAsk();
             a.Kind = "write";
-            a.Title = what + " outside the workspace";
+            a.Title = what + " outside the work folder";
             a.Detail = full;
             a.Key = "write:" + (dir ?? full);
             a.Reason = guard ? "This chat has read web content, so writing outside the work folder needs your OK (prompt-injection guard)." : "Writing outside " + Cfg.Workspace + ".";
@@ -856,6 +861,8 @@ namespace MinGent
             object v;
             if (a == null || !a.TryGetValue(k, out v) || v == null) return def;
             if (v is double) return (int)Math.Max(int.MinValue, Math.Min(int.MaxValue, (double)v));
+            if (v is int) return (int)v;
+            if (v is long) return (int)Math.Max(int.MinValue, Math.Min(int.MaxValue, (long)v));
             int n;
             string s = v as string;
             if (s != null && int.TryParse(s.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out n)) return n;
@@ -1177,6 +1184,18 @@ namespace MinGent
 
         public void Detach(HelperJob job) { lock (jobGate) jobs.Add(job); }
 
+        public bool DetachUnder(HelperJob job, int cap)
+        {
+            lock (jobGate)
+            {
+                int running = 0;
+                foreach (HelperJob j in jobs) if (!j.Done) running++;
+                if (running >= cap || !job.TryDetach()) return false;
+                jobs.Add(job);
+                return true;
+            }
+        }
+
         public bool HelperHoldsBrowser
         {
             get
@@ -1191,7 +1210,7 @@ namespace MinGent
             List<HelperJob> done = new List<HelperJob>();
             lock (jobGate)
             {
-                foreach (HelperJob j in jobs) if (j.Done) done.Add(j);
+                foreach (HelperJob j in jobs) if (j.Done && !j.Cut) done.Add(j);
                 foreach (HelperJob j in done) jobs.Remove(j);
             }
             if (done.Count == 0) return false;
@@ -1766,10 +1785,22 @@ namespace MinGent
                         ui.Notice("The model used up its output limit while thinking and gave no answer. Choose a lower thinking level, then send your message again.", 2);
                     return;
                 }
-                Dictionary<ToolCall, ToolOutcome> early = !IsHelper && r.ToolCalls.Count > 1 && Helpers.Parallel(cfg) ? RunHelpersTogether(r.ToolCalls, byName, tc, ui) : null;
+                Dictionary<ToolCall, ToolOutcome> early = null;
+                bool together = r.ToolCalls.Count > 1 && Helpers.Parallel(cfg);
+                if (together && !IsHelper) early = RunHelpersTogether(r.ToolCalls, byName, tc, ui);
                 bool busy = false;
-                foreach (ToolCall call in r.ToolCalls)
+                for (int at = 0; at < r.ToolCalls.Count; at++)
                 {
+                    ToolCall call = r.ToolCalls[at];
+                    if (together && !ct.IsCancelled && SideBySide.Contains(call.Name ?? "") && (early == null || !early.ContainsKey(call)))
+                    {
+                        List<ToolCall> rest = new List<ToolCall>();
+                        for (int k = at; k < r.ToolCalls.Count; k++) if (early == null || !early.ContainsKey(r.ToolCalls[k])) rest.Add(r.ToolCalls[k]);
+                        Dictionary<ToolCall, ToolOutcome> more = null;
+                        if (rest.Count > 1) { try { more = RunReadsTogether(rest, byName, tc, ui, br, canPlan, guard, coach); } catch (Exception) { more = null; } }
+                        if (more != null && early == null) early = more;
+                        else if (more != null) foreach (KeyValuePair<ToolCall, ToolOutcome> kv in more) early[kv.Key] = kv.Value;
+                    }
                     if (ct.IsCancelled && (early == null || !early.ContainsKey(call)))
                     {
                         History.Add(Msg.ToolResult(call, "Not run: the user stopped the assistant.", true, null));
@@ -1789,7 +1820,20 @@ namespace MinGent
                             outcome = pre;
                             ran = true;
                             sig = call.Name + "|" + Canon(call);
-                            if (outcome.Untrusted && !Perms.Tainted) { Perms.Tainted = true; Perms.TaintSource = "a helper's report"; }
+                            AgentTool side;
+                            if (call.Name == "delegate" || !byName.TryGetValue(call.Name, out side))
+                            {
+                                if (outcome.Untrusted && !Perms.Tainted) { Perms.Tainted = true; Perms.TaintSource = "a helper's report"; }
+                            }
+                            else
+                            {
+                                if (ct.IsCancelled && outcome.Denied)
+                                {
+                                    outcome = ToolOutcome.Fail("Not run: the user stopped the assistant.");
+                                    outcome.Summary = "stopped";
+                                }
+                                if ((outcome.Untrusted || side.UntrustedFor(call.Args)) && !Perms.Tainted) { Perms.Tainted = true; Perms.TaintSource = side.Label(call.Args); }
+                            }
                         }
                         else if (!byName.TryGetValue(call.Name, out tool))
                         {
@@ -1859,6 +1903,7 @@ namespace MinGent
                                 }
                             }
                         }
+                        if (call.AutoRefused) outcome.AddNote("Nobody was asked: Full auto never does this, so MinGent turned it down by itself. Tell the user that plainly; don't say they declined.");
                         coach.AfterTool(call.Name, call.Args, outcome);
                         if (!Bookkeeping(call, outcome, shown)) busy = true;
                         if (ran && sig != null) outcome.AddNote(guard.After(sig, call.Name, call.Args, outcome, worldBefore));
@@ -1937,6 +1982,59 @@ namespace MinGent
                 return path.Length == 0 || (o != null && !o.Error && !shown.Add(path));
             }
             return name == PlanMode.Tool && o != null && o.Summary == PresentPlanTool.AlreadyApproved;
+        }
+
+        static readonly HashSet<string> SideBySide = new HashSet<string>(StringComparer.Ordinal) { "read_file", "list_directory", "find_files", "search_text", "web_fetch", "system_info" };
+
+        Dictionary<ToolCall, ToolOutcome> RunReadsTogether(List<ToolCall> calls, Dictionary<string, AgentTool> byName, ToolContext tc, IAgentUi ui, IBrowserBridge br, bool canPlan, RepeatGuard guard, RunCoach coach)
+        {
+            List<ToolCall> group = new List<ToolCall>();
+            HashSet<string> sigs = new HashSet<string>(StringComparer.Ordinal);
+            Dictionary<string, int> perSite = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (ToolCall c in calls)
+            {
+                AgentTool tool;
+                if (!SideBySide.Contains(c.Name) || !byName.TryGetValue(c.Name, out tool) || !c.ArgsValid) break;
+                if (ArgFixer.Fix(tool, c) != null || !c.ArgsValid) break;
+                string site = c.Name == "web_fetch" ? RunCoach.KeyFor(c.Name, c.Args) : "";
+                int before = 0;
+                if (site.StartsWith("site:", StringComparison.Ordinal))
+                {
+                    perSite.TryGetValue(site, out before);
+                    int blocks = coach.SiteBlocks(site);
+                    if (blocks > 0 && blocks + before >= 3) continue;
+                }
+                string sig = c.Name + "|" + Canon(c);
+                if (!sigs.Add(sig) || guard.Check(sig, c.Name) != null || coach.BeforeTool(c.Name, c.Args) != null) break;
+                if (canPlan && Perms.Planning && !PlanMode.Allows(c.Name, c.Args)) break;
+                if (site.Length > 0) perSite[site] = before + 1;
+                group.Add(c);
+                if (group.Count == 6) break;
+            }
+            if (group.Count < 2) return null;
+            Dictionary<ToolCall, ToolOutcome> res = new Dictionary<ToolCall, ToolOutcome>();
+            List<Thread> threads = new List<Thread>();
+            foreach (ToolCall c in group)
+            {
+                ToolCall call = c;
+                AgentTool tool = byName[call.Name];
+                ToolContext own = tc.CopyFor(call);
+                own.Browser = !IsHelper && HelperHoldsBrowser ? null : br;
+                ui.ToolStart(call, tool.Label(call.Args));
+                Thread t = new Thread(delegate ()
+                {
+                    ToolOutcome o;
+                    try { o = tool.Run(own, call.Args) ?? ToolOutcome.Fail(call.Name + " returned nothing"); }
+                    catch (Exception ex) { o = ToolOutcome.Fail(call.Name + " crashed: " + ex.Message); }
+                    lock (res) res[call] = o;
+                });
+                t.IsBackground = true;
+                t.Name = "MinGent tool";
+                t.Start();
+                threads.Add(t);
+            }
+            foreach (Thread t in threads) t.Join();
+            return res;
         }
 
         Dictionary<ToolCall, ToolOutcome> RunHelpersTogether(List<ToolCall> calls, Dictionary<string, AgentTool> byName, ToolContext tc, IAgentUi ui)
@@ -2684,7 +2782,7 @@ namespace MinGent
             sb.Append("  then fix what is wrong and test again.\n");
             sb.Append("- When something fails, read the error, find the cause and change your approach. Don't repeat a call that failed the same way.\n");
             sb.Append("- If a site blocks automated access (HTTP 403 or 429, a \"Just a moment...\" page, a CAPTCHA), requests from curl or scripts usually get the same answer: ").Append(browser ? "open it in the built-in browser, use another source" : "use another source").Append(", or tell the user. If two tries fail the same way or return the same result, change your approach instead of rewording and trying again.\n");
-            if (browser && cfg.TryCaptchas) sb.Append("- CAPTCHA mode is on (the user turned it on in Settings so CAPTCHAs don't stop your work): when a page in the built-in browser shows a CAPTCHA you need to get past, you may try to solve it yourself").Append(vision ? " - take browser_screenshot (MinGent zooms in on the CAPTCHA), look carefully, then click by position; for a picture grid, click all the tiles you are sure of in one browser_click with points, with Verify as the last point once your picks are complete (not on puzzles that say to click verify once there are none left: new pictures appear in the tiles you pick). For a CAPTCHA that shows characters to type, type them into its answer box with browser_type. After every click in a CAPTCHA, MinGent shows you the CAPTCHA again" : " by clicking its captcha ref").Append(". You get five tries, more on puzzles with several pages or rounds; after that MinGent stops you, and you ask the user to solve it with ask_user.\n");
+            if (browser && cfg.TryCaptchas) sb.Append("- CAPTCHA mode is on (the user turned it on in Settings so CAPTCHAs don't stop your work): when a page in the built-in browser shows a CAPTCHA you need to get past, you may try to solve it yourself").Append(vision ? ", the way a person does, by looking at it and clicking or typing in it: a CAPTCHA isn't in the page text and code can't reach it, so the screenshot is all you work from. Take browser_screenshot (MinGent zooms in on the CAPTCHA), look carefully, then click by position; for a picture grid, click all the tiles you are sure of in one browser_click with points, with Verify as the last point once your picks are complete (not on puzzles that say to click verify once there are none left: new pictures appear in the tiles you pick). For a CAPTCHA that shows characters to type, type them into its answer box with browser_type. After every click in a CAPTCHA, MinGent shows you the CAPTCHA again" : " by clicking its captcha ref (a CAPTCHA isn't in the page text and code can't reach it)").Append(". You get five tries, more on puzzles with several pages or rounds; after that MinGent stops you, and you ask the user to solve it with ask_user.\n");
             sb.Append("- Tool results can end with lines that start with \"[MinGent note]\". MinGent adds these after the tool runs: they say what happened and suggest a next step, and they are not part of the tool's output. A tool result can also end with a message the user sent while you were working; take it into account.\n");
             sb.Append("- Finish with a short summary: what you changed (file paths), how you checked it, and anything the user still needs to do. Be honest: if you could not test something, or it does not work, say so.\n\n");
 
@@ -2704,7 +2802,9 @@ namespace MinGent
             sb.Append("- Each user message starts with a line in square brackets with the date and time, the current workspace, Auto or Ask mode, and the open tabs when they changed. The app adds it; it is not part of what the user typed. The latest one is what applies now.\n\n");
 
             sb.Append("# Tool tips\n");
-            sb.Append("- Call several independent tools in one turn when you can, for example to read three files at once.\n");
+            sb.Append("- Call several independent tools in one turn when you can, for example to read three files at once.");
+            if (Helpers.Parallel(cfg)) sb.Append(" With this model, read_file, list_directory, find_files, search_text, web_fetch and system_info calls next to each other in one turn run at the same time, so ask for all the reads you need together.");
+            sb.Append("\n");
             sb.Append("- read_file shows lines as \"12\u2192text\". The number and arrow are not part of the file: never copy them into old_string or file content.\n");
             sb.Append("- edit_file: copy old_string exactly from the current file, with the same indentation, and include enough lines to make it unique. For several changes in one file, make one edit_file call per change.\n");
             sb.Append("- write_file with append=true adds to the end of a file. Write a long file in parts: the first part normally, then the rest with append=true.\n");
@@ -2745,7 +2845,7 @@ namespace MinGent
                 sb.Append("  - kind \"review\" to have substantial finished work checked by someone who did not write it, before you tell the user it is done;\n");
                 sb.Append("  - kind \"general\" for a self-contained piece of work.\n");
                 sb.Append("- A helper can't see this conversation. Give it everything it needs: the goal, the files or addresses, constraints, and what to report back. Check what it reports before you rely on it.\n");
-                if (Helpers.Parallel(cfg)) sb.Append("- Several explore helpers called in one turn run at the same time.\n");
+                if (Helpers.Parallel(cfg)) sb.Append("- Several explore helpers called in one turn run at the same time. With background=true, an explore helper works while you carry on with other steps: its report is added to the conversation when it is done, and MinGent waits for it before your final answer.\n");
                 if (autoReview) sb.Append("- When you change a lot of code, MinGent has a reviewer check your work before your answer reaches the user, and shows you its report.\n");
                 sb.Append('\n');
             }

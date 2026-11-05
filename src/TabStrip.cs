@@ -380,6 +380,7 @@ namespace MinGent
             bool hc = h >= 0 && CloseRect(h).Contains(e.Location);
             int hb = PlusRect().Contains(e.Location) ? 1 : (overflow && ListRect().Contains(e.Location) ? 2 : 0);
             if (hb != 0) h = -1;
+            Cursor = h >= 0 || hb != 0 ? Cursors.Hand : Cursors.Default;
             if (h != hover || hc != hoverClose || hb != hoverBtn)
             {
                 hover = h; hoverClose = hc; hoverBtn = hb;

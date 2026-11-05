@@ -238,6 +238,7 @@ namespace MinGent
             FlatStyle = FlatStyle.Flat;
             FlatAppearance.BorderSize = 0;
             UseVisualStyleBackColor = false;
+            Cursor = Cursors.Hand;
             UseMnemonic = false;
             Font = UI.Font;
             Text = text;
@@ -396,6 +397,7 @@ namespace MinGent
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
             SetStyle(ControlStyles.StandardDoubleClick, false);
             TabStop = true;
+            Cursor = Cursors.Hand;
             Font = UI.Font;
             Text = title;
             this.note = note ?? "";
@@ -789,6 +791,7 @@ namespace MinGent
         {
             base.OnMouseMove(e);
             int h = IndexAt(e.Location);
+            Cursor = h >= 0 ? Cursors.Hand : Cursors.Default;
             if (h != hot) { hot = h; Invalidate(); }
         }
 
@@ -964,6 +967,7 @@ namespace MinGent
         {
             base.OnMouseMove(e);
             int h = IndexAt(e.Location);
+            Cursor = h >= 0 ? Cursors.Hand : Cursors.Default;
             if (h != hot) { hot = h; Invalidate(); }
         }
 
@@ -1308,6 +1312,7 @@ namespace MinGent
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
             SetStyle(ControlStyles.StandardDoubleClick, false);
             TabStop = true;
+            Cursor = Cursors.Hand;
             Font = UI.Font;
             AccessibleRole = AccessibleRole.ComboBox;
             if (list != null)
@@ -1772,6 +1777,7 @@ namespace MinGent
         {
             base.OnMouseMove(e);
             int i = IndexAt(e.Location);
+            Cursor = i >= 0 ? Cursors.Hand : SearchRect().Contains(e.Location) ? Cursors.IBeam : Cursors.Default;
             if (i >= 0 && i != hot) { hot = i; Invalidate(); }
         }
 

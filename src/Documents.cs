@@ -136,7 +136,7 @@ namespace MinGent
         static string Tidy(string s)
         {
             s = s.Replace("\r\n", "\n").Replace('\r', '\n').Replace("\u00A0", " ");
-            s = Regex.Replace(s, "[ \\t]+\\n", "\n");
+            s = Regex.Replace(s, "(?<![ \\t])[ \\t]+(?=\\n)", "");
             s = Regex.Replace(s, "\\n{4,}", "\n\n\n");
             StringBuilder sb = new StringBuilder(s.Length);
             foreach (char c in s)
@@ -687,7 +687,9 @@ namespace MinGent
 
         static bool LooksDate(string code)
         {
-            string c = Regex.Replace(code ?? "", "\"[^\"]*\"|\\[[^\\]]*\\]|\\\\.", "").ToLowerInvariant();
+            string c = code ?? "";
+            if (c.Length > 255) c = c.Substring(0, 255);
+            c = Regex.Replace(c, "\"[^\"]*\"|\\[[^\\]]*\\]|\\\\.", "").ToLowerInvariant();
             return Regex.IsMatch(c, "[dy]|m{1,5}.*[ds]|h.*m|mm.*ss");
         }
 
@@ -1056,6 +1058,7 @@ namespace MinGent
 
         static void Epub(ZipArchive zip, StringBuilder sb, Budget b, CancelToken ct)
         {
+            DateTime until = DateTime.UtcNow.AddSeconds(5);
             XmlDocument container = Load(Entry(zip, "META-INF/container.xml", b));
             string opf = null;
             if (container != null)
@@ -1077,7 +1080,7 @@ namespace MinGent
                 if (!items.TryGetValue(Attr(n, "idref") ?? "", out target)) continue;
                 byte[] html = Entry(zip, target, b);
                 if (html == null) continue;
-                string text = Web.HtmlToText(Encoding.UTF8.GetString(html)).Trim();
+                string text = Web.HtmlToText(Encoding.UTF8.GetString(html), until).Trim();
                 if (text.Length == 0) continue;
                 sb.Append(text).Append("\n\n");
                 if (sb.Length > MaxChars) return;

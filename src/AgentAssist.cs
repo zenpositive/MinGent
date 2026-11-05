@@ -820,7 +820,22 @@ namespace MinGent
                             a["regex"] = true;
                             changed = true;
                         }
-                        if (Take(a, "output_mode", "-n", "-a", "-b", "-c", "head_limit", "multiline", "context", "max_results") != null) changed = true;
+                        object om = Take(a, "output_mode", "output_format");
+                        if (om != null)
+                        {
+                            string ms = (Str(om) ?? "").ToLowerInvariant();
+                            if (!a.ContainsKey("output")) a["output"] = ms.Contains("file") || ms.Contains("count") ? "files" : "lines";
+                            changed = true;
+                        }
+                        object cx = Take(a, "-C", "context_lines", "lines_of_context", "context_size");
+                        object ca = Take(a, "-A", "after_context", "lines_after");
+                        object cb = Take(a, "-B", "before_context", "lines_before");
+                        if (cx != null || ca != null || cb != null)
+                        {
+                            if (!a.ContainsKey("context")) a["context"] = (double)Math.Max(cx != null ? ToInt(cx) : 0, Math.Max(ca != null ? ToInt(ca) : 0, cb != null ? ToInt(cb) : 0));
+                            changed = true;
+                        }
+                        while (Take(a, "-n", "head_limit", "multiline", "max_results") != null) changed = true;
                         break;
                     }
                 case "run_command":
@@ -2009,6 +2024,12 @@ namespace MinGent
 
         public bool PreferApp { get { return LastFamily == "app"; } }
 
+        public int SiteBlocks(string key)
+        {
+            Trail t;
+            return key != null && trails.TryGetValue(key, out t) ? t.Blocks : 0;
+        }
+
         public static string KeyFor(string name, Dictionary<string, object> args)
         {
             if (name == "web_fetch")
@@ -2555,7 +2576,7 @@ namespace MinGent
             PermissionAsk ask = new PermissionAsk();
             ask.Kind = "write";
             ask.Category = ctx.Guarded(PermissionCategory.Delete);
-            ask.Title = "Delete a file outside the workspace";
+            ask.Title = "Delete a file outside the work folder";
             ask.High = true;
             ask.Detail = full + (through ? " (really " + real + ")" : "");
             ask.Key = "delete:" + full;

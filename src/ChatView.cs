@@ -678,7 +678,7 @@ namespace MinGent
             return s;
         }
 
-        static readonly System.Text.RegularExpressions.Regex Structured = new System.Text.RegularExpressions.Regex(@"(^|\n)\s*(#{1,6}\s|[-*]\s|\d+[.)]\s|\||```)", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        static readonly System.Text.RegularExpressions.Regex Structured = new System.Text.RegularExpressions.Regex(@"(^|\n)[^\S\n]*(#{1,6}\s|[-*]\s|\d+[.)]\s|\||```)", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
         static bool Substantial(string text)
         {

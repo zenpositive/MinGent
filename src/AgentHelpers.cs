@@ -148,6 +148,7 @@ namespace MinGent
         readonly StringBuilder log = new StringBuilder();
         readonly object gate = new object();
         readonly Dictionary<ToolCall, ToolCall> shown = new Dictionary<ToolCall, ToolCall>();
+        readonly Dictionary<ToolCall, string> labels = new Dictionary<ToolCall, string>();
         string current = "", pushed;
         DateTime lastPush = DateTime.MinValue;
         int stepIds;
@@ -212,7 +213,8 @@ namespace MinGent
                 Steps++;
                 if (c != null && (c.Name ?? "").StartsWith("browser_", StringComparison.Ordinal)) BrowserCalls++;
                 current = "";
-                log.Append(Short(label, 90));
+                if (c != null) labels[c] = Short(label, 90);
+                else log.Append(Short(label, 90)).Append('\n');
             }
             ToolCall s = Shown(c);
             if (parent != null && s != null) parent.ToolStart(s, label);
@@ -230,6 +232,10 @@ namespace MinGent
             {
                 if (o != null && o.Untrusted) SawUntrusted = true;
                 string s = o == null ? "" : o.Denied ? "not allowed" : o.Error && !(o.Summary ?? "").StartsWith("Not run", StringComparison.Ordinal) ? "failed: " + Short(o.Summary, 80) : Short(o.Summary, 80);
+                string lab;
+                if (c != null && labels.TryGetValue(c, out lab)) labels.Remove(c);
+                else lab = "";
+                log.Append(lab);
                 if (s.Length > 0) log.Append(" \u2014 ").Append(s);
                 log.Append('\n');
             }
@@ -271,7 +277,7 @@ namespace MinGent
         readonly ManualResetEvent finished = new ManualResetEvent(false);
         readonly object gate = new object();
         ToolOutcome outcome;
-        bool done, detached, dropped, released;
+        bool done, detached, dropped, released, cut;
 
         public HelperJob(ToolContext ctx, ToolCall call, string kind, bool browser)
         {
@@ -287,6 +293,8 @@ namespace MinGent
         }
 
         public bool Done { get { lock (gate) return done; } }
+
+        public bool Cut { get { lock (gate) return cut; } }
 
         public ToolOutcome Outcome { get { lock (gate) return outcome; } }
 
@@ -314,7 +322,8 @@ namespace MinGent
             {
                 outcome = o;
                 done = true;
-                show = detached && !dropped;
+                cut = Ct.IsCancelled && o.Error;
+                show = detached && !dropped && !cut;
             }
             if (show && ui != null) ui.ToolEnd(Call, o);
             finished.Set();
@@ -330,6 +339,13 @@ namespace MinGent
                 detached = true;
                 return true;
             }
+        }
+
+        public ToolOutcome Started()
+        {
+            ToolOutcome o = ToolOutcome.Ok("The " + Who + " is working on this in the background. Carry on with other steps; its report is added to the conversation when it is done, and MinGent waits for it before your final answer. Don't start the same task again.", "Working in the background");
+            o.Background = true;
+            return o;
         }
 
         public ToolOutcome Waiting()
@@ -350,7 +366,7 @@ namespace MinGent
 
         public void Drop(string why)
         {
-            lock (gate) { if (!done) dropped = true; dropWhy = why; }
+            lock (gate) { if (!done || cut) dropped = true; dropWhy = why; }
             Ct.Cancel();
         }
 
@@ -463,12 +479,19 @@ namespace MinGent
 
         public static ToolOutcome Run(ToolContext ctx, ToolCall call, string kind, string task, Func<ToolOutcome, string> framing)
         {
+            return Run(ctx, call, kind, task, framing, false);
+        }
+
+        public static ToolOutcome Run(ToolContext ctx, ToolCall call, string kind, string task, Func<ToolOutcome, string> framing, bool background)
+        {
             if (ctx.Session.IsHelper) return ToolOutcome.Fail("a helper can't start other helpers. Do this part yourself.");
             HelperJob job = new HelperJob(ctx, call, kind, BrowserFor(kind, ctx));
             job.Framing = framing;
             job.Auto = framing != null;
             job.InboxMark = ctx.Session.InboxDelivered;
+            bool away = background && kind == "explore" && framing == null && Parallel(ctx.Cfg);
             job.Start(ctx, task);
+            if (away && ctx.Session.DetachUnder(job, 3)) return job.Started();
             while (!job.Wait(150))
             {
                 if (ctx.Ct.IsCancelled) { job.Wait(5000); break; }
@@ -797,10 +820,12 @@ namespace MinGent
             {
                 Dictionary<string, object> k = P("string", "explore (default), review or general");
                 k["enum"] = Json.A("explore", "review", "general");
-                return Obj("task", P("string", "Complete instructions for the helper, including what to report back (not needed with stop)"), true,
+                Dictionary<string, object> s = Obj("task", P("string", "Complete instructions for the helper, including what to report back (not needed with stop)"), true,
                            "kind", k, false,
                            "title", P("string", "A few words describing the task, shown to the user"), false,
                            "stop", P("string", "Instead of starting a helper, stop ones working in the background: \"all\", or a word from their title or kind, like \"review\". The automatic independent review stops only when the user asked for that."), false);
+                if (parallel) Json.Obj(s, "properties")["background"] = P("boolean", "Explore helpers only: it works in the background while you carry on, and its report is added to the conversation when it is done");
+                return s;
             }
         }
 
@@ -835,7 +860,7 @@ namespace MinGent
             if (stop.Length > 0 && !stop.Equals("false", StringComparison.OrdinalIgnoreCase) && !stop.Equals("no", StringComparison.OrdinalIgnoreCase)) return ctx.Session.StopBackground(stop);
             string task = (S(a, "task") ?? "").Trim();
             if (task.Length < 25) return ToolOutcome.Fail("task is too short. Write complete instructions: what to do, which files or addresses are involved, and what to report back.");
-            return Helpers.Run(ctx, ctx.Call, KindArg(a), task);
+            return Helpers.Run(ctx, ctx.Call, KindArg(a), task, null, parallel && B(a, "background", false));
         }
     }
 }
