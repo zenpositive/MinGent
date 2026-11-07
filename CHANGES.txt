@@ -1,6 +1,21 @@
 MinGent - what changed
 ======================
 
+Version 1.1.1 beta
+- The agent no longer stops after 200 steps. It works until the task is done
+  or you press Stop. MinGent still stops it when it keeps repeating itself or
+  running into the same problem.
+- While the agent uses a program, it waits before each click, key press,
+  scroll or mouse move until you have left the mouse and keyboard alone for a
+  second (four seconds at most), so it doesn't take over the mouse and
+  keyboard in the middle of your own scrolling and typing. If you press Stop
+  while it waits, it doesn't go ahead.
+- Typing and key presses in a program stop as soon as another window comes
+  to the front, instead of after up to 15 more characters, so they don't go
+  to the window you switched to. The same goes for Enter after typed text.
+- The agent can move the mouse by a set amount, the way a hand moves a real
+  mouse, so it can look around in 3D games that turn the view with the mouse.
+
 Version 1.1.0 beta
 - With Claude, OpenAI, Gemini or OpenRouter, the file reads, file searches
   and page reads the agent asks for in one step run at the same time, and the

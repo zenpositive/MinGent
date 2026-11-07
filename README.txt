@@ -9,7 +9,9 @@ It runs models on your PC with its built-in engine, or Claude, Gemini,
 OpenAI or OpenRouter models with your own API key. It controls only the
 programs it starts itself, and a program you opened only if you allow that
 one program. While it uses one, it moves your mouse pointer and types into
-that window, so leave the mouse alone until it is done.
+that window. Before each step it waits until you have left the mouse and
+keyboard alone for a second (four seconds at most), but it's still best to
+leave them alone until it is done.
 
 No dependency tree: no installer, no packages, no plugins and no automatic
 updates.
@@ -20,7 +22,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.1.0 beta: it works, and it still has rough edges. Report
+This is version 1.1.1 beta: it works, and it still has rough edges. Report
 problems at https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -87,7 +89,7 @@ sign-ins. MinGent has none of that.
   Full auto asks nothing. The check reads the command; it can't see what a
   script does once it runs.
 To check a download, compare its SHA-256 with the one on the release page.
-In PowerShell: Get-FileHash .\MinGent-1.1.0-beta.zip
+In PowerShell: Get-FileHash .\MinGent-1.1.1-beta.zip
 
 
 YOUR OWN ICON
@@ -468,14 +470,17 @@ Testing programs it builds
   that can see images). It presses any key or shortcut (matched to your keyboard
   layout), holds keys down (up to 10 seconds at a time), also several at once
   (Shift+W, W+D), right-, middle-, double- and triple-clicks, clicks with Ctrl
-  or Shift held, presses and holds, scrolls, hovers and drags. A pointer in
-  your accent color shows where it points and clicks. This moves your
-  real mouse pointer and sends real key presses to that window. It is told
-  never to fake input with PowerShell SendKeys and the like, which would go to
-  whatever window has focus. Keys that act on Windows itself (the Windows key,
-  Alt+Tab, Ctrl+Esc, Ctrl+Shift+Esc, PrintScreen) are refused, and pasting
-  your clipboard into a program asks first, unless the clipboard still holds
-  what the agent itself just copied.
+  or Shift held, presses and holds, scrolls, hovers and drags, and moves the
+  mouse by a set amount, the way 3D games turn the view. A pointer in your
+  accent color shows where it points and clicks. This moves your real mouse
+  pointer and sends real key presses to that window, so before each step it
+  waits until you have left the mouse and keyboard alone for a second (four
+  seconds at most), and it stops typing as soon as another window comes to
+  the front. It is told never to fake input with PowerShell SendKeys and the
+  like, which would go to whatever window has focus. Keys that act on Windows
+  itself (the Windows key, Alt+Tab, Ctrl+Esc, Ctrl+Shift+Esc, PrintScreen) are
+  refused, and pasting your clipboard into a program asks first, unless the
+  clipboard still holds what the agent itself just copied.
 - It only ever controls programs started by its own commands while MinGent
   runs, also in an earlier chat - never browsers, mail, chat, password
   managers, remote-access tools or system tools - and it asks before using a
