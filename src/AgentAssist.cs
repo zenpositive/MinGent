@@ -361,6 +361,8 @@ namespace MinGent
             A("to_ref", "target_ref", "drop_ref", "destination_ref", "end_ref", "to_element", "drop_target", "target_element", "dest_ref");
             A("to_x", "end_x", "x2", "target_x", "dest_x", "drop_x");
             A("to_y", "end_y", "y2", "target_y", "dest_y", "drop_y");
+            A("dx", "delta_x", "x_delta", "rel_x", "relative_x", "by_x");
+            A("dy", "delta_y", "y_delta", "rel_y", "relative_y", "by_y");
             A("right", "right_click", "rightclick", "context_click", "is_right", "right_button");
             A("input", "patch", "diff", "patch_text", "content", "text", "changes", "unified_diff");
             A("append", "append_mode", "add_to_end", "mode_append");
@@ -2346,6 +2348,7 @@ namespace MinGent
         static readonly HashSet<string> Live = new HashSet<string>(StringComparer.Ordinal) {
             "command_status", "browser_read", "browser_screenshot", "browser_console", "app_read", "app_screenshot" };
         static readonly HashSet<string> Inert = new HashSet<string>(StringComparer.Ordinal) { "todo_write", "open_in_editor" };
+        static readonly HashSet<string> AppActions = new HashSet<string>(StringComparer.Ordinal) { "app_click", "app_type", "app_key", "app_scroll", "app_hover", "app_drag" };
         static readonly Regex ScriptName = new Regex(@"cmd-[0-9a-f]{12}\.ps1", RegexOptions.CultureInvariant);
 
         public static bool Changes(string name, Dictionary<string, object> args)
@@ -2401,7 +2404,8 @@ namespace MinGent
                 return same == 1 && still ? "Same result as your previous identical call; nothing has changed since then." : null;
             if (same < 2) return null;
             string extra = name == "command_status" ? " If the command is still working, give it more time between checks (wait_seconds can be up to 60)."
-                         : Live.Contains(name) ? " Nothing on the page or in the program has changed in between." : "";
+                         : Live.Contains(name) ? " Nothing on the page or in the program has changed in between."
+                         : AppActions.Contains(name) ? " The window's controls read the same each time. If the program draws its own picture, like a game, check what changed with app_screenshot." : "";
             return "This returned exactly the same result as your previous " + same + " identical calls." + extra;
         }
 

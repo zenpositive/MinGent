@@ -919,7 +919,7 @@ namespace MinGent
         public readonly PermissionState Perms;
         public bool IsHelper, AutoReview, DocToolNudged;
         public string HelperKind = "", BrowserMovedTo;
-        public int StepLimit = 200;
+        public int StepLimit;
         public readonly SyncSet ReadFiles = new SyncSet();
         public string Summary;
         public double CharsPerToken = 3.3;
@@ -1554,7 +1554,7 @@ namespace MinGent
             int pauses = 0;
             FinalTurn = false;
             bool keepToolsOnFinal = cfg.Backend != null && cfg.Backend.Provider == "anthropic";
-            for (int step = 0; step < StepLimit; step++)
+            for (int step = 0; StepLimit <= 0 || step < StepLimit; step++)
             {
                 if (ct.IsCancelled) return;
                 if (!IsHelper)

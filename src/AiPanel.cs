@@ -1795,6 +1795,7 @@ namespace MinGent
                 {
                     item = p.AddPermission(a, delegate (PermissionDecision d)
                     {
+                        AppControl.UserAnswered();
                         result = d;
                         lock (done) { if (!finished) done.Set(); }
                     });

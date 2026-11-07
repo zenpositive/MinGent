@@ -895,10 +895,11 @@ namespace MinGent
         [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hwnd);
         [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
         [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
-        [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+        [DllImport("user32.dll", EntryPoint = "SetCursorPos")] static extern bool SetCursorPosRaw(int x, int y);
         [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT p);
-        [DllImport("user32.dll", SetLastError = true)] static extern uint SendInput(uint n, INPUT[] inputs, int size);
-        [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+        [DllImport("user32.dll", EntryPoint = "SendInput", SetLastError = true)] static extern uint SendInputRaw(uint n, INPUT[] inputs, int size);
+        [DllImport("user32.dll", EntryPoint = "keybd_event")] static extern void KeybdEventRaw(byte vk, byte scan, uint flags, UIntPtr extra);
+        [DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
         [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
         [DllImport("kernel32.dll")] static extern bool IsProcessInJob(IntPtr process, IntPtr job, out bool result);
         [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
@@ -916,6 +917,79 @@ namespace MinGent
         [StructLayout(LayoutKind.Sequential)] struct KEYBDINPUT { public ushort vk, scan; public uint flags, time; public IntPtr extra; }
         [StructLayout(LayoutKind.Explicit)] struct InputUnion { [FieldOffset(0)] public MOUSEINPUT mi; [FieldOffset(0)] public KEYBDINPUT ki; }
         [StructLayout(LayoutKind.Sequential)] struct INPUT { public uint type; public InputUnion u; }
+        [StructLayout(LayoutKind.Sequential)] struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+
+        static int ownInputFrom, ownInputTo, answeredAt, gaveUpAt;
+        static bool ownInputSent, answered, gaveUp;
+        const int UserQuietMs = 1000, UserWaitMaxMs = 4000;
+
+        static void OwnInputStarts()
+        {
+            int now = Environment.TickCount;
+            if (!ownInputSent || unchecked(now - ownInputTo) > UserQuietMs) ownInputFrom = now;
+            ownInputTo = now;
+            ownInputSent = true;
+        }
+
+        static void OwnInputEnds() { ownInputTo = Environment.TickCount; }
+
+        static uint SendInput(uint n, INPUT[] inputs, int size)
+        {
+            OwnInputStarts();
+            uint sent = SendInputRaw(n, inputs, size);
+            OwnInputEnds();
+            return sent;
+        }
+
+        static void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra)
+        {
+            OwnInputStarts();
+            KeybdEventRaw(vk, scan, flags, extra);
+            OwnInputEnds();
+        }
+
+        static bool SetCursorPos(int x, int y)
+        {
+            OwnInputStarts();
+            bool moved = SetCursorPosRaw(x, y);
+            OwnInputEnds();
+            return moved;
+        }
+
+        public static void UserAnswered()
+        {
+            answeredAt = Environment.TickCount;
+            answered = true;
+        }
+
+        static int MsSinceUserInput()
+        {
+            LASTINPUTINFO li = new LASTINPUTINFO();
+            li.cbSize = (uint)Marshal.SizeOf(typeof(LASTINPUTINFO));
+            if (!GetLastInputInfo(ref li)) return int.MaxValue;
+            int last = unchecked((int)li.dwTime);
+            if (ownInputSent && unchecked(last - ownInputFrom) >= -50 && unchecked(last - ownInputTo) <= 100) return int.MaxValue;
+            if (answered && unchecked(last - answeredAt) <= 20) return int.MaxValue;
+            return unchecked(Environment.TickCount - last);
+        }
+
+        static bool WaitForUser(CancelToken ct)
+        {
+            int start = Environment.TickCount;
+            bool busyLately = gaveUp && unchecked(start - gaveUpAt) < UserWaitMaxMs;
+            while (!busyLately && MsSinceUserInput() < UserQuietMs)
+            {
+                if (ct != null && ct.IsCancelled) return false;
+                if (unchecked(Environment.TickCount - start) >= UserWaitMaxMs)
+                {
+                    gaveUpAt = Environment.TickCount;
+                    gaveUp = true;
+                    break;
+                }
+                Thread.Sleep(50);
+            }
+            return ct == null || !ct.IsCancelled;
+        }
 
         const int RoleButton = 0x2B, RoleCheck = 0x2C, RoleRadio = 0x2D, RoleText = 0x2A, RoleStatic = 0x29, RoleLink = 0x1E, RoleMenuItem = 0x0C,
                   RoleCombo = 0x2E, RoleList = 0x21, RoleListItem = 0x22, RoleTab = 0x25, RoleOutlineItem = 0x24, RoleSlider = 0x33, RoleSpin = 0x34,
@@ -1787,6 +1861,13 @@ namespace MinGent
 
         public static bool IsPassword(AppElement e) { return (e.State & StateProtected) != 0; }
 
+        public static string FocusWhenIdle(AppWindow w, CancelToken ct)
+        {
+            if (!IsWindow(w.Hwnd)) return "the window was closed";
+            if (!WaitForUser(ct)) return "stopped by the user";
+            return Focus(w);
+        }
+
         public static string Focus(AppWindow w)
         {
             if (!IsWindow(w.Hwnd)) return "the window was closed";
@@ -1825,6 +1906,16 @@ namespace MinGent
             int pid;
             GetWindowThreadProcessId(fg, out pid);
             return fg == w.Hwnd || fg == root || GetAncestor(fg, 3) == root || OwnedBy(fg, w.Hwnd) || pid == w.Pid;
+        }
+
+        public static bool StaysFocused(AppWindow w)
+        {
+            for (int i = 0; i < 4; i++)
+            {
+                if (StillFocused(w)) return true;
+                Thread.Sleep(40);
+            }
+            return StillFocused(w);
         }
 
         static int InputSize { get { return Marshal.SizeOf(typeof(INPUT)); } }
@@ -1932,6 +2023,28 @@ namespace MinGent
             SetCursorPos(old.X, old.Y);
         }
 
+        public static string Move(AppWindow w, int dx, int dy, CancelToken ct)
+        {
+            int steps = Math.Max(1, (Math.Max(Math.Abs(dx), Math.Abs(dy)) + 49) / 50);
+            int doneX = 0, doneY = 0;
+            for (int k = 1; k <= steps; k++)
+            {
+                if (ct != null && ct.IsCancelled) return "stopped by the user after moving the mouse by " + doneX + "," + doneY;
+                if (!StaysFocused(w)) return "the mouse stopped after moving by " + doneX + "," + doneY + " of " + dx + "," + dy + " because another window came to the front";
+                int toX = (int)((long)dx * k / steps), toY = (int)((long)dy * k / steps);
+                INPUT[] i = new INPUT[1];
+                i[0].type = 0;
+                i[0].u.mi.dx = toX - doneX;
+                i[0].u.mi.dy = toY - doneY;
+                i[0].u.mi.dwFlags = 0x0001;
+                SendInput(1, i, InputSize);
+                doneX = toX;
+                doneY = toY;
+                Thread.Sleep(10);
+            }
+            return null;
+        }
+
         public static string Press(AppWindow w, List<KeyPress> keys) { return Press(w, keys, 0, null); }
 
         public static string Press(AppWindow w, List<KeyPress> keys, int holdMs, CancelToken ct)
@@ -1945,7 +2058,7 @@ namespace MinGent
                 foreach (KeyPress part in KeyCombo.Parts(k)) if (sys == null) sys = SystemKey(part);
                 if (sys != null) return sys;
                 if (ct != null && ct.IsCancelled) return "stopped by the user";
-                if ((n % 8 == 0 || k.Alt || k.Ctrl || holdMs > 0) && !StillFocused(w)) return "the keys stopped after " + n + " of " + keys.Count + " because another window came to the front";
+                if (!StaysFocused(w)) return "the keys stopped after " + n + " of " + keys.Count + " because another window came to the front";
                 List<ushort> mods = new List<ushort>();
                 ushort vk;
                 bool ext = k.Extended;
@@ -2071,9 +2184,9 @@ namespace MinGent
             int sent = 0;
             foreach (char c in text)
             {
+                if (!StaysFocused(w)) return "typing stopped because another window came to the front";
                 if (sent % 16 == 0 || c == '\n' || c == '\t')
                 {
-                    if (!StillFocused(w)) return "typing stopped because another window came to the front";
                     string d = NewDialog(w);
                     if (d != null) return d;
                 }
@@ -2556,7 +2669,7 @@ namespace MinGent
                 string part = lines[i];
                 if (part.Length > 0)
                 {
-                    string f = AppControl.Focus(w);
+                    string f = AppControl.FocusWhenIdle(w, ctx.Ct);
                     if (f != null) return ToolOutcome.Fail(f);
                     string terr = AppControl.Type(w, part);
                     lock (t) { t.Typed(part); if (terr != null) t.Lost("typing that stopped halfway"); }
@@ -2566,7 +2679,7 @@ namespace MinGent
                 if (i == lines.Length - 1 && !enter) break;
                 string deny = TerminalEnter(ctx, w, t, null, description);
                 if (deny != null) return Denied(deny);
-                string f2 = AppControl.Focus(w);
+                string f2 = AppControl.FocusWhenIdle(w, ctx.Ct);
                 if (f2 != null) return ToolOutcome.Fail(f2);
                 AppControl.Key(0x0D, null);
                 lock (t) t.Ran();
@@ -2596,7 +2709,7 @@ namespace MinGent
                     bool copyKey = false;
                     foreach (KeyPress k in chunk) if (k.Ctrl && !k.Alt && !k.Shift && k.Vk == 'C') copyKey = true;
                     if (copyKey) { bool? sel = TerminalProbe.Selected(w.Hwnd); lock (t) t.Selection = sel != false; }
-                    string f = AppControl.Focus(w);
+                    string f = AppControl.FocusWhenIdle(w, ctx.Ct);
                     if (f != null) return ToolOutcome.Fail(f);
                     string kerr = AppControl.Press(w, chunk, 0, ctx.Ct);
                     lock (t) { foreach (KeyPress k in chunk) t.Pressed(k); if (kerr != null) t.Lost("keys that stopped halfway"); }
@@ -2607,7 +2720,7 @@ namespace MinGent
                 bool enter = TerminalState.IsEnter(key);
                 string deny = TerminalEnter(ctx, w, t, enter ? null : "press " + key.Label, enter ? description : null);
                 if (deny != null) return Denied(deny);
-                string f2 = AppControl.Focus(w);
+                string f2 = AppControl.FocusWhenIdle(w, ctx.Ct);
                 if (f2 != null) return ToolOutcome.Fail(f2);
                 string err = AppControl.Press(w, new List<KeyPress> { key }, 0, ctx.Ct);
                 lock (t)
@@ -2925,7 +3038,7 @@ namespace MinGent
                 }, 5000);
                 if (outcome == 2)
                 {
-                    string f = AppControl.Focus(w);
+                    string f = AppControl.FocusWhenIdle(w, ctx.Ct);
                     if (f != null) return ToolOutcome.Fail(f);
                     AppControl.Click(el.Rect.X + el.Rect.Width / 2, el.Rect.Y + el.Rect.Height / 2, mouse);
                 }
@@ -2934,7 +3047,7 @@ namespace MinGent
             }
             else
             {
-                string f = AppControl.Focus(w);
+                string f = AppControl.FocusWhenIdle(w, ctx.Ct);
                 if (f != null) return ToolOutcome.Fail(f);
                 Point pt;
                 string what;
@@ -3006,7 +3119,7 @@ namespace MinGent
                     lock (tt) { tt.Clicked = true; tt.Lost("a click"); }
                 }
             }
-            string f = AppControl.Focus(w);
+            string f = AppControl.FocusWhenIdle(w, ctx.Ct);
             if (f != null) return ToolOutcome.Fail(f);
             if (el != null)
             {
@@ -3017,6 +3130,7 @@ namespace MinGent
                 Thread.Sleep(80);
                 if (AppControl.IsTextField(el) && AppControl.IsFileDialog(w))
                 {
+                    if (!AppControl.StaysFocused(w)) return ToolOutcome.Fail("typing stopped because another window came to the front");
                     AppControl.Key(0x24, null);
                     AppControl.Key(0x23, new List<ushort>(new ushort[] { 0x10 }));
                 }
@@ -3028,6 +3142,7 @@ namespace MinGent
             {
                 string d = AppControl.NewDialog(w);
                 if (d != null) return ToolOutcome.Fail(d.Replace("typing stopped", "Enter was not pressed"));
+                if (!AppControl.StaysFocused(w)) return ToolOutcome.Fail("Enter was not pressed because another window came to the front");
                 AppControl.Key(0x0D, null);
             }
             string note;
@@ -3106,7 +3221,7 @@ namespace MinGent
                 if (copy) ClipboardGuard.AfterCopy(was);
                 return to;
             }
-            string f = AppControl.Focus(w);
+            string f = AppControl.FocusWhenIdle(w, ctx.Ct);
             if (f != null) return ToolOutcome.Fail(f);
             uint before = copy ? ClipboardGuard.Now() : 0;
             string kerr = AppControl.Press(w, keys, hold, ctx.Ct);
@@ -3163,7 +3278,7 @@ namespace MinGent
             if (waiting != null) return ToolOutcome.Fail(waiting);
             string g = Gate(ctx, w, true);
             if (g != null) return Denied(g);
-            string f = AppControl.Focus(w);
+            string f = AppControl.FocusWhenIdle(w, ctx.Ct);
             if (f != null) return ToolOutcome.Fail(f);
             Point pt;
             string what;
@@ -3180,7 +3295,15 @@ namespace MinGent
     {
         public override string Name { get { return "app_hover"; } }
         protected override string Act { get { return "hover"; } }
-        public override string Description { get { return "Move the mouse over a control (ref from app_read) or a position (x/y from app_screenshot) in a desktop program you started, without clicking - to show a tooltip or open a hover menu."; } }
+        public override string Description
+        {
+            get
+            {
+                return "Move the mouse over a control (ref from app_read) or a position (x/y from app_screenshot) in a desktop program you started, without clicking - to show a tooltip or open a hover menu. " +
+                       "For games: dx/dy move the mouse by that much from wherever it is, like a hand moving a real mouse, which is how 3D games turn the view, so use dx/dy to look around in them. " +
+                       "How far the view turns depends on the game; try about 100 first and check with app_screenshot. In other programs use ref or x/y, because dx/dy don't match screenshot pixels.";
+            }
+        }
         public override Dictionary<string, object> Schema
         {
             get
@@ -3188,14 +3311,41 @@ namespace MinGent
                 return Obj("ref", P("string", "Control ref from app_read, e.g. a12"), false,
                            "x", P("integer", "X position in the screenshot (only when there is no ref)"), false,
                            "y", P("integer", "Y position in the screenshot (only when there is no ref)"), false,
+                           "dx", P("integer", "For games, instead of ref or x/y: move the mouse right by this much, or left if negative (-5000 to 5000)"), false,
+                           "dy", P("integer", "For games, instead of ref or x/y: move the mouse down by this much, or up if negative (-5000 to 5000)"), false,
                            "window", WindowArg(), false);
             }
         }
-        public override string Label(Dictionary<string, object> a) { string r = S(a, "ref"); return "Hover " + (string.IsNullOrEmpty(r) ? "at " + S(a, "x") + "," + S(a, "y") : "over " + r) + " in the app"; }
+        public override string Label(Dictionary<string, object> a)
+        {
+            int dx = (int)Math.Round(By(a, "dx")), dy = (int)Math.Round(By(a, "dy"));
+            if (dx != 0 || dy != 0) return "Move the mouse by " + dx + "," + dy + " in the app";
+            string r = S(a, "ref");
+            return "Hover " + (string.IsNullOrEmpty(r) ? "at " + S(a, "x") + "," + S(a, "y") : "over " + r) + " in the app";
+        }
         public override bool Untrusted { get { return true; } }
+
+        static bool Given(Dictionary<string, object> a, string k)
+        {
+            object v;
+            return a != null && a.TryGetValue(k, out v) && v != null && !(v is string && ((string)v).Trim().Length == 0);
+        }
+
+        static double By(Dictionary<string, object> a, string k)
+        {
+            double v = D(a, k, 0);
+            return double.IsNaN(v) ? 0 : Math.Max(-1e6, Math.Min(1e6, v));
+        }
 
         public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
         {
+            double rx = By(a, "dx"), ry = By(a, "dy");
+            if (Math.Abs(rx) > 5000 || Math.Abs(ry) > 5000) return ToolOutcome.Fail("dx and dy must be between -5000 and 5000; to move further, call app_hover again");
+            int dx = (int)Math.Round(rx), dy = (int)Math.Round(ry);
+            bool by = dx != 0 || dy != 0;
+            bool to = Given(a, "ref") || Given(a, "x") || Given(a, "y");
+            if (by && to) return ToolOutcome.Fail("give either dx/dy to move the mouse from where it is, or a ref or x/y to move it to a place, not both");
+            if (!by && !to && (Given(a, "dx") || Given(a, "dy"))) return ToolOutcome.Fail("dx and dy are both 0, so there is nothing to move");
             string err;
             AppWindow w = Find(ctx, a, out err);
             if (w == null) return ToolOutcome.Fail(err);
@@ -3207,8 +3357,14 @@ namespace MinGent
             if (waiting != null) return ToolOutcome.Fail(waiting);
             string g = Gate(ctx, w, true);
             if (g != null) return Denied(g);
-            string f = AppControl.Focus(w);
+            string f = AppControl.FocusWhenIdle(w, ctx.Ct);
             if (f != null) return ToolOutcome.Fail(f);
+            if (by)
+            {
+                string merr = AppControl.Move(w, dx, dy, ctx.Ct);
+                if (merr != null) return ToolOutcome.Fail(merr);
+                return After(ctx, w, 700, "Moved the mouse by " + dx + "," + dy);
+            }
             Point pt;
             string what;
             string perr = ScreenPoint(a, w, st, "ref", "x", "y", true, out pt, out what);
@@ -3266,7 +3422,7 @@ namespace MinGent
                 if (deny != null) return Denied(deny);
                 lock (term) { term.Clicked = true; term.Lost("dragging"); }
             }
-            string f = AppControl.Focus(w);
+            string f = AppControl.FocusWhenIdle(w, ctx.Ct);
             if (f != null) return ToolOutcome.Fail(f);
             Point from, to;
             string fromWhat, toWhat;
