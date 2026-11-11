@@ -247,7 +247,7 @@ namespace MinGent
             if (showPage != null && showAt != null) showPage.ScrollTo(Math.Max(0, showAt.Top - UI.S(8)), false);
         }
 
-        Label cloudHeading;
+        Label cloudHeading, keysHeading;
         ScrollHost showPage;
         Control showAt;
 
@@ -258,13 +258,14 @@ namespace MinGent
 
         public void OpenPage(string title)
         {
-            bool cloud = title == "Cloud models";
-            int i = pageTitles.IndexOf(cloud ? "Models" : title ?? "");
+            bool cloud = title == "Cloud models", keys = title == "Keyboard shortcuts";
+            int i = pageTitles.IndexOf(cloud ? "Models" : keys ? "General" : title ?? "");
             if (i < 0) return;
             Select(i);
-            if (!cloud || cloudHeading == null) return;
+            Label heading = cloud ? cloudHeading : keys ? keysHeading : null;
+            if (heading == null) return;
             showPage = pages[i];
-            showAt = cloudHeading;
+            showAt = heading;
             if (Visible) showPage.ScrollTo(Math.Max(0, showAt.Top - UI.S(8)), false);
         }
 
@@ -405,7 +406,7 @@ namespace MinGent
             Row(c, "Open files with a double-click", "In Windows Settings, pick MinGent for the file types you want. Apps can't do this for you.", defaults, defaults.Width);
             Place(p, c);
 
-            Section(p, "Keyboard shortcuts", null);
+            keysHeading = Section(p, "Keyboard shortcuts", null);
             c = NewCard(p);
             c.Add(new KeysRow(Th, "New chat", "Ctrl Shift N"));
             c.Add(new KeysRow(Th, "Open the agent and jump to the message box", "Ctrl Shift A"));
@@ -528,12 +529,8 @@ namespace MinGent
             PillButton browse = new PillButton("Browse...", Th, false);
             browse.Click += delegate
             {
-                using (FolderBrowserDialog d = new FolderBrowserDialog())
-                {
-                    d.SelectedPath = workspace.Box.Text;
-                    d.ShowNewFolderButton = true;
-                    if (d.ShowDialog(this) == DialogResult.OK) workspace.Box.Text = d.SelectedPath;
-                }
+                string picked = FolderPicker.Pick(this, "Choose the default folder", "Choose the folder new files go to.", workspace.Box.Text);
+                if (!string.IsNullOrEmpty(picked)) workspace.Box.Text = picked;
             };
             c.Add(new FieldRow(Th, "Default folder", null, workspace, 0, UI.S(32), true, browse));
             Place(p, c);
@@ -561,7 +558,7 @@ namespace MinGent
             web = Switch(c, "Web search and web pages", "Search the web and read pages and YouTube videos. With the built-in browser on, you can watch the searches there. Off: the agent can still open addresses on this PC and your network. " + Cap(Tokens(new WebSearchTool())) + ".", s.AiWeb);
             browserOn = Switch(c, "Built-in browser", "Open pages, click, type and scroll in MinGent's own browser, which keeps its own sign-ins. " + Cap(Tokens(AgentToolbox.BrowserTools(true))) + "; off by itself when the model's context is under 16K.", s.AiBrowser);
             captcha = Switch(c, "Let the agent try CAPTCHAs (experimental)", "The agent tries to solve CAPTCHAs in its own browser and hands them to you after five failed tries. Off: CAPTCHAs are left to you.", s.AiCaptcha);
-            appsOn = Switch(c, "Programs it starts itself", "Read, click, type and scroll in programs the agent starts. Store apps and programs Windows opens for it need your OK first, except in Full auto. " + Cap(Tokens(AgentToolbox.AppTools(true))) + "; off by itself under 24K.", s.AiApps);
+            appsOn = Switch(c, "Programs it starts itself", "Open programs from the Start menu, start the ones it builds, and read, click, type and scroll in them. A program from the Start menu, a Store app or one Windows opens for it needs your OK first, except in Full auto. " + Cap(Tokens(AgentToolbox.AppTools(true))) + "; off by itself under 24K.", s.AiApps);
             otherApps = Switch(c, "Programs you opened yourself", "The agent can ask to use a program you already have open; you decide for each one, in each chat, even in Full auto. Browsers, File Explorer, terminals and code editors are look-only, and mail, chat, password managers, money and remote-access programs are never offered. Needs \"Programs it starts itself\". " + Cap(Tokens(new AppAccessTool())) + ".", s.AiOtherApps);
             sideBySide = Switch(c, "Put MinGent and the program side by side", "When a program the agent uses would cover MinGent, each gets half the screen until the program closes.", s.AiSideBySide);
             helpersOn = Switch(c, "Helper agents", "The agent hands focused tasks to helpers with a fresh context, which keeps its own context small. On a local model they run one at a time, which takes longer. " + Cap(Tokens(new DelegateTool(false))) + ".", s.AiHelpers);
@@ -619,6 +616,21 @@ namespace MinGent
             return names.ToArray();
         }
 
+        PillButton taskRemove;
+
+        void DayNeeded()
+        {
+            if (taskDay == null || taskKind == null) return;
+            string kind = Schedule.Kinds[Math.Max(0, Math.Min(Schedule.Kinds.Length - 1, taskKind.SelectedIndex))];
+            string day = DateTime.Now.AddDays(1).ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+            string note = kind == ScheduledTask.Weekly ? "A weekday, such as Monday." :
+                          kind == ScheduledTask.Monthly ? "A day of the month, from 1 to 31." :
+                          kind == ScheduledTask.Once ? "A date, such as " + day + "." : "Not needed for this choice. Leave it empty.";
+            if (taskDayRow != null) taskDayRow.SetNote(note);
+        }
+
+        FieldRow taskDayRow;
+
         void ShowTask(int at)
         {
             taskLoading = true;
@@ -632,6 +644,8 @@ namespace MinGent
             taskDay.Box.Text = Schedule.DayText(t);
             taskTime.Box.Text = t.Hour.ToString("00", System.Globalization.CultureInfo.InvariantCulture) + ":" + t.Minute.ToString("00", System.Globalization.CultureInfo.InvariantCulture);
             taskOn.Checked = t.On;
+            if (taskRemove != null) taskRemove.Enabled = taskAt >= 0;
+            DayNeeded();
             List<string> known = Projects.Load();
             string own = Projects.Clean(t.Folder);
             if (own != null && Projects.Find(known, own) < 0) known.Add(own);
@@ -696,9 +710,11 @@ namespace MinGent
             c.Add(new FieldRow(Th, "What to do", "Write it the way you would ask in the chat.", taskPrompt, 0, UI.S(110), true, null));
             taskKind = MakeCombo(Schedule.KindNames, 0);
             Row(c, "How often", null, taskKind, UI.S(200));
+            taskKind.SelectedIndexChanged += delegate { DayNeeded(); };
             taskDay = MakeField("", false, false);
             taskDay.Box.AccessibleName = "Day";
-            c.Add(new FieldRow(Th, "Day", "Every week: a weekday such as Monday. Every month: a number from 1 to 31. Once: a date such as " + DateTime.Now.AddDays(1).ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) + ". Leave it empty otherwise.", taskDay, UI.S(160), UI.S(32), false, null));
+            taskDayRow = new FieldRow(Th, "Day", "Every week: a weekday such as Monday. Every month: a number from 1 to 31. Once: a date such as " + DateTime.Now.AddDays(1).ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) + ". Leave it empty otherwise.", taskDay, UI.S(160), UI.S(32), false, null);
+            c.Add(taskDayRow);
             taskTime = MakeField("08:00", false, false);
             taskTime.Box.AccessibleName = "Time";
             c.Add(new FieldRow(Th, "Time", "Such as 8:00 or 17:30.", taskTime, UI.S(100), UI.S(32), false, null));
@@ -706,6 +722,7 @@ namespace MinGent
             Row(c, "Work in", "The folder the run works in: the default folder, or one of your projects. A project is a folder you chose with the folder button above a chat.", taskFolder, UI.S(260));
             taskOn = Switch(c, "Switched on", "Off keeps the task but doesn't run it.", true);
             PillButton remove = new PillButton("Delete", Th, false);
+            taskRemove = remove;
             remove.Danger = true;
             remove.Click += delegate
             {

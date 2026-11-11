@@ -449,8 +449,7 @@ namespace MinGent
             if (full.Length <= 3) return "a whole drive is off limits";
             string name = System.IO.Path.GetFileName(full).ToLowerInvariant();
             if (name == "microsoft.powershell_profile.ps1" || name == "profile.ps1" || name == "microsoft.vscode_profile.ps1") return "shell profiles run on every start, so they are off limits";
-            string ext = System.IO.Path.GetExtension(full).ToLowerInvariant();
-            if (ext == ".lnk" && full.IndexOf("\\Start Menu\\", StringComparison.OrdinalIgnoreCase) >= 0) return "Start menu shortcuts are off limits";
+            if (full.IndexOf("\\Start Menu\\", StringComparison.OrdinalIgnoreCase) >= 0) return "the Start menu is off limits";
             return null;
         }
 
@@ -581,7 +580,7 @@ namespace MinGent
 
         static readonly string[] ReadOnly = {
             "read_file", "list_directory", "find_files", "search_text", "command_status", "web_search", "web_fetch",
-            "browser_navigate", "browser_read", "browser_scroll", "browser_screenshot", "watch_video", "app_read", "app_screenshot", "app_scroll",
+            "browser_navigate", "browser_read", "browser_scroll", "browser_screenshot", "watch_video", "app_read", "app_screenshot", "screen_look", "app_scroll",
             "todo_write", "ask_user", "open_in_editor", "system_info", "close_pane", "analyze_audio", Tool };
 
         public static bool Visible(string name)
@@ -1823,7 +1822,7 @@ namespace MinGent
                     string coachNote = StopAsked ? null : coach.EndOfTurn(r.Text, canPlan && Perms.Planning || !coach.Listed ? null : Todos);
                     if (coachNote != null && !ct.IsCancelled)
                     {
-                        if (!IsHelper && coach.Told != null) ui.Notice(coach.Told, 0);
+                        if (!IsHelper && coach.Told != null) ui.Notice(coach.Told, AfterDraft);
                         Msg cn = new Msg("user", coachNote);
                         cn.Hidden = true;
                         History.Add(cn);
@@ -1833,6 +1832,7 @@ namespace MinGent
                     {
                         reviewed = true;
                         string review = Helpers.AutoReview(this, tc, ui, r.Text);
+                        if (review != null) coach.ReviewDone();
                         if (review != null && !ct.IsCancelled)
                         {
                             Msg rv = new Msg("user", review);
@@ -2463,6 +2463,7 @@ namespace MinGent
         public const string ReviewIntro = "[MinGent] An independent reviewer (a helper that did not see your reasoning) checked your changes before your final answer. The user was told that the review comes first and that what you said before it was not final. Its report:\n\n";
         public const string EarlierReviewIntro = "[MinGent] Before your answer reaches the user, an independent reviewer (a helper that did not see your reasoning) checked your changes. Its report:\n\n";
         public const string ReviewNext = "Next: an independent review of the changes, then the final answer.";
+        public const int AfterDraft = 4;
         public const string ReviewRunning = "The independent review is still running. The final answer comes after it.";
         public const string HelperRunning = "A helper is still working in the background. The final answer comes after its report.";
 
@@ -2879,7 +2880,7 @@ namespace MinGent
             sb.Append("- read_file shows lines as \"12\u2192text\". The number and arrow are not part of the file: never copy them into old_string or file content.\n");
             sb.Append("- edit_file: copy old_string exactly from the current file, with the same indentation, and include enough lines to make it unique. For several changes in one file, make one edit_file call per change.\n");
             sb.Append("- write_file with append=true adds to the end of a file. Write a long file in parts: the first part normally, then the rest with append=true.\n");
-            sb.Append("- run_command: commands cannot read keyboard input, so use non-interactive flags (-y, --yes, /quiet). Start servers, watchers and GUI programs with background=true, then use command_status.\n");
+            sb.Append("- run_command: commands cannot read keyboard input, so use non-interactive flags (-y, --yes, /quiet). Start servers, watchers and GUI programs with background=true, then use command_status. Don't use a command for what read_file, list_directory, find_files or search_text do: those never wait for the user's OK.\n");
             if (cfg.Sandbox) sb.Append("- Sandbox: run_command runs commands with low rights. They can read files and use the network, but they can change files only in the workspace (not its .git folder, so git commands that change the repository need outside_sandbox) and in MinGent's own temp and cache folders, and can't change other programs, settings or the user's saved sign-ins. Commands MinGent asks the user about (installing, deleting elsewhere, opening programs) run outside the sandbox once the user allows them. If a command fails because the sandbox blocked it, run it again with outside_sandbox=true: MinGent asks the user first.\n");
             sb.Append("- Documents: for a PDF, Word document or PowerPoint, write Markdown with write_file to a path ending in .pdf, .docx or .pptx; for Excel, write CSV, a Markdown table or JSON rows to .xlsx. MinGent builds the real file, with headings, lists, tables, pictures, math and page breaks. Don't install libraries or programs for documents. Only when the user wants something this can't do (custom fonts, colors or an exact layout), say so and ask before using another tool, and use a tool the user names.\n");
             string csc = Native.CSharpCompiler();
@@ -2903,7 +2904,7 @@ namespace MinGent
                 if (browser) sb.Append("- browser_console reads the page's console and runs JavaScript in the page, only to look into it and debug it. Never use it for what the other browser_ tools do: clicking, typing, keys, scrolling, submitting or navigating.\n");
                 sb.Append("- close_pane closes the browser, its console or the notes pane: when the user asks (set user_asked), or when you are done with a pane and it shows nothing the user needs.\n");
                 if (apps) sb.Append("- Desktop programs: app_read lists a window's controls with refs like a5 for app_click and app_type. It works for programs you started in this chat, including ones Windows opened for your command (Store apps such as Calculator). app_click also does right, middle and double clicks and clicks with Ctrl or Shift held; app_scroll, app_hover and app_drag cover the rest of the mouse, and app_key presses any key or shortcut.\n");
-                if (apps && cfg.OtherApps) sb.Append("- Programs the user opened: only when the task needs one, ask for it with app_access (without app it lists them). Once the user allows it, its windows show up in app_read. Their browsers, File Explorer, terminals and code editors can only be looked at.\n");
+                if (apps) sb.Append("- Using this PC: do the job with your file, command and browser tools when they can do it. Use programs on the PC when they can't, or when that is the natural way: the user talks about a program they have open, a job goes across several programs, or something only shows in a program's window. app_open starts a program by its Start menu name").Append(cfg.OtherApps ? ", app_access asks the user for a program they already have open (without app it lists them)" : "").Append(vision ? ", and screen_look shows the whole screen with the programs you may use" : "").Append(". Ask for what the job needs before you start on it, and say why.").Append(cfg.OtherApps ? " The user's browsers, File Explorer, terminals and code editors can only be looked at." : " Programs the user already has open are off limits until they switch on \"Programs you opened yourself\" in Settings > Agent > Tools; tell them when a job needs one.").Append("\n");
                 if (apps) sb.Append("- Terminals: use run_command for commands. Only when the user wants to watch, or for an interactive ssh session, open your own terminal window with run_command (Start-Process wt -ArgumentList '-w','new', or Start-Process powershell where Windows Terminal is missing) and work in it with app_read, app_type (enter=true) and app_key. MinGent checks each command before Enter runs it; give description, as with run_command, so the user sees what the command is for.\n");
                 sb.Append("- system_info describes this PC (Windows version, hardware, installed developer tools) without running anything.\n");
             }

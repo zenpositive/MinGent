@@ -222,7 +222,7 @@ namespace MinGent
             if (running || temporary || chat.Editing) return false;
             if (composer.Text.Trim().Length > 0 || composer.HasAttachments) return false;
             if (chat.PendingPermission() != null || chat.PendingQuestion() != null) return false;
-            return away || quietMs >= 60000;
+            return away || quietMs >= (chat.Items.Count > 0 ? 300000 : 60000);
         }
 
         public bool CheckSchedule(DateTime now, bool away, int quietMs)
@@ -490,7 +490,8 @@ namespace MinGent
             string name = slash.Items[i].Name;
             HideSlash();
             composer.FocusInput();
-            Slash(name);
+            if (IsHandleCreated) BeginInvoke((MethodInvoker)delegate { Slash(name); });
+            else Slash(name);
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -533,6 +534,23 @@ namespace MinGent
             foreach (ModelEntry m in catalog.Models) if (m.Provider == "engine" ? Engine.Instance.Installed : true) return true;
             ProviderState ps = catalog.State("lmstudio");
             return ps != null && ps.Reachable;
+        }
+
+        string RejectedKey()
+        {
+            if (catalog == null) return null;
+            foreach (KeyValuePair<string, ProviderState> p in catalog.States)
+                if (p.Value != null && p.Value.NeedsKey && p.Value.Configured)
+                {
+                    switch (p.Key)
+                    {
+                        case "anthropic": return "Claude";
+                        case "openai": return "OpenAI";
+                        case "gemini": return "Gemini";
+                        case "openrouter": return "OpenRouter";
+                    }
+                }
+            return null;
         }
 
         public string ChatFolder { get { return chatFolder; } }
@@ -618,14 +636,7 @@ namespace MinGent
         {
             string start = chatFolder;
             if (start.Length == 0) { bool def; try { start = WorkFolder(out def); } catch { start = ""; } }
-            string picked = null;
-            using (FolderBrowserDialog d = new FolderBrowserDialog())
-            {
-                d.Description = "Choose the folder this chat works in. MinGent remembers it as a project.";
-                d.ShowNewFolderButton = true;
-                try { if (start.Length > 0 && Directory.Exists(start)) d.SelectedPath = start; } catch { }
-                if (d.ShowDialog(FindForm()) == DialogResult.OK) picked = d.SelectedPath;
-            }
+            string picked = FolderPicker.Pick(FindForm(), "Choose the folder this chat works in", "Choose the folder this chat works in. MinGent remembers it as a project.", start);
             if (string.IsNullOrEmpty(picked)) return;
             if (!SetChatFolder(picked, true)) return;
             List<string> list = Projects.Load();
@@ -697,6 +708,15 @@ namespace MinGent
                 chat.EmptyActions.Add(new KeyValuePair<string, Action>("Download a free model", delegate { host.ShowModelLibrary(); }));
                 chat.EmptyActions.Add(new KeyValuePair<string, Action>("Use a cloud model", delegate { host.ShowSettings("Cloud models"); }));
                 chat.EmptyText = "Models from the library run on this PC, so nothing leaves it. With an API key, models from Claude, OpenAI, Gemini or OpenRouter work too.";
+                string refused = RejectedKey();
+                if (refused != null)
+                {
+                    chat.EmptyTitle = "Your " + refused + " key was not accepted";
+                    chat.EmptyActions.Clear();
+                    chat.EmptyActions.Add(new KeyValuePair<string, Action>("Check the key", delegate { host.ShowSettings("Cloud models"); }));
+                    chat.EmptyActions.Add(new KeyValuePair<string, Action>("Download a free model", delegate { host.ShowModelLibrary(); }));
+                    chat.EmptyText = refused + " rejected the saved API key, so its models can't be used. A key stops working when it is deleted, runs out or expires.";
+                }
             }
             else
             {
@@ -803,8 +823,36 @@ namespace MinGent
             ChatItem it = new ChatItem();
             it.Kind = ChatKind.Notice;
             it.Text = text;
-            it.Level = level;
+            it.Level = level & 3;
+            if ((level & AgentSession.AfterDraft) != 0)
+                for (int i = chat.Items.Count - 1; i >= 0; i--)
+                {
+                    ChatItem x = chat.Items[i];
+                    if (x.Kind == ChatKind.User || x.Kind == ChatKind.Tool || x.Kind == ChatKind.Thinking || x.Kind == ChatKind.Activity) break;
+                    if (x.Kind != ChatKind.Assistant || x.Streaming || x.Text.Trim().Length == 0) continue;
+                    x.Draft = true;
+                    it.Draft = true;
+                    chat.Changed(x);
+                    break;
+                }
             chat.Add(it);
+        }
+
+        void KeepAnAnswer()
+        {
+            ChatItem draft = null;
+            for (int i = chat.Items.Count - 1; i >= 0; i--)
+            {
+                ChatItem x = chat.Items[i];
+                if (x.Kind == ChatKind.User && !x.MidRun) break;
+                if (x.Kind != ChatKind.Assistant || x.Text.Trim().Length == 0) continue;
+                if (!x.Draft) return;
+                draft = x;
+                break;
+            }
+            if (draft == null) return;
+            draft.Draft = false;
+            chat.Changed(draft);
         }
 
         public void RefreshConnection(bool force)
@@ -1904,6 +1952,7 @@ namespace MinGent
             AppHighlight.Hide();
             composer.Running = false;
             FinishStreaming();
+            KeepAnAnswer();
             UpdateModelChip();
             ChatItem pending = chat.PendingPermission();
             if (pending != null) chat.Resolve(pending, PermissionDecision.Deny);
@@ -3112,6 +3161,7 @@ namespace MinGent
                 if (it.Kind == ChatKind.User && it.Turn > 0) o["tn"] = it.Turn;
                 if (it.Kind == ChatKind.User && it.MidRun) o["mid"] = true;
                 if (it.Kind == ChatKind.Notice) o["lv"] = it.Level;
+                if (it.Draft && (it.Kind == ChatKind.Notice || it.Kind == ChatKind.Assistant)) o["df"] = true;
                 if (it.Kind == ChatKind.Footer) { o["u"] = true; if (it.Undone) o["ud"] = true; if (!string.IsNullOrEmpty(it.UndoneText)) o["ut"] = it.UndoneText; }
                 items.Add(o);
             }
@@ -3267,6 +3317,7 @@ namespace MinGent
                     if (it.Kind == ChatKind.Question) { it.Question = new UserQuestion(); it.Question.Title = Json.Str(o, "l") ?? ""; it.Question.Wait = Json.Bool(o, "w"); it.Decision = Json.Int(o, "dec"); if (it.Decision < 0) continue; }
                     if (it.Kind == ChatKind.User) { it.ContextLabel = Json.Str(o, "c"); it.MidRun = Json.Bool(o, "mid"); it.Turn = Json.Int(o, "tn"); it.Attachments = Attachments.FromJson(Json.Get(o, "at")); }
                     if (it.Kind == ChatKind.Notice) it.Level = Json.Int(o, "lv");
+                    if (it.Kind == ChatKind.Notice || it.Kind == ChatKind.Assistant) it.Draft = Json.Bool(o, "df");
                     if (it.Kind == ChatKind.Footer) { it.Undone = Json.Bool(o, "ud"); it.UndoneText = Json.Str(o, "ut"); it.Action = null; }
                     if (it.Kind == ChatKind.Error) continue;
                     loaded.Add(it);

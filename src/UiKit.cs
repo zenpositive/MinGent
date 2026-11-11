@@ -1151,4 +1151,102 @@ namespace MinGent
             using (Pen p = new Pen(th.TabBorder)) e.Graphics.DrawLine(p, 0, Height - 1, Width, Height - 1);
         }
     }
+
+    static class FolderPicker
+    {
+        [System.Runtime.InteropServices.ComImport, System.Runtime.InteropServices.Guid("DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7")]
+        class OpenDialog { }
+
+        [System.Runtime.InteropServices.ComImport, System.Runtime.InteropServices.Guid("42F85136-DB7E-439C-85F1-E4075D135FC8"), System.Runtime.InteropServices.InterfaceType(System.Runtime.InteropServices.ComInterfaceType.InterfaceIsIUnknown)]
+        interface IFileDialog
+        {
+            [System.Runtime.InteropServices.PreserveSig] int Show(IntPtr parent);
+            void SetFileTypes(uint count, IntPtr specs);
+            void SetFileTypeIndex(uint index);
+            void GetFileTypeIndex(out uint index);
+            void Advise(IntPtr events, out uint cookie);
+            void Unadvise(uint cookie);
+            void SetOptions(uint options);
+            void GetOptions(out uint options);
+            void SetDefaultFolder(IShellItem item);
+            void SetFolder(IShellItem item);
+            void GetFolder(out IShellItem item);
+            void GetCurrentSelection(out IShellItem item);
+            void SetFileName([System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] string name);
+            void GetFileName([System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] out string name);
+            void SetTitle([System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] string title);
+            void SetOkButtonLabel([System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] string text);
+            void SetFileNameLabel([System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] string label);
+            void GetResult(out IShellItem item);
+            void AddPlace(IShellItem item, int place);
+            void SetDefaultExtension([System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] string extension);
+            void Close(int result);
+            void SetClientGuid(ref Guid guid);
+            void ClearClientData();
+            void SetFilter(IntPtr filter);
+        }
+
+        [System.Runtime.InteropServices.ComImport, System.Runtime.InteropServices.Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE"), System.Runtime.InteropServices.InterfaceType(System.Runtime.InteropServices.ComInterfaceType.InterfaceIsIUnknown)]
+        interface IShellItem
+        {
+            void BindToHandler(IntPtr context, ref Guid handler, ref Guid iid, out IntPtr result);
+            void GetParent(out IShellItem parent);
+            void GetDisplayName(uint form, [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] out string name);
+            void GetAttributes(uint mask, out uint attributes);
+            void Compare(IShellItem other, uint hint, out int order);
+        }
+
+        [System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, PreserveSig = false)]
+        static extern void SHCreateItemFromParsingName([System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] string path, IntPtr context, ref Guid iid, [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Interface)] out IShellItem item);
+
+        const int Cancelled = unchecked((int)0x800704C7);
+
+        public static string Pick(IWin32Window owner, string title, string description, string start)
+        {
+            bool shown = false;
+            try
+            {
+                IFileDialog d = (IFileDialog)new OpenDialog();
+                try
+                {
+                    uint options;
+                    d.GetOptions(out options);
+                    d.SetOptions(options | 0x20 | 0x40 | 0x800);
+                    if (!string.IsNullOrEmpty(title)) d.SetTitle(title);
+                    try
+                    {
+                        if (!string.IsNullOrEmpty(start) && System.IO.Directory.Exists(start))
+                        {
+                            Guid iid = typeof(IShellItem).GUID;
+                            IShellItem at;
+                            SHCreateItemFromParsingName(start, IntPtr.Zero, ref iid, out at);
+                            if (at != null) d.SetFolder(at);
+                        }
+                    }
+                    catch { }
+                    shown = true;
+                    int hr = d.Show(owner != null ? owner.Handle : IntPtr.Zero);
+                    if (hr == Cancelled) return null;
+                    if (hr != 0) throw new System.Runtime.InteropServices.COMException("folder dialog", hr);
+                    IShellItem picked;
+                    d.GetResult(out picked);
+                    string path;
+                    picked.GetDisplayName(0x80058000, out path);
+                    return string.IsNullOrEmpty(path) ? null : path;
+                }
+                finally { try { System.Runtime.InteropServices.Marshal.FinalReleaseComObject(d); } catch { } }
+            }
+            catch
+            {
+                if (shown) return null;
+            }
+            using (FolderBrowserDialog d = new FolderBrowserDialog())
+            {
+                d.Description = description ?? title ?? "";
+                d.ShowNewFolderButton = true;
+                try { if (!string.IsNullOrEmpty(start) && System.IO.Directory.Exists(start)) d.SelectedPath = start; } catch { }
+                return d.ShowDialog(owner) == DialogResult.OK ? d.SelectedPath : null;
+            }
+        }
+    }
 }

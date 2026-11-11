@@ -31,7 +31,7 @@ namespace MinGent
         public string AiAutoAllow = "";
         public bool AiCaptcha;
         public bool AiSandbox;
-        public bool AiOtherApps;
+        public bool AiOtherApps = true;
         public bool AiWebGuard = true;
         public bool AiWeb = true;
         public bool AiBrowser = true;
@@ -148,7 +148,7 @@ namespace MinGent
                         case "aiAutoAllow": s.AiAutoAllow = v; break;
                         case "aiCaptcha": s.AiCaptcha = v == "1"; break;
                         case "aiSandbox": s.AiSandbox = v == "1"; break;
-                        case "aiOtherApps": s.AiOtherApps = v == "1"; break;
+                        case "aiOpenApps": s.AiOtherApps = v == "1"; break;
                         case "aiWebGuard": s.AiWebGuard = v != "0"; break;
                         case "aiWeb": s.AiWeb = v != "0"; break;
                         case "aiBrowser": s.AiBrowser = v != "0"; break;
@@ -254,7 +254,7 @@ namespace MinGent
                 w("aiAutoAllow", AiAutoAllow);
                 w("aiCaptcha", AiCaptcha ? "1" : "0");
                 w("aiSandbox", AiSandbox ? "1" : "0");
-                w("aiOtherApps", AiOtherApps ? "1" : "0");
+                w("aiOpenApps", AiOtherApps ? "1" : "0");
                 w("aiWebGuard", AiWebGuard ? "1" : "0");
                 w("aiWeb", AiWeb ? "1" : "0");
                 w("aiBrowser", AiBrowser ? "1" : "0");
@@ -1873,7 +1873,14 @@ namespace MinGent
             if (aiPanel != null) aiPanel.SettingsChanged();
             UpdateAiChip();
             if (!ApplyQuickEntry() && settings.QuickKey != oldQuick)
-                Alert.Show(this, theme, "Windows did not give MinGent the shortcut " + QuickEntry.Name(settings.QuickKey) + ", most likely because another program uses it. Choose another one in Settings > General.", Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            {
+                string refused = QuickEntry.Name(settings.QuickKey);
+                settings.QuickKey = oldQuick;
+                settings.Save();
+                ApplyQuickEntry();
+                Alert.Show(this, theme, "Windows did not give MinGent the shortcut " + refused + ", most likely because another program uses it. Choose another one.", Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                ShowSettings("Keyboard shortcuts");
+            }
         }
 
         ModelLibraryDialog library;

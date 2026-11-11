@@ -1139,6 +1139,207 @@ namespace MinGent
             "wwahost", "screenclippinghost", "useroobebroker", "systemsettingsbroker", "gamebar", "gamebarftserver", "crossdeviceresume", "openwith", "pickerhost",
             "filepicker", "credentialenrollmentmanager" };
 
+
+        static List<KeyValuePair<AppWindow, Rectangle>> Stack(Rectangle screen, List<AppWindow> mine)
+        {
+            List<KeyValuePair<AppWindow, Rectangle>> order = new List<KeyValuePair<AppWindow, Rectangle>>();
+            Dictionary<IntPtr, AppWindow> own = new Dictionary<IntPtr, AppWindow>();
+            if (mine != null) foreach (AppWindow w in mine) own[w.Hwnd] = w;
+            if (own.Count == 0) return order;
+            EnumProc cb = delegate (IntPtr h, IntPtr l)
+            {
+                try
+                {
+                    AppWindow w;
+                    if (!own.TryGetValue(h, out w) || !IsWindowVisible(h) || IsIconic(h) || Cloaked(h)) return true;
+                    RECT r;
+                    if (!GetWindowRect(h, out r)) return true;
+                    Rectangle rc = Rectangle.Intersect(Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom), screen);
+                    if (rc.Width < 8 || rc.Height < 8) return true;
+                    order.Add(new KeyValuePair<AppWindow, Rectangle>(w, rc));
+                }
+                catch { }
+                return true;
+            };
+            EnumWindows(cb, IntPtr.Zero);
+            GC.KeepAlive(cb);
+            return order;
+        }
+
+        public static List<AppWindow> OnScreen(List<AppWindow> mine)
+        {
+            List<AppWindow> seen = new List<AppWindow>();
+            if (mine == null || mine.Count == 0 || Environment.OSVersion.Platform != PlatformID.Win32NT) return seen;
+            foreach (KeyValuePair<AppWindow, Rectangle> e in Stack(System.Windows.Forms.Screen.PrimaryScreen.Bounds, mine)) seen.Add(e.Key);
+            return seen;
+        }
+
+        public static Bitmap ScreenPicture(List<AppWindow> mine, out List<KeyValuePair<AppWindow, Rectangle>> shown, out Size full)
+        {
+            shown = new List<KeyValuePair<AppWindow, Rectangle>>();
+            full = Size.Empty;
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) return null;
+            Rectangle screen = System.Windows.Forms.Screen.PrimaryScreen.Bounds;
+            full = screen.Size;
+            List<KeyValuePair<AppWindow, Rectangle>> order = Stack(screen, mine);
+            if (order.Count == 0) return null;
+            Bitmap canvas = null;
+            try
+            {
+                canvas = new Bitmap(screen.Width, screen.Height, PixelFormat.Format24bppRgb);
+                using (Graphics g = Graphics.FromImage(canvas))
+                {
+                    g.Clear(Color.FromArgb(24, 24, 24));
+                    for (int i = Math.Min(order.Count, 12) - 1; i >= 0; i--)
+                    {
+                        AppWindow w = order[i].Key;
+                        Rectangle rc = order[i].Value;
+                        using (Bitmap shot = Capture(w, false))
+                        {
+                            if (shot == null) continue;
+                            g.DrawImage(shot, new Rectangle(rc.Left - screen.Left, rc.Top - screen.Top, rc.Width, rc.Height),
+                                new Rectangle(rc.Left - w.Rect.Left, rc.Top - w.Rect.Top, rc.Width, rc.Height), GraphicsUnit.Pixel);
+                        }
+                        shown.Insert(0, new KeyValuePair<AppWindow, Rectangle>(w, new Rectangle(rc.Left - screen.Left, rc.Top - screen.Top, rc.Width, rc.Height)));
+                    }
+                }
+                if (shown.Count == 0) return null;
+                Bitmap done = canvas;
+                canvas = null;
+                return done;
+            }
+            catch { return null; }
+            finally
+            {
+                if (canvas != null) canvas.Dispose();
+            }
+        }
+
+        public static string Place(AppWindow w)
+        {
+            if (w == null || Environment.OSVersion.Platform != PlatformID.Win32NT) return "";
+            try
+            {
+                if (IsIconic(w.Hwnd)) return "minimized";
+                RECT r;
+                if (!GetWindowRect(w.Hwnd, out r)) return "";
+                Rectangle on = Rectangle.Intersect(Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom), System.Windows.Forms.Screen.PrimaryScreen.Bounds);
+                return on.Width < 8 || on.Height < 8 ? "on another screen" : "";
+            }
+            catch { return ""; }
+        }
+
+        static readonly HashSet<string> PrivateStart = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+            "Microsoft Teams", "Microsoft Teams (work or school)", "Outlook (new)", "Outlook (classic)", "Mail", "Calendar", "Quick Assist", "Zoom Workplace",
+            "Telegram Desktop", "Remote Desktop Connection", "Phone Link", "Messenger", "Skype" };
+        static readonly HashSet<string> BrowserStart = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+            "Google Chrome", "Microsoft Edge", "Opera Browser", "Opera GX Browser", "Firefox Private Browsing", "Tor Browser", "Brave Browser", "DuckDuckGo" };
+
+        public static string OpenBlock(string name, string id)
+        {
+            List<string> names = new List<string>();
+            string i = (id ?? "").Trim(), n = (name ?? "").Trim();
+            int cut = Math.Max(i.LastIndexOf('\\'), i.LastIndexOf('/'));
+            if (cut >= 0 || i.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+            {
+                string file = i.Substring(cut + 1);
+                int dot = file.LastIndexOf('.');
+                names.Add(dot > 0 ? file.Substring(0, dot) : file);
+                if (file.EndsWith(".msc", StringComparison.OrdinalIgnoreCase)) names.Add("mmc");
+            }
+            else if (i.Length > 0 && i.IndexOfAny(new char[] { '!', '_' }) < 0) names.Add(i);
+            if (n.Length > 0) names.Add(n);
+            if (PrivateStart.Contains(n)) names.Add("outlook");
+            if (BrowserStart.Contains(n)) names.Add("chrome");
+            if (i.IndexOf("git-bash", StringComparison.OrdinalIgnoreCase) >= 0) names.Add("mintty");
+            if (i.IndexOf("Microsoft.WindowsStore", StringComparison.OrdinalIgnoreCase) >= 0) names.Add("winstore.app");
+            if (i.IndexOf("ControlPanel", StringComparison.OrdinalIgnoreCase) >= 0 || i.IndexOf("RunDialog", StringComparison.OrdinalIgnoreCase) >= 0) names.Add("control");
+            if (i.IndexOf("WindowsTerminal", StringComparison.OrdinalIgnoreCase) >= 0) names.Add("windowsterminal");
+            if (i.IndexOf("immersivecontrolpanel", StringComparison.OrdinalIgnoreCase) >= 0) names.Add("systemsettings");
+            if (i.IndexOf("SecHealthUI", StringComparison.OrdinalIgnoreCase) >= 0) names.Add("sechealthui");
+            if (i.IndexOf("Microsoft.Windows.Explorer", StringComparison.OrdinalIgnoreCase) >= 0) names.Add("explorer");
+            foreach (string x in names)
+            {
+                if (Private.Contains(x)) return "MinGent never lets the agent use " + n + ", because " + NeverWhy(x) + ".";
+                if (Browsers.Contains(x)) return n + " is a web browser, and a browser you open can't be read or clicked. For the web, use your browser tools.";
+                if (Terminals.Contains(x) || string.Equals(x, "mintty", StringComparison.OrdinalIgnoreCase)) return n + " is a terminal. Run commands with run_command; to work in a terminal window the user can watch, open one with run_command as your instructions say.";
+                if (string.Equals(x, "explorer", StringComparison.OrdinalIgnoreCase)) return "Work with files through your file tools. To show the user a folder in File Explorer, start it with run_command: explorer \"<folder>\".";
+                if (SystemTools.Contains(x) || SystemHosts.Contains(x) || Blocked.Contains(x)) return "MinGent never lets the agent use " + n + ", because " + NeverWhy(x) + ". If the user only wants it opened for themselves, start it with run_command.";
+            }
+            return null;
+        }
+
+        static readonly object startGate = new object();
+        static List<KeyValuePair<string, string>> startApps;
+        static DateTime startWhen;
+
+        public static List<KeyValuePair<string, string>> StartApps()
+        {
+            lock (startGate)
+            {
+                if (startApps != null && (DateTime.UtcNow - startWhen).TotalSeconds < 60) return startApps;
+            }
+            List<KeyValuePair<string, string>> list = new List<KeyValuePair<string, string>>();
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) return list;
+            try
+            {
+                ProcessStartInfo si = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "WindowsPowerShell\\v1.0\\powershell.exe"),
+                    "-NoProfile -NonInteractive -Command \"[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-StartApps | ForEach-Object { $_.Name + [char]9 + $_.AppID }\"");
+                si.UseShellExecute = false;
+                si.CreateNoWindow = true;
+                si.RedirectStandardOutput = true;
+                si.StandardOutputEncoding = Encoding.UTF8;
+                using (Process p = Process.Start(si))
+                {
+                    StringBuilder got = new StringBuilder();
+                    p.OutputDataReceived += delegate (object sender, DataReceivedEventArgs e) { if (e.Data != null) lock (got) got.Append(e.Data).Append('\n'); };
+                    p.BeginOutputReadLine();
+                    if (p.WaitForExit(15000)) p.WaitForExit();
+                    else try { p.Kill(); } catch { }
+                    string text;
+                    lock (got) text = got.ToString();
+                    foreach (string line in text.Split('\n'))
+                    {
+                        string l = line.Trim('\r', ' ', '\uFEFF');
+                        int tab = l.IndexOf('\t');
+                        if (tab <= 0 || tab == l.Length - 1) continue;
+                        list.Add(new KeyValuePair<string, string>(l.Substring(0, tab).Trim(), l.Substring(tab + 1).Trim()));
+                    }
+                }
+            }
+            catch { }
+            list.Sort(delegate (KeyValuePair<string, string> x, KeyValuePair<string, string> y) { return string.Compare(x.Key, y.Key, StringComparison.OrdinalIgnoreCase); });
+            if (list.Count > 0) lock (startGate) { startApps = list; startWhen = DateTime.UtcNow; }
+            return list;
+        }
+
+        public static int PickStart(List<KeyValuePair<string, string>> apps, string want, out string error)
+        {
+            error = null;
+            string w = (want ?? "").Trim();
+            if (w.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) w = w.Substring(0, w.Length - 4);
+            if (w.Length == 0 || apps == null) { error = "Give the program's name."; return -1; }
+            for (int i = 0; i < apps.Count; i++) if (string.Equals(apps[i].Key, w, StringComparison.OrdinalIgnoreCase)) return i;
+            List<int> hits = new List<int>();
+            for (int i = 0; i < apps.Count; i++) if (apps[i].Key.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0) hits.Add(i);
+            if (hits.Count == 1) return hits[0];
+            if (hits.Count == 0)
+            {
+                for (int i = 0; i < apps.Count; i++) if (w.IndexOf(apps[i].Key, StringComparison.OrdinalIgnoreCase) >= 0 && apps[i].Key.Length >= 4) hits.Add(i);
+                if (hits.Count == 1) return hits[0];
+            }
+            if (hits.Count == 0 && w.Length >= 4 && w.IndexOf(' ') < 0)
+            {
+                for (int i = 0; i < apps.Count; i++) if (apps[i].Value.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0) hits.Add(i);
+                if (hits.Count == 1) return hits[0];
+            }
+            if (hits.Count == 0) { error = "No program in the Start menu matches \"" + w + "\". Call app_open without name to list them."; return -1; }
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < hits.Count && i < 8; i++) sb.Append(i > 0 ? ", " : "").Append('"').Append(apps[hits[i]].Key).Append('"');
+            error = "Several programs match \"" + w + "\": " + sb + (hits.Count > 8 ? " and more" : "") + ". Use the full name of one.";
+            return -1;
+        }
+
         public static void LaunchWindow(DateTime start, DateTime until)
         {
             lock (adoptGate)
@@ -1172,17 +1373,63 @@ namespace MinGent
         static string FriendlyName(string exe, string process)
         {
             if (string.Equals(process, "explorer", StringComparison.OrdinalIgnoreCase)) return "File Explorer";
+            string plain = null;
             try
             {
                 if (!string.IsNullOrEmpty(exe))
                 {
                     string d = (FileVersionInfo.GetVersionInfo(exe).FileDescription ?? "").Trim();
                     d = Regex.Replace(d, @"[\x00-\x1F\x7F""\[\]{}<>`]", " ").Trim();
-                    if (d.Length > 0 && d.Length <= 60) return Regex.Replace(d, @"\s+", " ");
+                    if (d.Length > 0 && d.Length <= 60)
+                    {
+                        d = Regex.Replace(d, @"\s+", " ");
+                        if (!string.Equals(d, process, StringComparison.OrdinalIgnoreCase) && !string.Equals(d, process + ".exe", StringComparison.OrdinalIgnoreCase)) return d;
+                        plain = d;
+                    }
                 }
             }
             catch { }
-            return process;
+            return StartName(exe) ?? plain ?? process;
+        }
+
+        public static bool FromEntry(string exe, string id)
+        {
+            string e = exe ?? "", i = id ?? "";
+            if (e.Length == 0 || i.Length == 0) return false;
+            string family = PackageFamily(e);
+            if (family != null) return i.StartsWith(family + "!", StringComparison.OrdinalIgnoreCase);
+            int cut = Math.Max(e.LastIndexOf('\\'), e.LastIndexOf('/'));
+            string file = e.Substring(cut + 1);
+            return file.Length > 4 && i.IndexOf(file, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        public static string PackageFamily(string exe)
+        {
+            string e = exe ?? "";
+            int at = e.IndexOf("\\WindowsApps\\", StringComparison.OrdinalIgnoreCase);
+            if (at < 0) return null;
+            string rest = e.Substring(at + 13);
+            int end = rest.IndexOf('\\');
+            if (end <= 0) return null;
+            string[] parts = rest.Substring(0, end).Split('_');
+            if (parts.Length != 5 || parts[0].Length == 0 || parts[4].Length == 0) return null;
+            return parts[0] + "_" + parts[4];
+        }
+
+        static string StartName(string exe)
+        {
+            string family = PackageFamily(exe);
+            if (family == null) return null;
+            string found = null;
+            foreach (KeyValuePair<string, string> a in StartApps())
+            {
+                if (!a.Value.StartsWith(family + "!", StringComparison.OrdinalIgnoreCase)) continue;
+                if (found != null && !string.Equals(found, a.Key, StringComparison.OrdinalIgnoreCase)) return null;
+                found = a.Key;
+            }
+            if (found == null) return null;
+            found = Regex.Replace(Regex.Replace(found, @"[\x00-\x1F\x7F""\[\]{}<>`]", " "), @"\s+", " ").Trim();
+            return found.Length > 0 && found.Length <= 60 ? found : null;
         }
 
         public static List<OtherApp> OtherApps()
@@ -1297,7 +1544,7 @@ namespace MinGent
                 }
                 if (launches.Count == 0) return false;
             }
-            if (Blocked.Contains(name) || Browsers.Contains(name) || Private.Contains(name) || SystemHosts.Contains(name)) return false;
+            if (Blocked.Contains(name) || SystemTools.Contains(name) || Browsers.Contains(name) || Private.Contains(name) || SystemHosts.Contains(name)) return false;
             lock (adoptGate)
             {
                 foreach (KeyValuePair<DateTime, DateTime> w in launches)
@@ -1569,7 +1816,7 @@ namespace MinGent
                 if (TierFor(w.Process, w.Class) == AppTier.Never) return "'" + w.Process + "' can't be used because " + NeverWhy(w.Process);
                 return null;
             }
-            if (Blocked.Contains(w.Process)) return "'" + w.Process + "' is a shell or system tool, which the assistant may not control (use run_command for commands)";
+            if (Blocked.Contains(w.Process) || SystemTools.Contains(w.Process)) return "'" + w.Process + "' is a shell or system tool, which the assistant may not control (use run_command for commands)";
             if (Browsers.Contains(w.Process)) return "'" + w.Process + "' is a web browser with the user's own sign-ins, which the assistant may not control. Use MinGent's built-in browser (browser_navigate) instead";
             if (Private.Contains(w.Process)) return "'" + w.Process + "' handles the user's messages, passwords, money or remote access, so the assistant may not control it";
             if (w.Class == "ConsoleWindowClass" || w.Class == "CASCADIA_HOSTING_WINDOW_CLASS" || w.Class == "PseudoConsoleWindow") return "console windows cannot be controlled (use run_command for commands)";
@@ -1647,8 +1894,8 @@ namespace MinGent
             error = null;
             if (all.Count == 0)
             {
-                error = "No window of a program you started is open. Start the program with run_command (background=true), wait a moment, then try again. " +
-                        (others ? "To use a program the user opened themselves, ask for it with app_access first." : "A program that was already open before your command belongs to the user and can't be controlled.");
+                error = "No window of a program you started is open. Open the program with app_open, or start your own with run_command (background=true), wait a moment, then try again. " +
+                        (others ? "To use a program the user opened themselves, ask for it with app_access first." : "A program that was already open before your command belongs to the user. They can let you ask for such programs with the switch \"Programs you opened yourself\" in Settings > Agent > Tools: tell them that, and don't work around it.");
                 return null;
             }
             string w = (which ?? "").Trim();
@@ -1697,12 +1944,17 @@ namespace MinGent
 
         public static Bitmap Capture(AppWindow w)
         {
+            return Capture(w, true);
+        }
+
+        public static Bitmap Capture(AppWindow w, bool fromScreen)
+        {
             Bitmap result = null;
-            if (!RunTimed(delegate { result = CaptureNow(w); }, 8000)) return null;
+            if (!RunTimed(delegate { result = CaptureNow(w, fromScreen); }, 8000)) return null;
             return result;
         }
 
-        static Bitmap CaptureNow(AppWindow w)
+        static Bitmap CaptureNow(AppWindow w, bool fromScreen)
         {
             if (IsIconic(w.Hwnd)) ShowWindow(w.Hwnd, 9);
             RECT r;
@@ -1715,6 +1967,11 @@ namespace MinGent
                 bool ok;
                 try { ok = PrintWindow(w.Hwnd, hdc, 2); }
                 finally { g.ReleaseHdc(hdc); }
+                if (!ok && !fromScreen)
+                {
+                    bm.Dispose();
+                    return null;
+                }
                 if (!ok)
                 {
                     AppHighlight.OutOfScreenCopy(true);
@@ -2447,13 +2704,13 @@ namespace MinGent
             lock (ps.AskLock) return ps.DeniedKeys.Contains("app:" + exe) || ps.DeniedKeys.Contains("appview:" + exe);
         }
 
-        static string UseName(AppWindow w)
+        protected static string UseName(AppWindow w)
         {
             string exe = (AppControl.ExePath(w.Pid) ?? w.Process).ToLowerInvariant();
             return w.Terminal ? exe + "#" + w.Hwnd.ToInt64().ToString(CultureInfo.InvariantCulture) : exe;
         }
 
-        static string Check(ToolContext ctx, AppWindow w, bool acting, bool cancelOnly, string act)
+        protected static string Check(ToolContext ctx, AppWindow w, bool acting, bool cancelOnly, string act)
         {
             PermissionState ps = ctx.Session.Perms;
             bool tainted = ps.WebGuard && ps.Tainted;
@@ -2815,7 +3072,7 @@ namespace MinGent
     {
         public override string Name { get { return "app_access"; } }
         public override string Description { get { return "Ask to use a program the user opened themselves (one you didn't start). Without app it lists the open programs you can ask for. With app MinGent asks the user, and once they allow it, its windows show up in app_read for the rest of this chat. Web browsers, File Explorer, terminals and code editors can only be looked at."; } }
-        public override Dictionary<string, object> Schema { get { return Obj("app", P("string", "The program's name from the list, e.g. \"Notepad\""), false); } }
+        public override Dictionary<string, object> Schema { get { return Obj("app", P("string", "The program's name from the list, e.g. \"Notepad\""), false, "reason", P("string", "One short sentence for the user: what you need the program for"), false); } }
         public override string Label(Dictionary<string, object> a) { string n = (S(a, "app") ?? "").Trim(); return n.Length == 0 ? "List the open programs" : "Ask to use " + (n.Length > 40 ? n.Substring(0, 40) + "\u2026" : n); }
         public override bool Untrusted { get { return true; } }
 
@@ -2869,6 +3126,7 @@ namespace MinGent
                 ask.Category = "";
                 ask.High = hit.Tier != AppTier.Look;
                 ask.Title = (hit.Tier == AppTier.Look ? "Let the agent look at " : "Let the agent use ") + hit.Name;
+                ask.Summary = PermissionAsk.PlainSummary(S(a, "reason"), 160);
                 ask.Detail = hit.Exe;
                 ask.Where = "Until this chat ends";
                 ask.Reason = hit.Tier == AppTier.Full ? "You opened this program yourself. The agent will see its windows and can click, type and press keys in them, like a person at your PC. Whatever the program can do, such as running macros or scripts, the agent can do in it too." :
@@ -2906,11 +3164,184 @@ namespace MinGent
         }
     }
 
+    class AppOpenTool : AppTool
+    {
+        public override string Name { get { return "app_open"; } }
+        public bool Others;
+        public override string Description { get { return "Open a program on this PC by its name in the Start menu, such as \"Calculator\" or \"Excel\". Without name it lists the programs that can be opened. A program you open this way counts as one you started: read it with app_read."; } }
+        public override Dictionary<string, object> Schema { get { return Obj("name", P("string", "The program's name as the Start menu shows it"), false, "reason", P("string", "One short sentence for the user: what you need the program for"), false); } }
+        public override string Label(Dictionary<string, object> a) { string n = (S(a, "name") ?? "").Trim(); return n.Length == 0 ? "List the programs on this PC" : "Open " + (n.Length > 40 ? n.Substring(0, 40) + "\u2026" : n); }
+
+        public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
+        {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) return ToolOutcome.Fail("app control only works on Windows");
+            List<KeyValuePair<string, string>> apps = AppControl.StartApps();
+            if (apps.Count == 0) return ToolOutcome.Fail("Windows did not give the list of programs in the Start menu. Start the program with run_command (background=true) instead.");
+            string want = (S(a, "name") ?? "").Trim();
+            if (want.Length == 0)
+            {
+                StringBuilder sb = new StringBuilder();
+                int n = 0;
+                string last = null;
+                foreach (KeyValuePair<string, string> x in apps)
+                {
+                    if (string.Equals(x.Key, last, StringComparison.OrdinalIgnoreCase) || AppControl.OpenBlock(x.Key, x.Value) != null) continue;
+                    last = x.Key;
+                    if (++n > 250) break;
+                    sb.Append(x.Key).Append('\n');
+                }
+                return ToolOutcome.Ok("Programs in the Start menu of this PC that you can open" + (n > 250 ? " (the first 250; one that is not listed here can still be opened by its name)" : "") + ":\n" + sb + "Open one with app_open name=\"<name>\".", "Listed the programs");
+            }
+            string wrong;
+            int at = AppControl.PickStart(apps, want, out wrong);
+            if (at < 0) return ToolOutcome.Fail(wrong);
+            string name = apps[at].Key, id = apps[at].Value;
+            string block = AppControl.OpenBlock(name, id);
+            if (block != null) return ToolOutcome.Fail(block);
+            if (id.IndexOf('"') >= 0) return ToolOutcome.Fail("Windows gave an unusable entry for " + name + ". Start it with run_command (background=true) instead.");
+            PermissionState ps = ctx.Session.Perms;
+            PermissionAsk ask = new PermissionAsk();
+            ask.Kind = "app";
+            ask.Category = ctx.Guarded(PermissionCategory.Launch);
+            ask.Title = "Open " + name;
+            ask.Summary = PermissionAsk.PlainSummary(S(a, "reason"), 160);
+            int slash = id.IndexOf('\\');
+            if (slash >= 0) ask.Detail = id.StartsWith("{", StringComparison.Ordinal) && id.IndexOf('}') == slash - 1 ? id.Substring(slash + 1) : id;
+            ask.Where = "Until this chat ends";
+            ask.Reason = "The agent wants to start this program from the Start menu. It will see its windows and can click, type and press keys in them, like a person at your PC. Whatever the program can do, such as running macros or scripts, the agent can do in it too.";
+            ask.Key = "open:" + id.ToLowerInvariant();
+            bool asked = !ps.Full && !(ps.Auto && ps.AutoAllows(ask.Category));
+            if (!ctx.Approve(ask))
+            {
+                ToolOutcome d = ToolOutcome.Fail("The user did not allow opening " + name + ". Don't start it another way; continue without it or ask the user.");
+                d.Denied = true;
+                d.Summary = "Not opened";
+                return d;
+            }
+            Dictionary<IntPtr, bool> before = new Dictionary<IntPtr, bool>();
+            foreach (AppWindow w in All(ctx)) before[w.Hwnd] = true;
+            DateTime now = DateTime.UtcNow;
+            AppControl.LaunchWindow(now, now.AddSeconds(30));
+            try
+            {
+                ProcessStartInfo si = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe"), "\"shell:AppsFolder\\" + id + "\"");
+                si.UseShellExecute = false;
+                using (Process p = Process.Start(si)) { }
+            }
+            catch (Exception ex) { return ToolOutcome.Fail("Windows could not open " + name + ": " + ex.Message); }
+            List<AppWindow> all = null;
+            List<AppWindow> fresh = new List<AppWindow>();
+            for (int i = 0; i < 20 && fresh.Count == 0 && !ctx.Ct.IsCancelled; i++)
+            {
+                Thread.Sleep(400);
+                all = All(ctx);
+                foreach (AppWindow w in all) if (!before.ContainsKey(w.Hwnd)) fresh.Add(w);
+            }
+            if (fresh.Count == 0)
+            {
+                StringBuilder have = new StringBuilder();
+                if (all != null) foreach (AppWindow w in all) have.Append(w.Ref(all)).Append(": \"").Append(w.Title).Append("\" (").Append(w.Process).Append(")\n");
+                ToolOutcome late = ToolOutcome.Ok("Windows was asked to open " + name + ", but no new window of it has shown up for you. " +
+                    (have.Length > 0 ? "Windows you may use now:\n" + have : "") +
+                    "It may still be starting: look with app_read in a moment. If it is not there then, either it was already running and came to the front, which makes it the user's" +
+                    (Others ? " (ask for it with app_access)" : " (off limits until they switch on \"Programs you opened yourself\" in Settings > Agent > Tools)") +
+                    ", or it is a kind of program MinGent never hands to you: browsers, mail, chat, password, money and remote-access programs and Windows' own tools.", "Asked to open " + name);
+                late.Untrusted = have.Length > 0;
+                return late;
+            }
+            if (asked)
+            {
+                string one = null;
+                bool same = true;
+                foreach (AppWindow w in fresh)
+                {
+                    string u = UseName(w);
+                    if (one == null) one = u;
+                    else if (one != u) same = false;
+                }
+                if (same && !fresh[0].Terminal && AppControl.FromEntry(one, id)) lock (ps.AskLock) ps.AllowedKeys.Add("app:" + one);
+            }
+            StringBuilder ws = new StringBuilder();
+            foreach (AppWindow w in fresh) ws.Append(w.Ref(all)).Append(": \"").Append(w.Title).Append("\" (").Append(w.Process).Append(")\n");
+            ToolOutcome o = ToolOutcome.Ok("Opened " + name + ". Its window" + (fresh.Count == 1 ? "" : "s") + ":\n" + ws + "Read it with app_read window=\"" + fresh[0].Ref(all) + "\".", "Opened " + name);
+            o.Untrusted = true;
+            return o;
+        }
+    }
+
+    class ScreenLookTool : AppTool
+    {
+        public override string Name { get { return "screen_look"; } }
+        public bool Others;
+        public override string Description { get { return "See all the windows you may use in one picture, each where it is on the main screen, to find your way between them (programs you started" + (Others ? ", and ones the user allowed with app_access" : "") + "). Windows of other programs are left out, also where they are in front of yours. It lists each window with its place in the picture. To act in a window, use app_read or app_screenshot on it."; } }
+        public override Dictionary<string, object> Schema { get { return Obj(); } }
+        public override string Label(Dictionary<string, object> a) { return "Look at the screen"; }
+
+        public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
+        {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) return ToolOutcome.Fail("app control only works on Windows");
+            List<AppWindow> all = All(ctx);
+            string none = "No program you may use is open. Open one with app_open" + (Others ? ", or ask for one the user has open with app_access." : ".");
+            if (all.Count == 0) return ToolOutcome.Ok(none, "Nothing to show");
+            List<AppWindow> may = new List<AppWindow>();
+            Dictionary<IntPtr, bool> refused = new Dictionary<IntPtr, bool>();
+            foreach (AppWindow w in AppControl.OnScreen(all))
+            {
+                if (AppControl.Allowed(w) == null && Check(ctx, w, false, false, "look") == null) may.Add(w);
+                else refused[w.Hwnd] = true;
+                if (ctx.Ct.IsCancelled) return ToolOutcome.Fail("stopped");
+            }
+            List<KeyValuePair<AppWindow, Rectangle>> shown;
+            Size full;
+            Bitmap bm = AppControl.ScreenPicture(may, out shown, out full);
+            ImageData img = null;
+            int iw = 0, ih = 0;
+            if (bm != null)
+                using (bm)
+                {
+                    const int maxSide = 1366;
+                    double sc = Math.Min(1.0, (double)maxSide / Math.Max(bm.Width, bm.Height));
+                    iw = Math.Max(1, (int)(bm.Width * sc));
+                    ih = Math.Max(1, (int)(bm.Height * sc));
+                    img = ImageTools.Encode(bm, maxSide);
+                }
+            double k = full.Width > 0 && iw > 0 ? (double)iw / full.Width : 1.0;
+            StringBuilder sb = new StringBuilder();
+            if (img != null) sb.Append("The main screen, ").Append(iw).Append("x").Append(ih).Append(" pixels in this picture, with only the windows you may use. Windows of other programs are left out, also where they are in front of yours.\n");
+            else sb.Append("None of the windows you may use is on the main screen right now, so there is no picture.\n");
+            Dictionary<IntPtr, bool> listed = new Dictionary<IntPtr, bool>();
+            foreach (KeyValuePair<AppWindow, Rectangle> e in shown)
+            {
+                listed[e.Key.Hwnd] = true;
+                sb.Append("- ").Append(e.Key.Ref(all)).Append(" \"").Append(e.Key.Title).Append("\" (").Append(e.Key.Process).Append("): at ")
+                  .Append((int)(e.Value.Left * k)).Append(",").Append((int)(e.Value.Top * k)).Append(", ").Append((int)(e.Value.Width * k)).Append("x").Append((int)(e.Value.Height * k)).Append('\n');
+            }
+            foreach (AppWindow w in all)
+            {
+                if (listed.ContainsKey(w.Hwnd) || refused.ContainsKey(w.Hwnd)) continue;
+                string where = AppControl.Place(w);
+                sb.Append("- ").Append(w.Ref(all)).Append(" \"").Append(w.Title).Append("\" (").Append(w.Process).Append(")").Append(where.Length > 0 ? ": " + where + ", not in the picture" : ": not in the picture").Append('\n');
+            }
+            sb.Append(img != null ? "This picture is for finding your way. To act in a window, use app_read or app_screenshot with its window id: app_click positions come from those, not from this picture."
+                : "app_read and app_screenshot still work on a window that is minimized or on another screen.");
+            if (img == null)
+            {
+                ToolOutcome t = ToolOutcome.Ok(sb.ToString(), "No window on the screen");
+                t.Untrusted = true;
+                return t;
+            }
+            ToolOutcome o = ToolOutcome.Ok(sb.ToString(), shown.Count == 1 ? "1 window on the screen" : shown.Count + " windows on the screen");
+            o.Images = new List<ImageData>(new ImageData[] { img });
+            o.Untrusted = true;
+            return o;
+        }
+    }
+
     class AppReadTool : AppTool
     {
         public override string Name { get { return "app_read"; } }
         public bool Others;
-        public override string Description { get { return "Test a desktop program you started (with run_command, background=true): lists its windows and the controls of one window (buttons, fields, text, menus) with refs like a12 for app_click and app_type. Only programs started by you in this chat can be read, including ones Windows opened for your command (such as Store apps)" + (Others ? ", and programs the user allowed with app_access." : "."); } }
+        public override string Description { get { return "Test a desktop program you started (with app_open, or run_command background=true): lists its windows and the controls of one window (buttons, fields, text, menus) with refs like a12 for app_click and app_type. Only programs started by you in this chat can be read, including ones Windows opened for your command (such as Store apps)" + (Others ? ", and programs the user allowed with app_access." : "."); } }
         public override Dictionary<string, object> Schema { get { return Obj("window", WindowArg(), false); } }
         public override string Label(Dictionary<string, object> a) { string w = S(a, "window"); return "Read the app window" + (string.IsNullOrEmpty(w) ? "" : " " + w); }
         public override bool Untrusted { get { return true; } }

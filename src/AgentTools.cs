@@ -3454,7 +3454,7 @@ namespace MinGent
             a.Title = "Use the browser on " + host;
             a.Detail = url;
             a.Key = "site:" + host.ToLowerInvariant();
-            a.Reason = "The agent will be able to read, click and type on " + host + " in MinGent's browser for this chat.";
+            a.Reason = "The agent will be able to read, click and type on " + host + " in MinGent's browser.";
             return ctx.Approve(a) ? null : "The user did not allow browsing " + host + ".";
         }
 
@@ -4970,6 +4970,10 @@ namespace MinGent
                 if (tools[i] is AppAccessTool) return;
                 AppReadTool r = tools[i] as AppReadTool;
                 if (r != null) { r.Others = true; at = i; }
+                AppOpenTool op = tools[i] as AppOpenTool;
+                if (op != null) op.Others = true;
+                ScreenLookTool sl = tools[i] as ScreenLookTool;
+                if (sl != null) sl.Others = true;
             }
             if (at < 0) return;
             tools.Insert(at + 1, new AppAccessTool());
@@ -5067,7 +5071,9 @@ namespace MinGent
         {
             List<AgentTool> l = new List<AgentTool>();
             l.Add(new AppReadTool());
+            l.Add(new AppOpenTool());
             if (vision) l.Add(new AppScreenshotTool());
+            if (vision) l.Add(new ScreenLookTool());
             l.Add(new AppClickTool());
             l.Add(new AppTypeTool());
             l.Add(new AppKeyTool());

@@ -1380,14 +1380,11 @@ namespace MinGent
         public static bool Choose(IWin32Window owner, Theme th, Settings s, out string error)
         {
             error = null;
-            using (FolderBrowserDialog d = new FolderBrowserDialog())
-            {
-                d.Description = "Choose where MinGent saves the models it downloads. Models already downloaded stay where they are and keep working.";
-                d.ShowNewFolderButton = true;
-                try { if (Directory.Exists(ModelLibrary.OwnRoot)) d.SelectedPath = ModelLibrary.OwnRoot; } catch { }
-                if (d.ShowDialog(owner) != DialogResult.OK) return false;
-                return Set(s, d.SelectedPath, out error);
-            }
+            string start = null;
+            try { if (Directory.Exists(ModelLibrary.OwnRoot)) start = ModelLibrary.OwnRoot; } catch { }
+            string picked = FolderPicker.Pick(owner, "Choose where models are saved", "Choose where MinGent saves the models it downloads. Models already downloaded stay where they are and keep working.", start);
+            if (string.IsNullOrEmpty(picked)) return false;
+            return Set(s, picked, out error);
         }
 
         public static bool Set(Settings s, string folder, out string error)

@@ -536,13 +536,15 @@ namespace MinGent
     class FieldRow : Control, IRow, IThemed
     {
         Theme th;
-        readonly string note;
+        string note;
         public readonly Control Field;
         readonly Control extra;
         readonly bool stacked;
         readonly int fieldW, fieldH;
 
         public void SetTheme(Theme t) { th = t; Invalidate(true); }
+
+        public void SetNote(string text) { note = text ?? ""; Invalidate(); }
 
         public FieldRow(Theme t, string title, string note, Control field, int fieldWidth, int fieldHeight, bool stacked, Control extra)
         {

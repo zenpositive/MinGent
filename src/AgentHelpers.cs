@@ -601,8 +601,9 @@ namespace MinGent
             return result.ToolError ? "failed" : "finished";
         }
 
-        static string CommandsRun(AgentSession main)
+        static string CommandsRun(AgentSession main, out bool well)
         {
+            well = true;
             int from = main.RequestStart();
             Dictionary<string, Msg> results = new Dictionary<string, Msg>(StringComparer.Ordinal);
             for (int i = from; i < main.History.Count; i++)
@@ -625,11 +626,14 @@ namespace MinGent
                     if (cmd.Length > 200) cmd = cmd.Substring(0, 200) + "...";
                     Msg r;
                     results.TryGetValue(c.Id ?? "", out r);
-                    sb.Append("- ").Append(cmd).Append("  -> ").Append(CommandStatus(r)).Append('\n');
+                    string ended = CommandStatus(r);
+                    if (ended != "finished" && ended != "exit code 0") well = false;
+                    sb.Append("- ").Append(cmd).Append("  -> ").Append(ended).Append('\n');
                     n++;
                 }
             }
-            if (skipped > 0) sb.Append("- (").Append(skipped).Append(" more)\n");
+            if (skipped > 0) { sb.Append("- (").Append(skipped).Append(" more)\n"); well = false; }
+            if (n == 0) well = false;
             return sb.ToString();
         }
 
@@ -688,10 +692,14 @@ namespace MinGent
             string said = (summary ?? "").Trim();
             if (said.Length > 0)
                 sb.Append("The assistant's own summary of what it did and how it checked it:\n\"\"\"\n").Append(said.Length > 2500 ? said.Substring(0, 2500) + "..." : said).Append("\n\"\"\"\n\n");
-            string ran = CommandsRun(main);
+            bool well;
+            string ran = CommandsRun(main, out well);
             if (ran.Length > 0) sb.Append("Commands it ran (and how they ended):\n").Append(ran).Append('\n');
             sb.Append("Review this work independently. Start from the changes above and read only the code you need to judge them. ");
-            sb.Append(ran.Length > 0 ? "Re-run the checks above that matter, then try the edge cases you suspect. " : "Run the program, its tests or its build if you can. ");
+            if (changed < 150 && ran.Length == 0) sb.Append("This is a small change, so judge it by reading: don't run commands or code for it. ");
+            else if (changed < 150 && well) sb.Append("This is a small change and the checks above ended well, so judge it by reading: don't run commands or code for it, unless what you read gives you a concrete reason to doubt one of those results. ");
+            else sb.Append(ran.Length > 0 ? "Re-run the checks above that matter, and test further only where you suspect a real problem. " : "Run the program, its tests or its build if you can. ").Append("Read before you run: each command or piece of code may need the user's OK. ");
+            sb.Append("If the browser shows a page that was left open for the user, you may read it, but don't reload it, open another address in it or change what it shows. ");
             sb.Append("Find real problems: bugs, crashes, wrong results, parts of the request that are missing, broken edge cases, and security issues. ");
             sb.Append("Don't change any files, and don't report matters of taste or style. If it all checks out, say so - don't invent problems.");
             return sb.ToString();
@@ -707,7 +715,7 @@ namespace MinGent
             rc.Name = "delegate";
             rc.SetArgs(Json.O("kind", "review", "task", task, "title", "an independent review of the changes"));
             ToolContext own = tc.CopyFor(rc);
-            ui.Notice(AgentSession.ReviewNext, 0);
+            ui.Notice(AgentSession.ReviewNext, AgentSession.AfterDraft);
             ui.ToolStart(rc, "Independent review of the changes");
             ToolOutcome o = Run(own, rc, "review", task, delegate (ToolOutcome x) { return ReviewNote(x, main.StopAsked); });
             ui.ToolEnd(rc, o);
@@ -763,7 +771,7 @@ namespace MinGent
             }
             if (kind != "explore")
             {
-                sb.Append("- run_command uses ").Append(Shell.PowerShellName).Append(Shell.PowerShellName == "PowerShell 7" ? "" : ", which has no && or ||: separate commands with \";\"").Append(". Commands can't read keyboard input, so use non-interactive flags. Start servers with background=true and use command_status.\n");
+                sb.Append("- run_command uses ").Append(Shell.PowerShellName).Append(Shell.PowerShellName == "PowerShell 7" ? "" : ", which has no && or ||: separate commands with \";\"").Append(". Commands can't read keyboard input, so use non-interactive flags. Start servers with background=true and use command_status. Don't use a command for what read_file, list_directory, find_files or search_text do, such as counting lines or looking for a word: those never wait for the user's OK.\n");
                 sb.Append("- Bash commands such as ls -la, rm -rf, grep, touch, export or cat <<EOF do not work: use PowerShell (Get-ChildItem, Select-String, New-Item, $env:NAME = \"value\") or set shell to \"cmd\".\n");
                 if (browser)
                     sb.Append("- Web pages: open them with browser_navigate in MinGent's built-in browser (a local .html file opens directly, without a server) and check them with browser_read").Append(cfg.Vision ? " or browser_screenshot" : "")

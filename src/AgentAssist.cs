@@ -118,6 +118,9 @@ namespace MinGent
             Add("system_info", "sysinfo", "system_information", "get_system_info", "os_info", "environment_info", "machine_info", "get_environment", "env_info", "computer_info", "hardware_info", "pc_info", "get_os_info", "system_details");
             Add("app_read", "read_app", "read_window", "window_read", "desktop_read", "ui_read", "get_window", "list_windows", "inspect_window", "app_snapshot", "window_snapshot", "get_ui", "app_inspect", "read_ui", "get_window_elements", "app_elements");
             Add("app_screenshot", "window_screenshot", "desktop_screenshot", "app_capture", "screenshot_window", "capture_window", "app_screen", "screenshot_app");
+            Add("screen_look", "screen_screenshot", "look_at_screen", "see_screen", "whole_screen", "screen_view");
+            Add("app_open", "open_app", "open_application", "open_program", "launch_app", "start_app", "start_program");
+            Add("app_access", "request_access", "request_app_access", "ask_app_access", "app_request", "access_app", "use_app");
             Add("app_click", "desktop_click", "window_click", "click_app", "app_tap", "click_in_app");
             AddImplied("app_click", Json.O("right", true), "right_click", "app_right_click", "context_click");
             AddImplied("app_click", Json.O("double", true), "double_click", "app_double_click", "dbl_click", "doubleclick");
@@ -2023,9 +2026,13 @@ namespace MinGent
             "app_read", "app_screenshot", "app_click", "app_type", "app_key", "app_scroll", "app_hover", "app_drag" };
 
         static readonly Regex Refusal = new Regex(
-            @"\b(i (can't|cannot|can not|am unable to|am not able to|don't have (the )?(ability|access|permission)|do not have (the )?(ability|access|permission))|as an ai\b|i'm (just )?an? (ai|language model|text[- ]based)|i don't have (direct )?access)",
+            @"\b(i (can't|cannot|can not|am unable to|am not able to|don't have (the )?(ability|access|permission)|do not have (the )?(ability|access|permission))|i don't have (direct )?access)",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        static readonly Regex RefusalObject = new Regex(@"\b(file|files|folder|director|computer|pc|system|internet|web|brows|command|terminal|execut|run|access|disk|program|app|screen|your)",
+        static readonly Regex RefusalSelf = new Regex(@"\b(as an ai\b|i'm (just )?an? (ai|language model|text[- ]based))", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex RefusalLack = new Regex(@"(n't\b|\b(cannot|can not|unable|not able|not capable|not (something|possible)|no (way|access|ability|means|tools?)|without (any )?(access|the ability|tools?)|do not have|only (generate|produce|provide|write|output|give) text)\b)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex RefusalObject = new Regex(@"\b(files?|folders?|director(y|ies)|computers?|pc|systems?|internet|web|websites?|brows\w*|commands?|terminal|execut\w*|run|running|access(ing)?|disks?|programs?|apps?|applications?|screen)\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex RefusalYours = new Regex(@"\b(can't|cannot|can not|unable to|not able to)\s+((directly|actually|really|currently)\s+)?(access|open|read|see|view|check|look at|edit|change|modify|write|save|delete|run|use|control|browse|search|download|install)\b[^.!?\n]{0,60}\byour\b",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         static readonly Regex Announce = new Regex(
             @"^(now,?\s+|next,?\s+|first,?\s+|then,?\s+|okay,?\s+|ok,?\s+|alright,?\s+|great,?\s+)?(let me|let's|i'll|i will|i'm going to|i am going to|i'm now going to|i need to|i should|we need to|now i('ll| will| need to)|time to)\b(?!\s+know)",
@@ -2037,7 +2044,7 @@ namespace MinGent
             @"\b(once|after|when|as soon as|if|until) you('ve| have)?\b|\byou('ve| have) (completed|finished|solved|done)\b|\blet me know\b|\bwhen you're\b|\bonce that's done\b",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         static readonly Regex Untested = new Regex(
-            @"\b(not|couldn't|could not|unable to|didn't|did not|can't|cannot|wasn't able to|haven't|have not|without)\s+(be\s+)?(test|run|verif|check|build|compil|execut|tried)",
+            @"\b(not|never|nothing (was|has been|got|to)|couldn't|could not|unable to|didn't|did not|can't|cannot|wasn't able to|wasn't|weren't|hasn't|haven't|have not|has not|without)\s+((be|been|yet|actually)\s+)*(test|run|ran|verif|check|build|built|compil|execut|tried)",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
         public bool PreferApp { get { return LastFamily == "app"; } }
@@ -2135,6 +2142,8 @@ namespace MinGent
             if (unknown == 3) return "That's 3 calls to tools that don't exist in this chat. The tool names are listed in the error above; use one of them exactly as written.";
             return null;
         }
+
+        public void ReviewDone() { unverified.Clear(); }
 
         public void CountRefusal()
         {
@@ -2267,6 +2276,7 @@ namespace MinGent
         }
 
         public string Told;
+        const string Standalone = "The user no longer sees what you wrote above as the answer, so your final answer has to stand on its own.";
 
         public string EndOfTurn(string text, List<TodoItem> todos)
         {
@@ -2276,14 +2286,18 @@ namespace MinGent
             bool question = EndsWithQuestion(t);
             if (!AnyTool && refusal == 0 && t.Length > 0 && t.Length < 2500)
             {
+                int at = 0;
                 foreach (string sentence in Regex.Split(t, @"(?<=[.!?\n])\s+"))
                 {
-                    if (Refusal.IsMatch(sentence) && RefusalObject.IsMatch(sentence))
+                    if (sentence.Trim().Length == 0) continue;
+                    at++;
+                    if (at > 3 && t.Length >= 600) break;
+                    if ((RefusalObject.IsMatch(sentence) || RefusalYours.IsMatch(sentence)) && (Refusal.IsMatch(sentence) || (RefusalSelf.IsMatch(sentence) && RefusalLack.IsMatch(sentence))))
                     {
                         refusal++;
                         Nudges++;
                         Told = "The agent said it can't do this itself, so MinGent reminded it of its tools.";
-                        return "[MinGent] You can do this yourself. In this app you have tools to read and write files, run commands on this PC, search the web and use a browser, and the app asks the user for permission when it is needed. Use the tools to do what the user asked.";
+                        return "[MinGent] You can do this yourself. In this app you have tools to read and write files, run commands on this PC, search the web and use a browser, and the app asks the user for permission when it is needed. Use the tools to do what the user asked. " + Standalone;
                     }
                 }
             }
@@ -2292,7 +2306,7 @@ namespace MinGent
                 announce++;
                 Nudges++;
                 Told = "The agent said what it would do next but stopped, so MinGent asked it to carry on.";
-                return "[MinGent] Your message says you are about to do something, but you ended your turn without calling a tool. If you meant to continue, make the tool call now. If you are finished, give your final answer.";
+                return "[MinGent] Your message says you are about to do something, but you ended your turn without calling a tool. If you meant to continue, make the tool call now. If you are finished, give your final answer. " + Standalone;
             }
             if (!question && !WaitingOnUser && todo == 0 && todos != null)
             {
@@ -2305,7 +2319,7 @@ namespace MinGent
                     Told = "The checklist still has open items, so MinGent asked the agent to carry on.";
                     StringBuilder sb = new StringBuilder("[MinGent] Your checklist still has unfinished items:\n");
                     foreach (string s in open) sb.Append("- ").Append(s).Append('\n');
-                    sb.Append("Continue working on them. If an item is no longer needed or cannot be done, update the checklist with todo_write and explain why in your answer.");
+                    sb.Append("Continue working on them. If an item is no longer needed or cannot be done, update the checklist with todo_write and explain why in your answer. " + Standalone);
                     return sb.ToString();
                 }
             }
@@ -2316,7 +2330,7 @@ namespace MinGent
                 Told = "MinGent asked the agent to test its changes before it finishes.";
                 List<string> names = new List<string>();
                 foreach (string p in unverified) { if (names.Count < 5) names.Add(System.IO.Path.GetFileName(p)); }
-                return "[MinGent] You changed code (" + string.Join(", ", names.ToArray()) + ") but did not run or test it after the last change. If it can be checked here, check it now the way a person would - run it, run its tests or build it, or open it in the browser - and fix any problems you find. If it cannot be checked here, say so in your final answer.";
+                return "[MinGent] You changed code (" + string.Join(", ", names.ToArray()) + ") but did not run or test it after the last change. If it can be checked here, check it now the way a person would - run it, run its tests or build it, or open it in the browser - and fix any problems you find. If it cannot be checked here, say so in your final answer. " + Standalone;
             }
             if (!question && summary == 0 && FilesChanged && t.Length < 30)
             {
@@ -2370,7 +2384,7 @@ namespace MinGent
         static readonly HashSet<string> Reads = new HashSet<string>(StringComparer.Ordinal) {
             "read_file", "list_directory", "find_files", "search_text", "web_fetch", "web_search", "system_info", "analyze_audio" };
         static readonly HashSet<string> Live = new HashSet<string>(StringComparer.Ordinal) {
-            "command_status", "browser_read", "browser_screenshot", "watch_video", "browser_console", "app_read", "app_screenshot" };
+            "command_status", "browser_read", "browser_screenshot", "watch_video", "browser_console", "app_read", "app_screenshot", "screen_look" };
         static readonly HashSet<string> Inert = new HashSet<string>(StringComparer.Ordinal) { "todo_write", "open_in_editor" };
         static readonly HashSet<string> AppActions = new HashSet<string>(StringComparer.Ordinal) { "app_click", "app_type", "app_key", "app_scroll", "app_hover", "app_drag" };
         static readonly Regex ScriptName = new Regex(@"cmd-[0-9a-f]{12}\.ps1", RegexOptions.CultureInvariant);

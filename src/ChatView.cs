@@ -39,10 +39,9 @@ namespace MinGent
         public List<Rectangle> Tiles;
         public int TrayH;
         public string ContextLabel;
-        public bool Queued, MidRun, Running, Stopped, SpeedGuess;
+        public bool Queued, MidRun, Running, Stopped, SpeedGuess, Draft;
         public double Speed, FirstToken;
         public string Phase = "", CurrentTask = "";
-        public bool LiveShown;
         public ChatItem Group, Under, LastKid;
         public int Kids;
         public bool Hidden;
@@ -638,10 +637,10 @@ namespace MinGent
             {
                 ChatItem it = Items[i];
                 if (it.Under != null) { it.Group = act; it.Hidden = !act.Expanded; continue; }
-                if (it.Kind == ChatKind.Assistant && it.Text.Trim().Length > 0 && Answer(i, e)) continue;
-                bool pinned = (it.Kind == ChatKind.Question && it.Decision >= 0 && (it.Question == null || !it.Question.Wait)) || (it.Kind == ChatKind.Assistant && Substantial(it.Text));
+                if (it.Kind == ChatKind.Assistant && !it.Draft && it.Text.Trim().Length > 0 && Answer(i, e)) continue;
+                bool pinned = (it.Kind == ChatKind.Question && it.Decision >= 0 && (it.Question == null || !it.Question.Wait)) || (it.Kind == ChatKind.Assistant && !it.Draft && Substantial(it.Text));
                 bool member = it.Kind == ChatKind.Tool || it.Kind == ChatKind.Thinking || it.Kind == ChatKind.Assistant || (it.Kind == ChatKind.Permission && it.Decision >= 0) ||
-                              (it.Kind == ChatKind.Question && it.Decision >= 0) || pinned;
+                              (it.Kind == ChatKind.Question && it.Decision >= 0) || pinned || (it.Kind == ChatKind.Notice && it.Draft);
                 if (!member) continue;
                 it.Group = act;
                 it.Hidden = !act.Expanded && !pinned;
@@ -699,11 +698,6 @@ namespace MinGent
                 {
                     ChatItem it = Items[i];
                     if (it.Hidden) { it.Top = y; continue; }
-                    if (it.Kind == ChatKind.Activity)
-                    {
-                        bool live = LiveText(it) != null;
-                        if (live != it.LiveShown) { it.LiveShown = live; it.Touch(); }
-                    }
                     int iw = w - Depth(it) * Indent;
                     if (it.LayoutW != iw || it.LayoutVersion != it.Version)
                     {
@@ -845,7 +839,7 @@ namespace MinGent
                     }
                 case ChatKind.Activity:
                     it.Md = null;
-                    it.H = f.LineH + UI.S(12) + (it.LiveShown ? f.LineH + UI.S(4) : 0);
+                    it.H = f.LineH + UI.S(12);
                     break;
                 case ChatKind.Thinking:
                     {
@@ -1535,18 +1529,6 @@ namespace MinGent
                 TextRenderer.DrawText(g, hint, f.Small, hr, th.ChromeDim, TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
         }
 
-        public static string LiveText(ChatItem a)
-        {
-            if (a == null || !a.Running || a.Expanded || a.Members == null) return null;
-            for (int i = a.Members.Count - 1; i >= 0; i--)
-            {
-                ChatItem m = a.Members[i];
-                if (m.Kind == ChatKind.Assistant && m.Hidden && m.Text.Trim().Length > 0) return OneLine(m.Text, 400);
-                if (m.Kind == ChatKind.Thinking && m.Streaming) return null;
-            }
-            return null;
-        }
-
         public static string ThoughtTitle(string text)
         {
             if (string.IsNullOrEmpty(text)) return null;
@@ -1570,27 +1552,23 @@ namespace MinGent
                 }
             }
             StringBuilder sb = new StringBuilder();
-            foreach (char c in t)
-                if (c != '*' && c != '`' && c != '#' && !char.IsControl(c)) sb.Append(c);
+            int marks = 0;
+            while (marks < t.Length && (t[marks] == '#' || t[marks] == ' ')) marks++;
+            for (int i = marks; i < t.Length; i++)
+                if (t[i] != '*' && t[i] != '`' && !char.IsControl(t[i])) sb.Append(t[i]);
             t = sb.ToString().Trim().TrimEnd(':', '.', ' ');
+            if (head == null)
+            {
+                System.Text.RegularExpressions.Match lead = UserLead.Match(t);
+                if (lead.Success && t.Length - lead.Length >= 4) t = char.ToUpperInvariant(t[lead.Length]) + t.Substring(lead.Length + 1);
+            }
             if (t.Length == 0) return null;
             return t.Length > 80 ? t.Substring(0, 79).TrimEnd() + "\u2026" : t;
         }
 
-        static string OneLine(string text, int most)
-        {
-            StringBuilder sb = new StringBuilder();
-            bool space = false;
-            foreach (char c in text.Trim())
-            {
-                if (char.IsWhiteSpace(c) || char.IsControl(c)) { space = true; continue; }
-                if (space && sb.Length > 0) sb.Append(' ');
-                space = false;
-                sb.Append(c);
-            }
-            string s = sb.ToString();
-            return s.Length <= most ? s : s.Substring(0, most).TrimEnd() + "\u2026";
-        }
+        static readonly System.Text.RegularExpressions.Regex UserLead = new System.Text.RegularExpressions.Regex(
+            @"^the user (just |simply |now |also )?(wants|would like|is asking|asks|asked|needs|is requesting|requested|requests)( for)?( me| us)?( to)?( know| find out| understand| learn)?( about)? ",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
         void PaintActivity(Graphics g, ChatItem it, int idx, int x, int y, int w)
         {
@@ -1655,10 +1633,6 @@ namespace MinGent
                 ex += UI.S(8) + TextRenderer.MeasureText(g, "\u00B7  " + time, f.Body, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width;
             }
             if (it.Running && expandable) Glyphs.Draw(it.Expanded ? "down" : "right", g, new Rectangle(ex + UI.S(4), y, UI.S(16), rowH), hot ? th.Fore : th.ChromeDim);
-            if (!it.LiveShown) return;
-            string live = LiveText(it);
-            if (live == null) return;
-            TextRenderer.DrawText(g, live, f.Body, new Rectangle(tx, y + rowH - UI.S(4), Math.Max(UI.S(40), x + w - tx), f.LineH + UI.S(4)), th.Fore, TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | one);
         }
 
         static string Secs(double s)
@@ -1918,8 +1892,9 @@ namespace MinGent
                 {
                     TextFormatFlags one = TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding;
                     int gap = UI.S(18);
-                    int aw = Math.Min(tr.Width * 2 / 3, TextRenderer.MeasureText(g, it.Text, f.Small, Size.Empty, one).Width + UI.S(4));
-                    int hw = Math.Min(Math.Max(UI.S(40), tr.Width - aw - gap), TextRenderer.MeasureText(g, head, f.Small, Size.Empty, one).Width + UI.S(2));
+                    TextFormatFlags whole = TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding;
+                    int aw = Math.Min(tr.Width * 2 / 3, TextRenderer.MeasureText(g, it.Text, f.Small, Size.Empty, whole).Width + UI.S(4));
+                    int hw = Math.Min(Math.Max(UI.S(40), tr.Width - aw - gap), TextRenderer.MeasureText(g, head, f.Small, Size.Empty, whole).Width + UI.S(2));
                     TextRenderer.DrawText(g, head, f.Small, new Rectangle(tr.X, tr.Y, hw, tr.Height), th.ChromeDim, one);
                     TextRenderer.DrawText(g, "\u00B7", f.Small, new Rectangle(tr.X + hw, tr.Y, gap, tr.Height), th.ChromeDim, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
                     TextRenderer.DrawText(g, it.Text, f.Small, new Rectangle(tr.X + hw + gap, tr.Y, Math.Max(0, tr.Right - (tr.X + hw + gap)), tr.Height), declined ? th.ChromeDim : th.Fore, one);
