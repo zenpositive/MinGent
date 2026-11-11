@@ -1,6 +1,82 @@
 MinGent - what changed
 ======================
 
+Version 1.1.2 beta
+- Skills: a skill is a how-to for a job that comes up again, written once as
+  a Markdown file. Type / in the message box and your skills show up next to
+  the commands. /skill starts a new one in Notes, and you can ask the agent
+  to save what it just did as a skill. The agent gets one line per skill and
+  reads the file when a task matches. Skill folders made for Claude (a
+  folder with SKILL.md) work too.
+- Scheduled tasks: Settings > Scheduled (or /schedule) sets up tasks that
+  MinGent starts by itself while it is open: every day, Monday to Friday,
+  every week, every month or once. Each run is a new chat named after the
+  task, started when the agent is not busy and you are not in the middle of
+  something in MinGent. A run missed while MinGent was closed is made up
+  for once. Only you can add or change them.
+- Projects: the folder button at the top of a chat shows where the chat
+  works and lets you choose a folder for it (or /project). MinGent
+  remembers the folders you choose, lists them above your chats, and a
+  click on one shows only its chats and starts new chats in it. A chat
+  keeps its folder, and a scheduled task can run in a project.
+- Watching videos: a model that can see images can look at a video. The
+  agent opens it in the browser (the video's page, such as a YouTube page,
+  or an MP4, WebM or MOV file on your PC) and gets pictures of it: nine
+  moments on one sheet, each with its time, or up to four moments it picks
+  as full pictures.
+- Charts: the agent can put a bar or line chart into its answer, and
+  MinGent draws it in the chat.
+- The status line says what is happening this moment. While the model
+  thinks, it shows what the thought is about instead of the word Thinking,
+  and the steps are titled the same way. What the agent last said to you
+  shows under the line while it works. The window title shows the plan's
+  current step, or that the agent is waiting for you.
+- A shortcut from any program: Settings > General > Keyboard shortcuts has
+  "Bring up MinGent from any program". With Ctrl+Alt+Space, Alt+Shift+Space
+  or Ctrl+Alt+Enter chosen there, that shortcut brings MinGent to the front
+  with the message box ready. It is off until you choose one.
+- Giving a file to a page: the agent can put a file from your PC into a
+  page's file field, for example to attach it to a form. MinGent asks you
+  first and names the file and the site.
+- Close-ups: when something in a program's window is too small to read in a
+  screenshot, the agent can look at one part of the window enlarged.
+- The agent uses a project's AGENTS.md (or CLAUDE.md), the file many coding
+  agents read for how to build, test and write code in a project. MinGent
+  tells the agent where the file is, and the agent reads it before it
+  changes the project's code, so it costs one line of context until then.
+- The agent's files no longer open in Notes by themselves. "Show the files
+  the agent writes" in Settings > Agent is off unless you switch it on. The
+  chat shows each change and links to the file.
+- Before the agent runs code in the browser console, the question says in
+  plain words what the code does, instead of only "Run code on <site>" and
+  the code. MinGent reads the code itself and names what matters, such as
+  reading cookies or form fields, sending requests to another site, changing
+  the page or leaving code running. When the agent says what the code is
+  for, that shows first and "MinGent's reading" under it, so a description
+  can't hide what the code does.
+- The final answer comes after the independent review. When the agent says
+  it is done and a review of its changes comes next, the chat says so right
+  under that message, so it isn't taken for the final answer. The final
+  answer after the review covers what the review found. If the review can't
+  finish, the agent says so in its final answer instead of the task ending
+  without one.
+- The agent types words and commands into games and other programs in one
+  go instead of pressing one key per letter, and it opens a game's chat or
+  command box first.
+- The chat says when MinGent sends the agent back to work, for example
+  because the checklist still has open items or changed code wasn't tested.
+  Before, the agent's message looked like the end and then the work went on
+  without a word.
+- In a question from the agent, the row for your own answer no longer shows
+  a blinking cursor before you click it. It shows a steady one until then.
+  What you type before clicking goes to the message box, which answers the
+  question the same way.
+- Console check: a property named like a keyword (x.function, x.class,
+  x.var) no longer hides the call on the next line from the check, and a
+  long run of spaces after url( no longer slows it down.
+- When Anthropic's model list can't be loaded, the built-in list offers
+  Claude Fable 5.2.
+
 Version 1.1.1 beta
 - The agent no longer stops after 200 steps. It works until the task is done
   or you press Stop. MinGent still stops it when it keeps repeating itself or

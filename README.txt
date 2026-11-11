@@ -22,7 +22,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.1.1 beta: it works, and it still has rough edges. Report
+This is version 1.1.2 beta: it works, and it still has rough edges. Report
 problems at https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -89,7 +89,7 @@ sign-ins. MinGent has none of that.
   Full auto asks nothing. The check reads the command; it can't see what a
   script does once it runs.
 To check a download, compare its SHA-256 with the one on the release page.
-In PowerShell: Get-FileHash .\MinGent-1.1.1-beta.zip
+In PowerShell: Get-FileHash .\MinGent-1.1.2-beta.zip
 
 
 YOUR OWN ICON
@@ -115,6 +115,8 @@ THE WINDOW
   with a search box, New chat, Models (the model library) and Settings. The
   button at the top folds the list into a narrow rail; it does that by itself
   when the window gets too narrow.
+- Your projects show above the chats (see Workspace). Click one to list only
+  its chats; new chats then start in that project until you click it again.
 - Each chat's "..." button has Rename, Archive and Delete. Archived chats
   leave the list but stay on your PC; "Archived chats" at the bottom of the
   list shows them, and opening one moves it back. "Delete all chats" in
@@ -137,10 +139,19 @@ CHATS
   and show it in the browser", "find the newest version of X and update
   package.json". Shift+Enter starts a new line.
 - While it works, one line under your message shows its face and what it is
-  doing right now ("Reading parser.py", "Waiting for your OK"). Click the line
-  to open every step: the files it read, the exact lines it changed, the
-  commands it ran and their output. When it is done the line sums it up
-  ("Read 2 files, edited parser.py, ran 1 command - 1m 14s").
+  doing right now ("Reading parser.py", "Waiting for your OK"), with the
+  step of the plan it is on next to it. While the model thinks, the line
+  says what the thought is about instead of just that it is thinking, and
+  what the agent last said to you shows under the line.
+  Click the line to open every step: its thoughts, the files it read, the
+  exact lines it changed, the commands it ran and their output. When it is
+  done the line sums it up ("Read 2 files, edited parser.py, ran 1 command
+  - 1m 14s"). The window title shows the current step too, or that the
+  agent is waiting for you, so you can see it in the taskbar.
+- Charts: when numbers are easier to see than to read, the agent can draw
+  a bar or line chart right in its answer ("chart the monthly totals from
+  sales.csv"). Copy on the chart gives you its data. MinGent draws the
+  chart itself; nothing is downloaded for it.
 - You can keep typing while it works. Messages you send then wait at the
   bottom of the chat and the agent reads them at its next step, so you can add
   details or change direction without stopping it. When it reads one, the
@@ -229,8 +240,11 @@ CHATS
   them.
 - Commands: type / in the message box and a list of them pops up - /compact,
   /new (or /clear) for a new chat, /temp for a temporary chat, /plan to switch
-  plan first on or off. Pick one with the arrow keys and Enter or Tab, or
-  click it. Settings > General lists them too.
+  plan first on or off, /skill to write a new skill, /schedule to set up a
+  task that runs by itself, /project to choose the folder the chat works in.
+  Your skills are in the same list (see Workspace). Pick one with the arrow
+  keys and Enter or Tab, or click it. Settings > General lists the commands
+  too.
 - Temporary chat: the dashed bubble at the top right of a new chat. It is not
   saved to your chats and memory stays off. It's gone as soon as you leave it
   (a new chat, another chat from the list, or closing MinGent), and the
@@ -243,10 +257,12 @@ KEYBOARD
 --------
   Ctrl+Shift+N         new chat
   Ctrl+Shift+A         jump to the message box (opens the agent if closed)
+  Ctrl+Alt+Space       from any program: bring MinGent to the front with the
+                       message box ready (off until you choose it, see below)
   Enter / Shift+Enter  send / new line
   Shift+Tab            plan first on / off (in the message box)
   Esc                  stop the agent (in the chat or the message box)
-  /                    in the message box: list the commands
+  /                    in the message box: list the commands and skills
   Ctrl+Shift+E         show / hide Notes
   Ctrl+Shift+B         show / hide the browser
   Ctrl+,               settings
@@ -272,6 +288,14 @@ KEYBOARD
   and B, Ctrl+, and Ctrl+N, T, O, S, Shift+S and Ctrl+Tab still work; other
   keys go to the page. In Notes, Ctrl+C / Ctrl+X with nothing selected copies
   / cuts the whole line, and double-click selects a word, triple-click a line.
+
+  From any program: Settings > General > Keyboard shortcuts has "Bring up
+  MinGent from any program". Choose Ctrl+Alt+Space, Alt+Shift+Space or
+  Ctrl+Alt+Enter there, and that shortcut brings MinGent to the front with
+  the message box ready, whatever program you are in. It is off until you
+  choose one and works while MinGent is running, also when it is minimized.
+  Windows gives a shortcut to one program at a time: when another program
+  already has the one you chose, MinGent tells you so when you save.
 
 
 MODELS
@@ -425,7 +449,10 @@ Helpers
   browser either. When a helper has used the browser, the agent reads the page
   again before it clicks or types there.
 - After the agent changes a lot of code, a reviewer checks the work before the
-  answer reaches you (Settings > Agent > Tools to switch this off).
+  final answer (Settings > Agent > Tools to switch this off). When the agent
+  says it is done, the chat notes that the review comes next, so what the
+  agent wrote before it is not the final answer yet. The final answer comes
+  after the review and covers what the review found.
 - Each step a helper takes shows as a row under its card, while it works and
   later. If you send a message while a helper works, the helper keeps going
   in the background and the agent answers you; the report is added when the
@@ -464,11 +491,32 @@ Memory
   switch memory off. It refuses to save facts that look like passwords or
   keys. Temporary chats don't use memory at all.
 
+Scheduled tasks
+- Settings > Scheduled (or /schedule in the message box) sets up tasks that
+  MinGent starts by itself: every day, Monday to Friday, every week, every
+  month or once, at a time you choose. You write what to do the way you
+  would ask in the chat.
+- A task runs while MinGent is open. Each run is a new chat named after the
+  task. It starts when the agent is not busy and you are not in the middle
+  of something in MinGent: no half-written message, no question waiting,
+  and MinGent either in the background or untouched for a minute. A run
+  that was missed while MinGent was closed is made up for once, the next
+  time it is open.
+- A run works like a task you start yourself. In Ask mode it waits for your
+  OK, and the window title and the taskbar button show that it is waiting.
+- A task works in the default folder or in the project you pick for it. When
+  that folder can't be used (a drive that is not plugged in, a folder that
+  was moved), the run is skipped and a chat with the task's name says so.
+- Only you can add or change scheduled tasks: the agent has no tool for it,
+  so nothing it reads can set one up. They are saved on this PC only.
+
 Testing programs it builds
 - It can start a desktop program it wrote, read its window (buttons, fields,
   menus), click and type in it like a person, and take screenshots (with models
-  that can see images). It presses any key or shortcut (matched to your keyboard
-  layout), holds keys down (up to 10 seconds at a time), also several at once
+  that can see images), also a close-up of one part of the window when
+  something is too small to read. It presses any key or shortcut (matched
+  to your keyboard layout), holds keys down (up to 10 seconds at a time),
+  also several at once
   (Shift+W, W+D), right-, middle-, double- and triple-clicks, clicks with Ctrl
   or Shift held, presses and holds, scrolls, hovers and drags, and moves the
   mouse by a set amount, the way 3D games turn the view. A pointer in your
@@ -584,6 +632,8 @@ ASK, AUTO OR FULL AUTO
 - Prompt-injection guard (on by default): web pages can contain text written to
   trick an AI. Once the agent has read web content in a chat, Auto mode asks
   again before commands, before writes outside the workspace, before
+  changes to your skills (the agent follows them in later chats, so in any
+  mode but Full auto MinGent asks), before
   everything in the list above (also rows you switched off), and before
   opening addresses or searches that carry a lot of data, something that
   looks like a password or key, or data hidden in a long site name. Page
@@ -648,9 +698,37 @@ Workspace
   (changeable in Settings > Agent). You never have to create a folder first.
 - Unsaved Notes tabs can be read and edited too: it refers to them by their
   tab name.
+- Projects: the folder button at the top of a chat shows where that chat
+  works. Click it and "Choose a folder..." (or type /project) to make the
+  chat work in a folder of your choice. MinGent remembers each folder you
+  choose as a project, named after the folder, and lists your projects in
+  that menu and above your chats. A chat stays in its project when you open
+  it again, and "No project" goes back to the open file's folder or the
+  default folder. A whole personal folder such as Documents, Desktop or a
+  drive can't be a project, because inside its work folder the agent changes
+  files without asking each time; choose a folder inside it.
 - Project notes: ask it to "remember" something about a project and it writes
   it to MINGENT.md in the project folder; it reads that file at the start of
   every request.
+- Project instructions: when the project has an AGENTS.md (or a CLAUDE.md),
+  the file many coding agents read for how to build, test and write code in
+  a project, the agent is told where it is and reads it before it changes
+  the project's code. That costs one line of the model's context until
+  the file is needed. MinGent looks in the work folder and, inside a Git
+  repository, in the folders above it up to the repository's top folder;
+  the nearest file counts. The file can't change the agent's safety rules
+  or allow anything on your behalf, and what you say in the chat comes
+  first.
+- Skills: a skill is a how-to for a job that comes up again, written once
+  as a Markdown file ("how we write release notes", "how to make the weekly
+  report"). Type / in the message box and your skills show up next to the
+  commands; pick one and add what this run is about. /skill starts a new
+  one in Notes, and you can ask the agent to save what it just did as a
+  skill. Skills live in the Skills folder inside the default folder
+  (Settings > Agent). The agent only gets one line per skill, its name and
+  when to use it, and reads the file when a task matches or when your
+  message starts with /name. A skill folder made for Claude (a folder with
+  SKILL.md in it) works too: put it in the Skills folder.
 - Selected text in Notes is sent with your message (the chip above the message
   box shows what; click its x to leave it out).
 
@@ -687,6 +765,16 @@ THE BROWSER
   rounds, fifteen.)
 - Give the agent a YouTube link and it reads the video's title, channel,
   date, description and transcript. Long pages and transcripts come in parts.
+- Watching videos: a model that can see images can also look at a video. The
+  agent opens it in the browser (the video's page, such as a YouTube page, or
+  a video file on your PC: MP4, WebM or MOV) and gets pictures of it: nine
+  moments spread over the video on one sheet, each with its time, or up to
+  four moments it picks as full pictures. It can do the same for a part of
+  the video to look closer. The video is paused while it looks. What is said
+  in a YouTube video it reads from the transcript, and the sound of a video
+  file it measures (see Sound files). It can't look at a live stream, at a
+  video that sits inside a frame from another site (it opens the video's own
+  page instead), or at protected films from streaming services.
 - The agent's pointer, in your accent color, shows where it points, clicks,
   drags and scrolls in the browser. It shows in your screenshots and screen
   recordings, but not in the agent's own screenshots.
@@ -695,6 +783,15 @@ THE BROWSER
   the same way as a normal click. Messages, confirmations and "leave this page?"
   questions from pages appear as MinGent dialogs.
 - A local .html preview can only load files from its own folder.
+- Giving a file to a page: the agent can put a file from your PC into a
+  page's file field, the way you would choose it in the page's file picker,
+  for example to attach it to a form. MinGent asks you first and names the
+  file and the site; Auto asks too, unless you switch off "Uploading,
+  publishing and rewriting git history" in Settings > Safety, and it always
+  asks once the chat has read web content. Files in sensitive places ask
+  the way reading them does. The agent does not click file fields, because
+  that opens a window only you can use. On pages that only make their file
+  field at the moment you click their button, choose the file yourself.
 - When the agent clicks by position in a screenshot, a click on a payment,
   account or verification button (also inside payment and CAPTCHA boxes from
   other sites) asks you first.
@@ -725,6 +822,16 @@ THE BROWSER
   "Running code in the browser console" in Settings > Safety is on (switching
   it off shows a warning). On a website the question is red: code there can
   do anything you can do on that site while signed in. Full auto doesn't ask.
+- The question says in plain words what the code does. MinGent reads the
+  code itself and names what matters: reading or changing cookies and data
+  the site stored in the browser, reading form fields or saved sign-ins,
+  sending requests (and to which other site), sending messages to other
+  windows or frames, changing the page, calling the page's own functions
+  (by name) and leaving code running in the page. When the agent says what
+  the code is for, that shows first and MinGent's own reading under it, so
+  a description can't hide what the code does. When MinGent is unsure, it
+  names more rather than less. It is still a reading, not a guarantee, and
+  the code itself is shown below it.
 - MinGent refuses console code that does what the other browser tools do -
   clicking, typing, key presses, scrolling, submitting forms, opening pages
   or windows - so those keep going through the checks for buy, password and
@@ -751,9 +858,10 @@ chats, or for looking at the files the agent works on.
   chat's notes close when you leave it or close MinGent (MinGent asks first if
   one has unsaved changes), and deleting a chat closes its notes. Until then
   their unsaved text is backed up like any other, so a crash doesn't lose it.
-- Settings > Agent > "Show the files the agent writes" opens the files the
-  agent creates or edits in tabs. Turn it off when you only watch the result,
-  like a website in the browser.
+- The agent's files don't open in Notes by themselves: Notes stays the way
+  you left it, and the chat shows each change and links to the file.
+  Settings > Agent > "Show the files the agent writes" opens the files it
+  creates or edits in tabs while it works, if you like to watch them.
 - It remembers everything when you close it, like Windows 11 Notepad: all tabs,
   unsaved changes and untitled notes are back the next time you start it. Open
   tabs are also backed up every few seconds and written straight to the disk,
@@ -822,6 +930,8 @@ WHERE YOUR DATA IS
                                         archived chats are in chats\archive)
   %LOCALAPPDATA%\MinGent\memory.md      what the agent remembers about you
                                         (also shown in Settings > Memory)
+  %LOCALAPPDATA%\MinGent\scheduled.json your scheduled tasks
+  %LOCALAPPDATA%\MinGent\projects.json  the folders you chose as projects
   %LOCALAPPDATA%\MinGent\Browser\       the built-in browser's profile
   %LOCALAPPDATA%\MinGent\engine\        the built-in engine, if you set it up
   %LOCALAPPDATA%\MinGent\models\        models downloaded in the model library
@@ -832,7 +942,8 @@ WHERE YOUR DATA IS
   %TEMP%\MinGent\                        the agent's PowerShell commands while
                                         they run; erased when each one ends
   Documents\MinGent Files\               what the agent saves when no other
-                                        folder is chosen (your files)
+                                        folder is chosen (your files), with
+                                        your skills in its Skills folder
 Nothing goes into the registry, except the Open with entries if you add them.
 
 Uninstall: Settings > Privacy > "Erase everything" removes all of the above

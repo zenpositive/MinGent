@@ -52,7 +52,13 @@ The TPM key is named `MinGentRelease`. It lives in that laptop's TPM, under its 
 | `BrowserConsole.cs`, `ConsoleDrawer.cs` | The browser console: console messages from the DevTools protocol, the check on code the agent runs there, and the console under the page |
 | `Net.cs`, `Eraser.cs` | Offline mode, connection list, erase everything |
 | `Http.cs`, `Json.cs` | HTTP and JSON |
+| `Skills.cs` | Skills: the how-tos in the Skills folder, their line in the system prompt, the template for a new one |
+| `Schedule.cs` | Scheduled tasks: when a task is due and how they are saved. The runner is in `AiPanel.cs` |
+| `Projects.cs` | Projects: the work folders MinGent remembers |
+| `Charts.cs` | Charts in answers: reading a chart block and laying it out |
+| `QuickEntry.cs` | The shortcut that brings MinGent up from any program |
 | `YouTube.cs` | Video details and transcripts |
+| `Video.cs` | Watching videos: moments, time labels and the sheet of pictures. The `watch_video` tool is in `AgentTools.cs` |
 | `Audio.cs` | Sound files for the agent: reads WAV and AIFF, decodes other formats with Windows Media Foundation, measures loudness, spectrum, pitch and tempo, draws the waveform and spectrogram |
 | `AudioDetail.cs`, `AudioFocus.cs` | Deeper sound analysis: hits, beats and bars, notes, sections, lining up two files, and the listening report for sound the agent made |
 | `Documents.cs`, `Doc*.cs`, `Pdf*.cs`, `DocxWriter.cs`, `XlsxWriter.cs`, `PptxWriter.cs`, `Tex*.cs` | Reading and writing documents, formulas |
