@@ -373,7 +373,26 @@ namespace MinGent
                 "................",
                 "................"
             };
+            Art["film"] = new string[] {
+                "................",
+                "................",
+                "wwwwwwwwwwwwwwww",
+                "w..............w",
+                "w....g.........w",
+                "w....ggg.......w",
+                "w....ggggg.....w",
+                "w....gggggg....w",
+                "w....ggggg.....w",
+                "w....ggg.......w",
+                "w....g.........w",
+                "w..............w",
+                "wwwwwwwwwwwwwwww",
+                "................",
+                "................",
+                "................"
+            };
             Names["ask"] = "ask";
+            Names["film"] = "film";
             Names["bookmark"] = "bookmark";
             Names["branch"] = "branch";
             Names["checklist"] = "checklist";

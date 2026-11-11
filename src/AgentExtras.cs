@@ -748,8 +748,30 @@ namespace MinGent
                 return true;
             }
             if (Media.IsMatch(nm)) { error = "media and volume keys are not supported"; return false; }
-            error = "unknown key \"" + main + "\". Use a key name such as Enter, Tab, Escape, Backspace, Delete, Insert, Space, ArrowUp, PageDown, Home, End, F1-F24, Numpad0-9, ContextMenu, Minus, Equal, Comma, Period or Slash, or a single character, with Ctrl+, Shift+, Alt+ in front for shortcuts";
+            error = NotAKey + main + "\"" + KeyNames + "Enter, Tab, Escape, Backspace, Delete, Insert, Space, ArrowUp, PageDown, Home, End, F1-F24, Numpad0-9, ContextMenu, Minus, Equal, Comma, Period or Slash, or a single character, with Ctrl+, Shift+, Alt+ in front for shortcuts";
             return false;
+        }
+
+        const string TooMany = "press at most 40 keys at a time", NotAKey = "unknown key \"", KeyNames = ". Use a key name such as ";
+
+        public static string TypeInstead(string error, string spec, string typeTool, bool games)
+        {
+            if (error == null) return null;
+            string how = "To type words or a command, use " + typeTool + (games ? ": it types the whole text at once, also into a game's chat or command box once that is open" : ": it types the whole text at once");
+            if (error == TooMany)
+            {
+                int single = 0, all = 0;
+                foreach (string t in Regex.Split((spec ?? "").Trim(), @"\s+"))
+                {
+                    if (t.Length == 0) continue;
+                    all++;
+                    if (t.Length == 1 || t.Equals("space", StringComparison.OrdinalIgnoreCase)) single++;
+                }
+                return single * 2 >= all ? error + ". " + how + "." : error;
+            }
+            int at = error.IndexOf(KeyNames, StringComparison.Ordinal);
+            if (!error.StartsWith(NotAKey, StringComparison.Ordinal) || at < 0 || (spec ?? "").IndexOf('+') >= 0) return error;
+            return error.Substring(0, at) + ". " + how + ". For a key, use a key name such as " + error.Substring(at + KeyNames.Length);
         }
 
         public static List<KeyPress> Sequence(string spec, int repeat, out string error) { return Sequence(spec, repeat, false, out error); }
@@ -770,7 +792,7 @@ namespace MinGent
                 if (x.Length > 0) tokens.Add(x);
             }
             if (tokens.Count == 0) { error = "no key given"; return null; }
-            if (tokens.Count > 40) { error = "press at most 40 keys at a time"; return null; }
+            if (tokens.Count > 40) { error = TooMany; return null; }
             foreach (string t in tokens)
             {
                 KeyPress k = Parse(t, hold, out error);
@@ -2914,9 +2936,16 @@ namespace MinGent
     class AppScreenshotTool : AppTool
     {
         public override string Name { get { return "app_screenshot"; } }
-        public override string Description { get { return "Take a screenshot of a window of a desktop program you started, to check how it looks. Positions in the image can be clicked with app_click x/y."; } }
-        public override Dictionary<string, object> Schema { get { return Obj("window", WindowArg(), false); } }
-        public override string Label(Dictionary<string, object> a) { return "Screenshot the app"; }
+        public override string Description { get { return "Take a screenshot of a window of a desktop program you started, to check how it looks. Positions in the image can be clicked with app_click x/y. When something in it is too small to read, call again with zoom."; } }
+        public override Dictionary<string, object> Schema
+        {
+            get
+            {
+                return Obj("window", WindowArg(), false,
+                           "zoom", P("string", "An area of the last screenshot to see enlarged, as x,y,width,height in its pixels, such as \"400,300,500,250\". Clicks keep using positions from the full screenshot."), false);
+            }
+        }
+        public override string Label(Dictionary<string, object> a) { return AppZoom.Asked(a) ? "Look closer at the app" : "Screenshot the app"; }
         public override bool Untrusted { get { return true; } }
 
         public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
@@ -2928,8 +2957,36 @@ namespace MinGent
             if (g != null) { ToolOutcome d = ToolOutcome.Fail(g); d.Denied = g.StartsWith("The user"); return d; }
             ImageData img;
             int iw, ih;
+            int[] box = null;
+            if (AppZoom.Asked(a))
+            {
+                string wrong = AppZoom.Parse(a["zoom"], out box);
+                if (wrong != null) return ToolOutcome.Fail(wrong);
+                AppSession last = State(ctx);
+                if (last.ShotWindow != w.Hwnd || last.ShotScale <= 0) return ToolOutcome.Fail("Take a full app_screenshot of this window first: zoom is an area of that picture.");
+                wrong = AppZoom.Fit(box, last.ShotW, last.ShotH);
+                if (wrong != null) return ToolOutcome.Fail(wrong);
+            }
             Bitmap shot = AppControl.Capture(w);
             if (shot == null) return ToolOutcome.Fail("the window did not respond to the screenshot (the program may be busy or frozen)");
+            if (box != null)
+            {
+                using (Bitmap whole = shot)
+                {
+                    double times;
+                    using (Bitmap near = AppZoom.Cut(whole, box, State(ctx).ShotScale, out times))
+                    {
+                        img = ImageTools.Encode(near, AppZoom.MaxSide);
+                        string waiting = Waiting(ctx, w);
+                        ToolOutcome z = ToolOutcome.Ok("Close-up of \"" + w.Title + "\" (" + w.Process + "): the area " + box[2] + "x" + box[3] + " at " + box[0] + "," + box[1] + " of the screenshot, shown " + times.ToString("0.#", CultureInfo.InvariantCulture) +
+                            " times as large. For app_click, keep using positions from the full screenshot: a point at px,py in this picture is at " + box[0] + " + px / " + times.ToString("0.###", CultureInfo.InvariantCulture) + ", " + box[1] + " + py / " + times.ToString("0.###", CultureInfo.InvariantCulture) + " there." +
+                            (waiting != null ? "\n" + waiting : ""), "Close-up");
+                        z.Images = new List<ImageData>(new ImageData[] { img });
+                        z.Untrusted = true;
+                        return z;
+                    }
+                }
+            }
             using (Bitmap bm = shot)
             {
                 const int maxSide = 1366;
@@ -2948,6 +3005,100 @@ namespace MinGent
             o.Images = new List<ImageData>(new ImageData[] { img });
             o.Untrusted = true;
             return o;
+        }
+    }
+
+    static class AppZoom
+    {
+        public const int MaxSide = 1366;
+
+        public static bool Asked(Dictionary<string, object> a)
+        {
+            object v;
+            if (a == null || !a.TryGetValue("zoom", out v) || v == null) return false;
+            string s = v as string;
+            return s == null || s.Trim().Length > 0;
+        }
+
+        public static string Parse(object value, out int[] box)
+        {
+            box = null;
+            List<double> nums = new List<double>();
+            List<object> list = value as List<object>;
+            Dictionary<string, object> named = value as Dictionary<string, object>;
+            if (named != null)
+            {
+                foreach (string[] keys in new string[][] { new string[] { "x", "left" }, new string[] { "y", "top" }, new string[] { "width", "w" }, new string[] { "height", "h" } })
+                    foreach (string k in keys)
+                        if (named.ContainsKey(k)) { nums.Add(Json.Num(named, k)); break; }
+            }
+            else if (list != null)
+            {
+                foreach (object o in list)
+                {
+                    double d;
+                    if (double.TryParse(Convert.ToString(o, CultureInfo.InvariantCulture), NumberStyles.Float, CultureInfo.InvariantCulture, out d)) nums.Add(d);
+                }
+            }
+            else
+            {
+                foreach (string part in Convert.ToString(value, CultureInfo.InvariantCulture).Split(new char[] { ',', ';', ' ', 'x', 'X', '[', ']', '(', ')' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    double d;
+                    if (double.TryParse(part, NumberStyles.Float, CultureInfo.InvariantCulture, out d)) nums.Add(d);
+                    else { nums.Clear(); break; }
+                }
+            }
+            if (nums.Count != 4) return "zoom is four numbers: x,y,width,height of the area in the last screenshot, such as \"400,300,500,250\".";
+            foreach (double d in nums) if (double.IsNaN(d) || double.IsInfinity(d) || Math.Abs(d) > 100000) return "zoom is four numbers: x,y,width,height of the area in the last screenshot, such as \"400,300,500,250\".";
+            box = new int[] { (int)Math.Round(nums[0]), (int)Math.Round(nums[1]), (int)Math.Round(nums[2]), (int)Math.Round(nums[3]) };
+            return null;
+        }
+
+        public static string Fit(int[] box, int shotW, int shotH)
+        {
+            if (box[2] < 1 || box[3] < 1) return "zoom needs a width and a height above zero.";
+            int left = Math.Max(0, box[0]), top = Math.Max(0, box[1]);
+            int right = Math.Min(shotW, box[0] + box[2]), bottom = Math.Min(shotH, box[1] + box[3]);
+            if (right - left < 8 || bottom - top < 8) return "That area is outside the screenshot, which is " + shotW + "x" + shotH + " pixels, or smaller than 8 pixels.";
+            box[0] = left;
+            box[1] = top;
+            box[2] = right - left;
+            box[3] = bottom - top;
+            return null;
+        }
+
+        public static Rectangle Source(int[] box, double shotScale, int fullW, int fullH)
+        {
+            int x = Math.Max(0, Math.Min(fullW - 1, (int)Math.Floor(box[0] * shotScale)));
+            int y = Math.Max(0, Math.Min(fullH - 1, (int)Math.Floor(box[1] * shotScale)));
+            int r = Math.Max(x + 1, Math.Min(fullW, (int)Math.Ceiling((box[0] + box[2]) * shotScale)));
+            int b = Math.Max(y + 1, Math.Min(fullH, (int)Math.Ceiling((box[1] + box[3]) * shotScale)));
+            return new Rectangle(x, y, r - x, b - y);
+        }
+
+        public static double Grow(int w, int h)
+        {
+            double room = (double)MaxSide / Math.Max(1, Math.Max(w, h));
+            return Math.Max(1.0, Math.Min(3.0, room));
+        }
+
+        public static Bitmap Cut(Bitmap whole, int[] box, double shotScale, out double times)
+        {
+            Rectangle src = Source(box, shotScale, whole.Width, whole.Height);
+            double grow = Grow(src.Width, src.Height);
+            double shrink = Math.Min(1.0, (double)MaxSide / Math.Max(src.Width, src.Height));
+            double k = grow > 1.0 ? grow : shrink;
+            int w = Math.Max(1, (int)Math.Round(src.Width * k)), h = Math.Max(1, (int)Math.Round(src.Height * k));
+            Bitmap near = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+            using (Graphics g = Graphics.FromImage(near))
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                g.DrawImage(whole, new Rectangle(0, 0, w, h), src.X, src.Y, src.Width, src.Height, GraphicsUnit.Pixel);
+            }
+            times = (double)w / Math.Max(1, box[2]);
+            return near;
         }
     }
 
@@ -3064,7 +3215,7 @@ namespace MinGent
     {
         public override string Name { get { return "app_type"; } }
         protected override string Act { get { return "type"; } }
-        public override string Description { get { return "Type text into a desktop program you started, like a person at the keyboard. Give a ref from app_read to click into that field first (otherwise it types where the cursor is). Set enter=true to press Enter afterwards."; } }
+        public override string Description { get { return "Type text into a desktop program you started, like a person at the keyboard. Give a ref from app_read to click into that field first (otherwise it types where the cursor is). Set enter=true to press Enter afterwards. It also types into a game's chat or command box once that is open."; } }
         public override Dictionary<string, object> Schema
         {
             get
@@ -3165,7 +3316,8 @@ namespace MinGent
             {
                 return "Press keys in a desktop program you started, like a person at the keyboard. Any key works: Enter, Tab, Escape, Backspace, Delete, Insert, Space, arrows, PageUp/PageDown, Home, End, " +
                        "F1-F24, Numpad keys, ContextMenu, Alt (menu bar) or a single character, with Ctrl+, Shift+ and Alt+ for shortcuts (Ctrl+S, Ctrl+Shift+Z, Alt+F4). Keys joined with + go down together (Shift+W, W+D). " +
-                       "Several keys separated by spaces are pressed in order (\"Tab Tab Enter\"); repeat presses the whole sequence again. hold_ms keeps the keys held down that long, for games and anything else that reacts to a held key.";
+                       "Several keys separated by spaces are pressed in order (\"Tab Tab Enter\"); repeat presses the whole sequence again. hold_ms keeps the keys held down that long, for games and anything else that reacts to a held key. " +
+                       "To type words or a command, use app_type, not one key per letter; in a game, first open its chat or command box with the game's key for it, often T or /.";
             }
         }
         public override Dictionary<string, object> Schema
@@ -3187,7 +3339,7 @@ namespace MinGent
             string perr;
             int hold = I(a, "hold_ms", 0);
             List<KeyPress> keys = KeyCombo.Sequence(S(a, "key"), I(a, "repeat", 1), hold > 0, out perr);
-            if (keys == null) return ToolOutcome.Fail(perr);
+            if (keys == null) return ToolOutcome.Fail(KeyCombo.TypeInstead(perr, S(a, "key"), "app_type", true));
             string herr = KeyCombo.HoldError(keys, hold);
             if (herr != null) return ToolOutcome.Fail(herr);
             bool escOnly = hold <= 0, paste = false, copy = false;

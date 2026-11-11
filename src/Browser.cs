@@ -1754,6 +1754,8 @@ namespace MinGent
 
         volatile bool agentOpened, userTouched;
 
+        public bool UserIsUsing { get { return userTouched && Visible; } }
+
         public void MarkUserOpened()
         {
             agentOpened = false;
@@ -2646,6 +2648,7 @@ namespace MinGent
                     Dictionary<string, object> info;
                     err = Prep(r, true, ct, out info);
                     if (err != null) return err;
+                    if (FileFields.Is(info)) return FileFields.NotThisWay(r);
                     string covered = Json.Str(info, "covered") ?? "";
                     string name = Json.Str(info, "name") ?? "";
                     if (covered.Length > 0)
@@ -3157,6 +3160,7 @@ namespace MinGent
                     Dictionary<string, object> info;
                     err = Prep(r, true, ct, out info);
                     if (err != null) return err;
+                    if (FileFields.Is(info)) return FileFields.NotThisWay(r);
                     if (Json.Bool(info, "select"))
                     {
                         err = Js("(" + BrowserScripts.Select + ")(" + Json.Quote(r) + "," + Json.Quote(text ?? "") + ")", ct, out v);
@@ -3343,6 +3347,103 @@ namespace MinGent
                     shotResized = false;
                     shotW = width;
                     shotH = height;
+                    return null;
+                }
+                finally { Busy(false); }
+            }
+        }
+
+        public string Upload(string refId, int field, List<string> files, CancelToken ct, out string summary)
+        {
+            summary = null;
+            string err = Ensure(ct);
+            if (err != null) return err;
+            lock (opLock)
+            {
+                Reveal();
+                Busy(true);
+                try
+                {
+                    ArmEvents(ct);
+                    string before = currentUrl;
+                    int start = navStarts;
+                    string r = string.IsNullOrEmpty(refId) ? "" : NormRef(refId);
+                    object v;
+                    err = Js("(" + BrowserScripts.FileField + ")(" + Json.Quote(r) + "," + field.ToString(System.Globalization.CultureInfo.InvariantCulture) + ")", ct, out v);
+                    if (err != null) return err;
+                    string bad = Json.Str(v, "err");
+                    if (bad != null) return FileFields.Problem(bad, r, v);
+                    if (Json.Bool(v, "folder")) return "this file field takes a whole folder, which only the user can choose. Ask the user to do it in the browser pane.";
+                    if (files.Count > 1 && !Json.Bool(v, "multiple")) return "this file field takes one file, and you gave " + files.Count + ". Give one file.";
+                    object res;
+                    err = CdpCall("Runtime.evaluate", Json.O("expression", "globalThis.__jpUpload", "contextId", worldId, "returnByValue", false, "silent", true), ct, out res);
+                    if (err != null) return "the page changed while the file was being given to it; call browser_read and try again";
+                    string handle = Json.Str(res, "result", "objectId");
+                    if (string.IsNullOrEmpty(handle)) return "the file field is no longer on the page. Call browser_read and try again.";
+                    List<object> list = new List<object>();
+                    foreach (string f in files) list.Add(f);
+                    err = CdpCall("DOM.setFileInputFiles", Json.O("files", list, "objectId", handle), ct, out res);
+                    if (err != null) return "the page did not take the file (" + Clip(err, 160) + ")";
+                    ct.Sleep(150);
+                    string fieldName = Json.Str(v, "name") ?? "";
+                    object got;
+                    Js(BrowserScripts.FileTaken, ct, out got);
+                    List<object> names = Json.List(got, "names");
+                    List<string> shown = new List<string>();
+                    if (names != null) foreach (object n in names) shown.Add(Clip(n as string ?? "", 80));
+                    if (shown.Count == 0) foreach (string f in files) shown.Add(Clip(VideoFrames.NameOf(new Uri(f).AbsoluteUri), 80));
+                    return AfterAction(start, before, ct, "Gave " + string.Join(", ", shown.ToArray()) + " to the file field" + (fieldName.Length > 0 ? " \"" + Clip(fieldName, 60) + "\"" : "") +
+                        ". The page has " + (shown.Count == 1 ? "the file" : "the files") + " now. If it does not send " + (shown.Count == 1 ? "it" : "them") + " by itself, use its upload or submit button.", out summary);
+                }
+                finally { Busy(false); }
+            }
+        }
+
+        public string VideoFrame(double seconds, CancelToken ct, out Bitmap frame, out VideoShot shot)
+        {
+            frame = null;
+            shot = null;
+            string err = Ensure(ct);
+            if (err != null) return err;
+            lock (opLock)
+            {
+                Reveal();
+                Busy(true);
+                try
+                {
+                    object v;
+                    err = Js("(" + BrowserScripts.VideoFrame + ")(" + (seconds < 0 ? "-1" : seconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)) + ")", ct, true, out v);
+                    if (err != null) return err;
+                    if (!(v is Dictionary<string, object>)) return "the page gave no answer about its video";
+                    string bad = Json.Str(v, "err");
+                    if (bad != null) return VideoFrames.Problem(bad, (int)Json.Num(v, "frames"));
+                    shot = new VideoShot();
+                    shot.Time = Json.Num(v, "t");
+                    shot.Duration = Json.Num(v, "d");
+                    shot.Width = (int)Json.Num(v, "vw");
+                    shot.Height = (int)Json.Num(v, "vh");
+                    shot.Title = Json.Str(v, "title") ?? "";
+                    if (seconds < 0) return null;
+                    shotScale = 0;
+                    object res;
+                    err = CdpCall("Page.captureScreenshot", Json.O("format", "jpeg", "quality", 85), ct, out res);
+                    if (err != null) return err;
+                    string data = Json.Str(res, "data");
+                    if (string.IsNullOrEmpty(data)) return "the browser returned no picture of the video";
+                    try
+                    {
+                        using (MemoryStream ms = new MemoryStream(Convert.FromBase64String(data)))
+                        using (Image img = Image.FromStream(ms))
+                        {
+                            RectangleF src = ViewCrop.Source(img.Width, img.Height, Json.Num(v, "iw"), Json.Num(v, "x"), Json.Num(v, "y"), Json.Num(v, "w"), Json.Num(v, "h"));
+                            if (src.Width < 16 || src.Height < 16) return "the video is not visible on the page";
+                            Bitmap b = new Bitmap((int)src.Width, (int)src.Height, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+                            using (Graphics g = Graphics.FromImage(b))
+                                g.DrawImage(img, new Rectangle(0, 0, b.Width, b.Height), src.X, src.Y, src.Width, src.Height, GraphicsUnit.Pixel);
+                            frame = b;
+                        }
+                    }
+                    catch (Exception ex) { frame = null; return "could not read the picture of the video: " + ex.Message; }
                     return null;
                 }
                 finally { Busy(false); }
@@ -3882,6 +3983,50 @@ namespace MinGent
             string url = currentUrl;
             if (!consoleOn || !(ThisPc(url) || SameHost(HostOf(url), agentSite))) { consoleLog.SkipNews(); return null; }
             return consoleLog.News();
+        }
+    }
+
+    static class FileFields
+    {
+        public static bool Is(Dictionary<string, object> info)
+        {
+            return Json.Str(info, "tag") == "INPUT" && string.Equals(Json.Str(info, "type"), "file", StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static string NotThisWay(string r)
+        {
+            return r + " is a file field. Clicking it opens a window that only the user can use, and nothing can be typed into it. To give it a file, call browser_upload with this ref and the file's path.";
+        }
+
+        public static string Problem(string code, string r, object v)
+        {
+            switch (code)
+            {
+                case "stale": return r + " is no longer on the page. Call browser_read to get fresh refs.";
+                case "disabled": return "the file field is switched off on this page right now, so it takes no file";
+                case "nofield":
+                    {
+                        int count = Json.Int(v, "count");
+                        return count == 0 ? "this page has no file field" : "this page has " + count + (count == 1 ? " file field" : " file fields") + ", so field goes from 1 to " + count;
+                    }
+                case "none":
+                    return "there is no file field on this page" + (Json.Int(v, "frames") > 0 ? ". The page has frames from other sites, and a file field inside such a frame can't be reached from here" : "") +
+                           ". Some pages only make their file field at the moment their button is clicked, and that can't be filled in from here. Ask the user to choose the file in the browser pane.";
+                case "many":
+                    {
+                        StringBuilder sb = new StringBuilder("this page has several file fields and it is not clear which one you mean. Call browser_upload again with field set to one of these numbers:");
+                        List<object> fields = Json.List(v, "fields");
+                        if (fields != null)
+                            foreach (object f in fields)
+                            {
+                                string name = Json.Str(f, "name") ?? "", accept = Json.Str(f, "accept") ?? "";
+                                sb.Append("\n").Append(Json.Int(f, "n")).Append(": ").Append(name.Length > 0 ? "\"" + name + "\"" : "(no name)");
+                                if (accept.Length > 0) sb.Append(", takes ").Append(accept);
+                            }
+                        return sb.ToString();
+                    }
+            }
+            return "the file field could not be used (" + code + ")";
         }
     }
 

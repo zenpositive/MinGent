@@ -191,6 +191,10 @@ namespace MinGent
                         g.DrawLine(p, cx - 1.9f * u, cy + 3.4f * u, cx + 1.9f * u, cy + 3.4f * u);
                         g.DrawLine(p, cx - 1.4f * u, cy + 5.6f * u, cx + 1.4f * u, cy + 5.6f * u);
                         break;
+                    case "film":
+                        g.DrawRectangle(p, cx - 6.5f * u, cy - 5f * u, 13f * u, 10f * u);
+                        g.DrawPolygon(p, new PointF[] { new PointF(cx - 2f * u, cy - 2.6f * u), new PointF(cx + 2.8f * u, cy), new PointF(cx - 2f * u, cy + 2.6f * u) });
+                        break;
                     case "wave":
                         {
                             float[] hs = { 1f, 3f, 2f, 6f, 4f, 5f, 2f, 1f };

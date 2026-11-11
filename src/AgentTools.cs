@@ -1179,7 +1179,11 @@ namespace MinGent
         public override string Name { get { return "list_directory"; } }
         public override string Description { get { return "List the files and folders in a folder (default: the workspace)."; } }
         public override Dictionary<string, object> Schema { get { return Obj("path", P("string", "Folder path (default: the workspace)"), false); } }
-        public override string Label(Dictionary<string, object> a) { string p = S(a, "path"); return "List " + (string.IsNullOrEmpty(p) ? "workspace" : ReadFileTool.Short(p)); }
+        public override string Label(Dictionary<string, object> a)
+        {
+            string p = (S(a, "path") ?? "").Trim().TrimEnd('/', '\\');
+            return "List " + (p.Length == 0 || p == "." ? "the work folder" : ReadFileTool.Short(p));
+        }
 
         public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
         {
@@ -3699,7 +3703,7 @@ namespace MinGent
     class BrowserNavigateTool : BrowserTool
     {
         public override string Name { get { return "browser_navigate"; } }
-        public override string Description { get { return "Open a web address in MinGent's built-in browser (the user can watch), or a local .html file to preview it. Also accepts \"back\", \"forward\" or \"reload\". Returns the page text with refs for its links, buttons and fields. To close the browser pane, use close_pane."; } }
+        public override string Description { get { return "Open a web address in MinGent's built-in browser (the user can watch), or a local .html file to preview it, or a local video file. Also accepts \"back\", \"forward\" or \"reload\". Returns the page text with refs for its links, buttons and fields. To close the browser pane, use close_pane."; } }
         public override Dictionary<string, object> Schema { get { return Obj("url", P("string", "Address or local file path to open, or back / forward / reload"), true); } }
         public override string Label(Dictionary<string, object> a)
         {
@@ -3738,7 +3742,7 @@ namespace MinGent
                 LocalUrl.Split(low, out bareLow, out ignoredSuffix);
                 bool web = low.StartsWith("http://") || low.StartsWith("https://");
                 bool local = !web && (low.StartsWith("file:") || (url.Length > 2 && url[1] == ':') || low.StartsWith("~") || low.StartsWith(".") || low.StartsWith("\\") ||
-                             bareLow.EndsWith(".html") || bareLow.EndsWith(".htm") || bareLow.EndsWith(".svg"));
+                             bareLow.EndsWith(".html") || bareLow.EndsWith(".htm") || bareLow.EndsWith(".svg") || VideoFrames.IsVideoFile(bareLow));
                 if (local && !web && Regex.IsMatch(low, @"^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?([/?#]|$)|^[a-z0-9-]+(\.[a-z0-9-]+)+(:\d+)?[/?#]|^[a-z0-9-]+(\.[a-z0-9-]+)*:\d+([/?#]|$)"))
                 {
                     string t0, s0, e0;
@@ -3781,6 +3785,15 @@ namespace MinGent
             string summary;
             string err2 = ctx.Browser.Navigate(url, ctx.Ct, out summary);
             if (err2 == null) ctx.Session.BrowserMovedTo = null;
+            if (err2 == null && url.StartsWith("file:", StringComparison.OrdinalIgnoreCase) && VideoFrames.IsVideoFile(new Uri(url).LocalPath))
+            {
+                Bitmap none;
+                VideoShot film;
+                string paused = ctx.Browser.VideoFrame(-1, ctx.Ct, out none, out film);
+                summary = (summary ?? "") + (paused == null
+                    ? "\nThis is a video, " + VideoFrames.Label(film.Duration) + " long, and it is paused." + (ctx.Cfg.Vision ? " watch_video shows you moments from it." : "")
+                    : "\n" + paused);
+            }
             ToolOutcome o = Act(ctx, err2, FrameHint(ctx, summary), "Opened " + WebFetchTool.Host(ctx.Browser.CurrentUrl));
             o.Snapshot = !o.Error && summary != null && summary.IndexOf("\nURL: ", StringComparison.Ordinal) >= 0;
             return o;
@@ -4220,7 +4233,7 @@ namespace MinGent
             string perr;
             int hold = I(a, "hold_ms", 0);
             List<KeyPress> keys = KeyCombo.Sequence(S(a, "key"), I(a, "repeat", 1), hold > 0, out perr);
-            if (keys == null) return ToolOutcome.Fail(perr);
+            if (keys == null) return ToolOutcome.Fail(KeyCombo.TypeInstead(perr, S(a, "key"), "browser_type", false));
             string herr = KeyCombo.HoldError(keys, hold);
             if (herr != null) return ToolOutcome.Fail(herr);
             ToolOutcome stale = Stale(ctx);
@@ -4341,6 +4354,175 @@ namespace MinGent
         }
     }
 
+    class BrowserUploadTool : BrowserTool
+    {
+        public override string Name { get { return "browser_upload"; } }
+        public override string Description { get { return "Give a file from this PC to the web page in the browser, the way a person chooses a file in the page's file picker, for example to attach it to a form. Give ref: the file field (browser_read lists it as file-picker) or the button that opens the file picker; MinGent finds the page's file field from there. Never click a file field: that opens a window only the user can use. The page gets the file; sending the form is a separate step."; } }
+        public override Dictionary<string, object> Schema
+        {
+            get
+            {
+                return Obj("path", P("string", "The file to give to the page. For a field that takes several files, separate the paths with a | character."), true,
+                           "ref", P("string", "The file field or the button that opens it, from browser_read. Can be left out when the page has one file field."), false,
+                           "field", P("integer", "Only when the tool says the page has several file fields: the number of the one you mean."), false);
+            }
+        }
+        public override string Label(Dictionary<string, object> a)
+        {
+            string p = (S(a, "path") ?? "").Trim();
+            int bar = p.IndexOf('|');
+            if (bar >= 0) return "Give files to the page";
+            string file = p.Substring(Math.Max(p.LastIndexOf('/'), p.LastIndexOf('\\')) + 1);
+            return "Give " + (file.Length > 0 ? (file.Length > 48 ? file.Substring(0, 48) + "..." : file) : "a file") + " to the page";
+        }
+        public override bool Untrusted { get { return true; } }
+
+        public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
+        {
+            string g = Gate(ctx, null);
+            if (g != null) { ToolOutcome d = ToolOutcome.Fail(g); d.Denied = true; return d; }
+            if (ctx.Session.IsHelper) return ToolOutcome.Fail("Not done: helpers don't give files to web pages. Say in your report which file belongs on which page.");
+            ToolOutcome stale = Stale(ctx);
+            if (stale != null) return stale;
+            string raw = (S(a, "path") ?? "").Trim();
+            if (raw.Length == 0) return ToolOutcome.Fail("path is required: the file to give to the page");
+            List<string> files = new List<string>();
+            foreach (string part in raw.Split('|'))
+            {
+                string one = part.Trim();
+                if (one.Length == 0) continue;
+                string err;
+                string full = AgentPaths.Resolve(one, ctx.Workspace, out err);
+                if (full == null) return ToolOutcome.Fail(err);
+                if (Directory.Exists(full)) return ToolOutcome.Fail(full + " is a folder. Give a file.");
+                if (!File.Exists(full)) return ToolOutcome.Fail("file not found: " + full);
+                string deny = ctx.CheckRead(full);
+                if (deny != null) { ToolOutcome d0 = ToolOutcome.Fail(deny); d0.Denied = true; return d0; }
+                if (!files.Contains(full)) files.Add(full);
+            }
+            if (files.Count == 0) return ToolOutcome.Fail("path is required: the file to give to the page");
+            if (files.Count > 20) return ToolOutcome.Fail("That is " + files.Count + " files. Give up to 20 at a time.");
+            string site = BrowserPane.PlaceName(ctx.Browser.CurrentUrl);
+            string shown = files.Count == 1 ? Path.GetFileName(files[0]) : files.Count + " files";
+            PermissionAsk ask = new PermissionAsk();
+            ask.Kind = "browser";
+            ask.Category = ctx.Guarded(PermissionCategory.Publish);
+            ask.AllowRemember = false;
+            ask.Title = "Give " + shown + " to " + (site.Length > 0 ? site : "the page");
+            ask.Detail = string.Join("\n", files.ToArray());
+            ask.Reason = "The agent wants to put " + (files.Count == 1 ? "this file" : "these files") + " into the page's file field. The site gets " + (files.Count == 1 ? "the whole file" : "the whole files") + " when the form is sent, and some sites take " + (files.Count == 1 ? "it" : "them") + " right away.";
+            if (!ctx.Approve(ask)) { ToolOutcome d1 = ToolOutcome.Fail("The user did not allow giving " + shown + " to the page."); d1.Denied = true; return d1; }
+            if (BrowserPane.PlaceName(ctx.Browser.CurrentUrl) != site) return ToolOutcome.Fail("Not done: the browser moved to another site while the user was asked, so nothing was given. Look at the page again with browser_read.");
+            string summary;
+            string err2 = ctx.Browser.Upload((S(a, "ref") ?? "").Trim(), (int)D(a, "field", 0), files, ctx.Ct, out summary);
+            return Act(ctx, err2, FrameHint(ctx, summary), "Gave " + shown + " to the page");
+        }
+    }
+
+    class WatchVideoTool : BrowserTool
+    {
+        public override string Name { get { return "watch_video"; } }
+        public override string Description { get { return "See what happens in a video: pictures of it at moments you choose. First open the video with browser_navigate (a page with a video on it, such as a YouTube page, or a local video file), then call this. Without times you get an overview: " + VideoFrames.SheetCount + " moments spread over the video, or over the part between from and to, on one sheet with the time on each picture. With times you get up to " + VideoFrames.CloseCount + " moments as full pictures. It shows pictures only: for what is said in a YouTube video read its address with web_fetch, and for the sound of a video file use analyze_audio."; } }
+        public override Dictionary<string, object> Schema
+        {
+            get
+            {
+                return Obj("times", P("string", "Moments to look at closely, separated by commas, such as \"0:30, 1:15\" (or in seconds). Leave it out for the overview."), false,
+                           "from", P("string", "Where the overview starts, such as 2:00. Default: the start of the video."), false,
+                           "to", P("string", "Where the overview ends, such as 3:30. Default: the end of the video."), false);
+            }
+        }
+        public override string Label(Dictionary<string, object> a)
+        {
+            string t = (S(a, "times") ?? "").Trim();
+            return t.Length > 0 ? "Look at the video at " + (t.Length > 40 ? t.Substring(0, 40) + "..." : t) : "Watch the video";
+        }
+        public override bool Untrusted { get { return true; } }
+
+        public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
+        {
+            string g = Gate(ctx, null);
+            if (g != null) { ToolOutcome d = ToolOutcome.Fail(g); d.Denied = true; return d; }
+            if (!ctx.Cfg.Vision) return ToolOutcome.Fail("The current model cannot see pictures, so it can't watch a video. For a YouTube video, web_fetch reads what is said in it.");
+            ToolOutcome stale = Stale(ctx);
+            if (stale != null) return stale;
+            List<double> times;
+            object raw;
+            a.TryGetValue("times", out raw);
+            string wrong = VideoFrames.ParseTimes(raw, out times);
+            if (wrong != null) return ToolOutcome.Fail(wrong);
+            if (times.Count > VideoFrames.CloseCount) return ToolOutcome.Fail("That is " + times.Count + " moments. Ask for up to " + VideoFrames.CloseCount + " at a time, or leave times out for an overview of " + VideoFrames.SheetCount + ".");
+            double from = 0, to = -1;
+            string f = (S(a, "from") ?? "").Trim(), t = (S(a, "to") ?? "").Trim();
+            if (f.Length > 0 && !VideoFrames.TryTime(f, out from)) return ToolOutcome.Fail("from is a moment in the video, such as 2:00.");
+            if (t.Length > 0 && !VideoFrames.TryTime(t, out to)) return ToolOutcome.Fail("to is a moment in the video, such as 3:30.");
+            ctx.Ui.Phase("Opening the video");
+            Bitmap none;
+            VideoShot info;
+            string err = ctx.Browser.VideoFrame(-1, ctx.Ct, out none, out info);
+            if (err != null) return ToolOutcome.Fail(err);
+            bool close = times.Count > 0;
+            if (close)
+            {
+                foreach (double m in times)
+                    if (m > info.Duration + 0.5) return ToolOutcome.Fail("The video is " + VideoFrames.Label(info.Duration) + " long, so there is no " + VideoFrames.Label(m) + " in it.");
+            }
+            else
+            {
+                if (to < 0 || to > info.Duration) to = info.Duration;
+                if (from >= to) return ToolOutcome.Fail("The video is " + VideoFrames.Label(info.Duration) + " long. from has to come before to, and both inside the video.");
+                times = VideoFrames.Spread(from, to, to - from < VideoFrames.SheetCount ? Math.Max(1, (int)Math.Floor(to - from)) : VideoFrames.SheetCount);
+            }
+            List<Bitmap> frames = new List<Bitmap>();
+            List<double> got = new List<double>();
+            try
+            {
+                for (int i = 0; i < times.Count; i++)
+                {
+                    if (ctx.Ct.IsCancelled) return ToolOutcome.Fail("Stopped.");
+                    ctx.Ui.Phase("Looking at the video at " + VideoFrames.Label(times[i]) + (times.Count > 1 ? " (" + (i + 1) + " of " + times.Count + ")" : ""));
+                    Bitmap frame;
+                    VideoShot at;
+                    err = ctx.Browser.VideoFrame(times[i], ctx.Ct, out frame, out at);
+                    if (err != null)
+                    {
+                        if (frames.Count == 0) return ToolOutcome.Fail(err);
+                        break;
+                    }
+                    frames.Add(frame);
+                    got.Add(at.Time);
+                }
+                ctx.Session.BrowserMovedTo = null;
+                List<ImageData> pictures = new List<ImageData>();
+                if (close)
+                {
+                    foreach (Bitmap b in frames) pictures.Add(ImageTools.Encode(b, VideoFrames.SheetWidth));
+                }
+                else
+                {
+                    using (Bitmap sheet = VideoFrames.Sheet(frames, got, VideoFrames.SheetWidth)) pictures.Add(ImageTools.Encode(sheet, VideoFrames.SheetWidth));
+                }
+                string name = info.Title.Length > 0 ? info.Title : VideoFrames.NameOf(ctx.Browser.CurrentUrl);
+                StringBuilder sb = new StringBuilder();
+                sb.Append("Video \"").Append(name).Append("\" on ").Append(ctx.Browser.CurrentUrl).Append(": ").Append(VideoFrames.Label(info.Duration)).Append(" long");
+                if (info.Width > 0 && info.Height > 0) sb.Append(", ").Append(info.Width).Append(" x ").Append(info.Height);
+                sb.Append(".\n");
+                if (close) sb.Append(frames.Count == 1 ? "The picture shows it at " : "The pictures show it at ").Append(VideoFrames.Labels(got)).Append(frames.Count == 1 ? "." : ", in this order.");
+                else sb.Append("The sheet shows ").Append(frames.Count).Append(" moments from ").Append(VideoFrames.Label(from)).Append(" to ").Append(VideoFrames.Label(to)).Append(", left to right and top to bottom, each with its time in the corner: ").Append(VideoFrames.Labels(got)).Append(". For a closer look, call watch_video with times, or with from and to around the part you need.");
+                if (frames.Count < times.Count) sb.Append("\nThe other moments could not be shown: ").Append(err);
+                sb.Append("\nThe video is paused at ").Append(VideoFrames.Label(got[got.Count - 1])).Append(".");
+                ToolOutcome o = ToolOutcome.Ok(sb.ToString(), close ? (frames.Count == 1 ? "Looked at " + VideoFrames.Label(got[0]) : "Looked at " + frames.Count + " moments") : "Watched " + VideoFrames.Label(from) + " to " + VideoFrames.Label(to));
+                o.Images = pictures;
+                o.Untrusted = true;
+                return o;
+            }
+            finally
+            {
+                foreach (Bitmap b in frames) b.Dispose();
+            }
+        }
+    }
+
     class BrowserConsoleTool : BrowserTool
     {
         public override string Name { get { return "browser_console"; } }
@@ -4354,11 +4536,20 @@ namespace MinGent
                        "On a website, code runs as the signed-in user; if the user asks you to run some there, tell them that.";
             }
         }
-        public override Dictionary<string, object> Schema { get { return Obj("code", P("string", "JavaScript to run in the page. Leave it out to read the console."), false); } }
+        public override Dictionary<string, object> Schema
+        {
+            get
+            {
+                return Obj("code", P("string", "JavaScript to run in the page. Leave it out to read the console."), false,
+                           "description", P("string", "With code: a few plain words saying what the code is for, shown to the user when MinGent asks before running it, e.g. \"Check why the Save button stays disabled\""), false);
+            }
+        }
         public override string Label(Dictionary<string, object> a) { return (S(a, "code") ?? "").Trim().Length == 0 ? "Read the console" : "Run code in the console"; }
         public override bool Untrusted { get { return true; } }
 
-        public static PermissionAsk Ask(ToolContext ctx, string url, string code)
+        public static PermissionAsk Ask(ToolContext ctx, string url, string code) { return Ask(ctx, url, code, null); }
+
+        public static PermissionAsk Ask(ToolContext ctx, string url, string code, string description)
         {
             bool website = !BrowserPane.ThisPc(url);
             string place = BrowserPane.PlaceName(url);
@@ -4366,6 +4557,7 @@ namespace MinGent
             ask.Kind = "console";
             ask.Category = ctx.Guarded(PermissionCategory.Console);
             ask.Detail = code;
+            ConsoleWords.Explain(ask, description, code, url);
             if (website)
             {
                 ask.High = true;
@@ -4405,7 +4597,7 @@ namespace MinGent
                 r.Summary = "Not run";
                 return r;
             }
-            if (!ctx.Approve(Ask(ctx, url, code))) { ToolOutcome d = ToolOutcome.Fail("The user did not allow running this code."); d.Denied = true; return d; }
+            if (!ctx.Approve(Ask(ctx, url, code, S(a, "description")))) { ToolOutcome d = ToolOutcome.Fail("The user did not allow running this code."); d.Denied = true; return d; }
             string result;
             string e2 = ctx.Browser.ConsoleRun(code, url, ctx.Ct, out result);
             ToolOutcome o = Result(e2, result, "Ran code in the console", true);
@@ -4865,6 +5057,8 @@ namespace MinGent
             l.Add(new BrowserHoverTool(vision));
             l.Add(new BrowserDragTool(vision));
             if (vision) l.Add(new BrowserScreenshotTool());
+            l.Add(new BrowserUploadTool());
+            if (vision) l.Add(new WatchVideoTool());
             l.Add(new BrowserConsoleTool());
             return l;
         }

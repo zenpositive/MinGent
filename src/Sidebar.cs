@@ -9,7 +9,7 @@ namespace MinGent
 {
     class ChatInfo
     {
-        public string Path = "", Title = "";
+        public string Path = "", Title = "", Folder = "";
         public DateTime When;
     }
 
@@ -18,12 +18,12 @@ namespace MinGent
         class Row
         {
             public ChatInfo Chat;
-            public string Header;
+            public string Header, Project, Name;
             public bool Title;
             public int Top, H;
         }
 
-        const int ZNew = 1, ZLibrary = 2, ZSettings = 3, ZArchived = 4, ZRow = 10, ZMore = 11;
+        const int ZNew = 1, ZLibrary = 2, ZSettings = 3, ZArchived = 4, ZRow = 10, ZMore = 11, ZProject = 12;
 
         Theme th = Theme.Light(Color.SteelBlue);
         readonly FlatButton bCollapse = new FlatButton("", "sidebar", false);
@@ -36,6 +36,9 @@ namespace MinGent
         readonly Timer spinTimer = new Timer();
         readonly List<ChatInfo> chats = new List<ChatInfo>();
         readonly List<Row> rows = new List<Row>();
+        readonly List<string> projects = new List<string>();
+        List<string> projectNames = new List<string>();
+        string project = "";
         Image logo;
         bool collapsed, running, listHover, archiveView, actionFocus;
         int archivedCount;
@@ -45,8 +48,22 @@ namespace MinGent
         public event EventHandler NewChatClicked, SettingsClicked, LibraryClicked, CollapseClicked;
         public event Action<string> OpenClicked, DeleteClicked, RenameClicked, ArchiveClicked, RestoreClicked;
         public event EventHandler ArchiveViewClicked;
+        public event Action<string> ProjectClicked, ProjectRemoved;
 
         public bool ArchiveView { get { return archiveView; } }
+
+        public string Project { get { return project; } }
+
+        bool ProjectRows { get { return !archiveView && filter.Length == 0 && projects.Count > 0; } }
+
+        public void SetProjects(List<string> list, string selected)
+        {
+            projects.Clear();
+            if (list != null) projects.AddRange(list);
+            projectNames = Projects.Names(projects);
+            project = !string.IsNullOrEmpty(selected) && Projects.Find(projects, selected) >= 0 ? selected : "";
+            Rebuild();
+        }
 
         public Sidebar()
         {
@@ -64,7 +81,7 @@ namespace MinGent
             search.KeyDown += delegate (object s, KeyEventArgs e)
             {
                 if (e.KeyCode == Keys.Escape) { e.Handled = e.SuppressKeyPress = true; search.Text = ""; Focus(); }
-                else if (e.KeyCode == Keys.Down) { e.Handled = e.SuppressKeyPress = true; Focus(); actionFocus = false; MoveFocus(1); if (FirstChatRow() < 0 && ShowArchived) { actionFocus = true; Invalidate(); } }
+                else if (e.KeyCode == Keys.Down) { e.Handled = e.SuppressKeyPress = true; Focus(); actionFocus = false; MoveFocus(1); if (FirstRow() < 0 && ShowArchived) { actionFocus = true; Invalidate(); } }
                 else if (e.KeyCode == Keys.Enter) { e.Handled = e.SuppressKeyPress = true; int i = FirstChatRow(); if (i >= 0) Open(rows[i].Chat); }
             };
             search.HandleCreated += delegate { Native.SetCueBanner(search, archiveView ? "Search archived chats" : "Search chats"); };
@@ -219,9 +236,31 @@ namespace MinGent
         void Rebuild()
         {
             string focused = RowPath(focusRow);
+            string focusedProject = focusRow >= 0 && focusRow < rows.Count ? rows[focusRow].Project : null;
             rows.Clear();
             int y = 0;
             string last = null;
+            bool byProject = ProjectRows && project.Length > 0;
+            if (ProjectRows)
+            {
+                Row ph = new Row();
+                ph.Header = "Projects";
+                ph.Top = 0;
+                ph.H = UI.S(26);
+                rows.Add(ph);
+                y = ph.H;
+                for (int i = 0; i < projects.Count; i++)
+                {
+                    Row pr = new Row();
+                    pr.Project = projects[i];
+                    pr.Name = projectNames[i];
+                    pr.Top = y;
+                    pr.H = UI.S(32);
+                    rows.Add(pr);
+                    y += pr.H;
+                }
+                y += UI.S(8);
+            }
             if (archiveView)
             {
                 Row top = new Row();
@@ -236,6 +275,7 @@ namespace MinGent
             foreach (ChatInfo c in chats)
             {
                 if (filter.Length > 0 && (c.Title ?? "").IndexOf(filter, StringComparison.CurrentCultureIgnoreCase) < 0) continue;
+                if (byProject && !Projects.Same(c.Folder, project)) continue;
                 string g = GroupOf(c.When);
                 if (g != last)
                 {
@@ -262,6 +302,12 @@ namespace MinGent
                 for (int i = 0; i < rows.Count; i++)
                     if (rows[i].Chat != null && string.Equals(rows[i].Chat.Path, focused, StringComparison.OrdinalIgnoreCase)) { focusRow = i; break; }
             }
+            else if (focusedProject != null)
+            {
+                focusRow = -1;
+                for (int i = 0; i < rows.Count; i++)
+                    if (rows[i].Project != null && Projects.Same(rows[i].Project, focusedProject)) { focusRow = i; break; }
+            }
             if (focusRow >= rows.Count) focusRow = -1;
             hoverRow = -1;
             Invalidate();
@@ -276,6 +322,14 @@ namespace MinGent
         int FirstChatRow()
         {
             for (int i = 0; i < rows.Count; i++) if (rows[i].Chat != null) return i;
+            return -1;
+        }
+
+        static bool Pickable(Row r) { return r.Chat != null || r.Project != null; }
+
+        int FirstRow()
+        {
+            for (int i = 0; i < rows.Count; i++) if (Pickable(rows[i])) return i;
             return -1;
         }
 
@@ -372,7 +426,7 @@ namespace MinGent
             g.SetClip(lr);
             if (!rows.Exists(delegate (Row x) { return x.Chat != null; }))
             {
-                string msg = filter.Length > 0 ? "No chats match \u201C" + filter + "\u201D." : archiveView ? "No archived chats." : "Your chats will show up here.";
+                string msg = filter.Length > 0 ? "No chats match \u201C" + filter + "\u201D." : archiveView ? "No archived chats." : ProjectRows && project.Length > 0 ? "No chats in this project yet." : "Your chats will show up here.";
                 int below = rows.Count > 0 ? RowRect(rows.Count - 1).Bottom - lr.Y + UI.S(4) : 0;
                 TextRenderer.DrawText(g, msg, Font, new Rectangle(UI.S(18), lr.Y + below + UI.S(4), Width - UI.S(36), UI.S(60)), th.ChromeDim, TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.PreserveGraphicsClipping);
             }
@@ -394,6 +448,19 @@ namespace MinGent
                         }
                         TextRenderer.DrawText(g, row.Header, small, new Rectangle(r.X + UI.S(8), r.Y, r.Width - UI.S(16), r.Height), th.ChromeDim,
                             TextFormatFlags.Bottom | TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.PreserveGraphicsClipping);
+                        continue;
+                    }
+                    if (row.Project != null)
+                    {
+                        bool on = project.Length > 0 && Projects.Same(row.Project, project);
+                        bool over = i == hoverRow;
+                        if (over) Glyphs.Hover(g, th, th.SideHover, r, UI.S(8));
+                        if (i == focusRow && Focused && ShowFocusCues) Glyphs.Ring(g, th.Accent, r, UI.S(8), Glyphs.FocusWidth);
+                        Color ink = th.HighContrast ? th.Fore : on || over ? th.ChromeFore : Theme.Blend(th.ChromeFore, th.Side, 0.22);
+                        Glyphs.Draw("folder", g, new Rectangle(r.X + UI.S(8), r.Y, UI.S(18), r.Height), on ? (th.HighContrast ? th.Fore : th.Accent) : th.ChromeDim);
+                        int end = r.Right - UI.S(10) - (on ? UI.S(22) : 0);
+                        TitleText(g, row.Name, new Rectangle(r.X + UI.S(32), r.Y, Math.Max(10, end - r.X - UI.S(32)), r.Height), ink, over ? th.SideHover : th.Side);
+                        if (on) Glyphs.Draw("check", g, new Rectangle(r.Right - UI.S(28), r.Y, UI.S(18), r.Height), th.HighContrast ? th.Fore : th.Accent);
                         continue;
                     }
                     bool active = IsActive(row.Chat);
@@ -445,11 +512,11 @@ namespace MinGent
             if (!ListRect.Contains(p)) return;
             for (int i = 0; i < rows.Count; i++)
             {
-                if (rows[i].Chat == null) continue;
+                if (!Pickable(rows[i])) continue;
                 Rectangle r = RowRect(i);
                 if (!r.Contains(p)) continue;
                 row = i;
-                zone = MoreRect(i).Contains(p) ? ZMore : ZRow;
+                zone = rows[i].Project != null ? ZProject : MoreRect(i).Contains(p) ? ZMore : ZRow;
                 return;
             }
         }
@@ -476,7 +543,8 @@ namespace MinGent
         void RowTip(int row, int zone)
         {
             string want = null;
-            if (row >= 0 && row < rows.Count && rows[row].Chat != null && zone != ZMore)
+            if (row >= 0 && row < rows.Count && rows[row].Project != null) want = rows[row].Project;
+            else if (row >= 0 && row < rows.Count && rows[row].Chat != null && zone != ZMore)
             {
                 string title = rows[row].Chat.Title.Length > 0 ? rows[row].Chat.Title : "Untitled chat";
                 int room = MoreRect(row).Left - UI.S(2) - (RowRect(row).X + UI.S(10));
@@ -533,6 +601,7 @@ namespace MinGent
                 case ZArchived: if (ArchiveViewClicked != null) ArchiveViewClicked(this, EventArgs.Empty); break;
                 case ZSettings: if (SettingsClicked != null) SettingsClicked(this, EventArgs.Empty); break;
                 case ZRow: Open(rows[row].Chat); break;
+                case ZProject: if (ProjectClicked != null) ProjectClicked(rows[row].Project); break;
                 case ZMore: { Rectangle m = MoreRect(row); ShowRowMenu(row, new Point(m.Left, m.Bottom + UI.S(2))); } break;
             }
         }
@@ -544,9 +613,19 @@ namespace MinGent
         void ShowRowMenu(int row, Point p)
         {
             ChatInfo c = rows[row].Chat;
-            if (c == null) return;
+            string folder = rows[row].Project;
+            if (c == null && folder == null) return;
             ContextMenuStrip m = Menus.Create(th);
             m.ShowCheckMargin = false;
+            if (folder != null)
+            {
+                bool on = project.Length > 0 && Projects.Same(folder, project);
+                m.Items.Add(Menus.Item(on ? "Show all chats" : "Show this project's chats", false, delegate { if (ProjectClicked != null) ProjectClicked(folder); }));
+                m.Items.Add(Menus.Item("Remove from this list", false, delegate { if (ProjectRemoved != null) ProjectRemoved(folder); }));
+                m.Closed += delegate { BeginInvoke(new Action(delegate { m.Dispose(); })); };
+                m.Show(this, p);
+                return;
+            }
             if (archiveView)
             {
                 m.Items.Add(Menus.Item("Open", false, delegate { Open(c); }));
@@ -593,7 +672,7 @@ namespace MinGent
             if (rows.Count == 0) return;
             int i = focusRow;
             if (i < 0) i = dir > 0 ? -1 : rows.Count;
-            do { i += dir; } while (i >= 0 && i < rows.Count && rows[i].Chat == null);
+            do { i += dir; } while (i >= 0 && i < rows.Count && !Pickable(rows[i]));
             if (i < 0 || i >= rows.Count) return;
             focusRow = i;
             Rectangle r = RowRect(i);
@@ -624,16 +703,17 @@ namespace MinGent
                         actionFocus = false;
                         focusRow = rows.Count;
                         MoveFocus(-1);
-                        if (FirstChatRow() < 0) search.Focus();
+                        if (FirstRow() < 0) search.Focus();
                         Invalidate();
                         e.Handled = true; break;
                     }
-                    if (focusRow == FirstChatRow()) { search.Focus(); e.Handled = true; break; }
+                    if (focusRow == FirstRow()) { search.Focus(); e.Handled = true; break; }
                     MoveFocus(-1); e.Handled = true; break;
                 case Keys.Home: actionFocus = false; focusRow = -1; MoveFocus(1); e.Handled = true; break;
                 case Keys.End: actionFocus = false; focusRow = rows.Count; MoveFocus(-1); e.Handled = true; break;
                 case Keys.Enter:
                     if (actionFocus) { if (ArchiveViewClicked != null) ArchiveViewClicked(this, EventArgs.Empty); }
+                    else if (focusRow >= 0 && focusRow < rows.Count && rows[focusRow].Project != null) { if (ProjectClicked != null) ProjectClicked(rows[focusRow].Project); }
                     else Open(c);
                     e.Handled = true; break;
                 case Keys.Delete: Delete(c); e.Handled = true; break;

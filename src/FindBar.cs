@@ -104,8 +104,7 @@ namespace MinGent
         public Theme MenuTheme;
         public Func<bool> CanPasteOther;
         public Action PasteOther;
-        bool idleCaret, idleOn = true;
-        Timer idleBlink;
+        bool idleCaret;
 
         public bool IdleCaret
         {
@@ -113,9 +112,7 @@ namespace MinGent
             set { idleCaret = value; Idle(); }
         }
 
-        public bool IdleCaretShown { get { return IdleShown && idleOn; } }
-
-        bool IdleShown { get { return idleCaret && Multiline && Visible && !Focused && TextLength == 0 && !IsDisposed; } }
+        public bool IdleCaretShown { get { return idleCaret && Multiline && Visible && !Focused && TextLength == 0 && !IsDisposed; } }
 
         Rectangle CaretSpot
         {
@@ -128,25 +125,6 @@ namespace MinGent
 
         void Idle()
         {
-            idleOn = true;
-            int ms = SystemInformation.CaretBlinkTime;
-            if (IdleShown && ms > 0)
-            {
-                if (idleBlink == null)
-                {
-                    idleBlink = new Timer();
-                    idleBlink.Tick += delegate
-                    {
-                        if (!IdleShown) { idleBlink.Stop(); return; }
-                        idleOn = !idleOn;
-                        Invalidate(Rectangle.Inflate(CaretSpot, 1, 0));
-                    };
-                }
-                idleBlink.Interval = Math.Max(200, ms);
-                idleBlink.Stop();
-                idleBlink.Start();
-            }
-            else if (idleBlink != null) idleBlink.Stop();
             if (idleCaret && IsHandleCreated) Invalidate(Rectangle.Inflate(CaretSpot, 1, 0));
         }
 
@@ -155,12 +133,6 @@ namespace MinGent
         protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Idle(); }
 
         protected override void OnVisibleChanged(EventArgs e) { base.OnVisibleChanged(e); Idle(); }
-
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing && idleBlink != null) { idleBlink.Dispose(); idleBlink = null; }
-            base.Dispose(disposing);
-        }
 
         protected override void OnTextChanged(EventArgs e)
         {

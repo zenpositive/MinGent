@@ -42,6 +42,7 @@ namespace MinGent
         public bool Queued, MidRun, Running, Stopped, SpeedGuess;
         public double Speed, FirstToken;
         public string Phase = "", CurrentTask = "";
+        public bool LiveShown;
         public ChatItem Group, Under, LastKid;
         public int Kids;
         public bool Hidden;
@@ -120,7 +121,7 @@ namespace MinGent
         ChatItem editing;
         readonly CueTextBox editBox = new CueTextBox();
         readonly CueTextBox answerBox = new CueTextBox();
-        ChatItem answering, focusFor;
+        ChatItem answering;
         int answerLines = 1;
         int editLines = 1;
         public Func<ChatItem, string, bool> EditSubmit;
@@ -237,21 +238,6 @@ namespace MinGent
             return it != null && it.Kind == ChatKind.Question && it.Question != null && !it.Question.Wait && it.Question.FreeText && it.Decision < 0;
         }
 
-        public bool AnswerFocused { get { return answerBox.Focused; } }
-
-        public void FocusAnswer()
-        {
-            if (answering == null || !answerBox.Visible) return;
-            Reveal(answering);
-            answerBox.Focus();
-        }
-
-        public void FocusAnswerWhenShown(ChatItem it)
-        {
-            focusFor = it;
-            PositionAnswer();
-        }
-
         void SubmitAnswer()
         {
             ChatItem it = answering;
@@ -294,12 +280,6 @@ namespace MinGent
             Rectangle r = new Rectangle(x, y, AnswerBoxW(answering), answerLines * answerBox.Font.Height);
             if (answerBox.Bounds != r) answerBox.Bounds = r;
             if (!answerBox.Visible) answerBox.Visible = true;
-            if (focusFor != null && focusFor == answering)
-            {
-                focusFor = null;
-                answerBox.Select();
-                InvalidateItem(answering);
-            }
         }
 
         int UserRowH { get { return UI.S(28); } }
@@ -719,6 +699,11 @@ namespace MinGent
                 {
                     ChatItem it = Items[i];
                     if (it.Hidden) { it.Top = y; continue; }
+                    if (it.Kind == ChatKind.Activity)
+                    {
+                        bool live = LiveText(it) != null;
+                        if (live != it.LiveShown) { it.LiveShown = live; it.Touch(); }
+                    }
                     int iw = w - Depth(it) * Indent;
                     if (it.LayoutW != iw || it.LayoutVersion != it.Version)
                     {
@@ -860,7 +845,7 @@ namespace MinGent
                     }
                 case ChatKind.Activity:
                     it.Md = null;
-                    it.H = f.LineH + UI.S(12);
+                    it.H = f.LineH + UI.S(12) + (it.LiveShown ? f.LineH + UI.S(4) : 0);
                     break;
                 case ChatKind.Thinking:
                     {
@@ -952,6 +937,8 @@ namespace MinGent
                         int h = UI.S(14) + f.LineH + UI.S(6);
                         if (!string.IsNullOrEmpty(it.Ask.Summary))
                             h += TextRenderer.MeasureText(g, it.Ask.Summary, f.Body, new Size(inner, 2000), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height + UI.S(6);
+                        if (!string.IsNullOrEmpty(it.Ask.Reading))
+                            h += TextRenderer.MeasureText(g, it.Ask.Reading, f.Body, new Size(inner, 2000), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height + UI.S(6);
                         string detail = it.Ask.Detail ?? "";
                         if (detail.Length > 0)
                         {
@@ -1330,9 +1317,11 @@ namespace MinGent
                         if (it.Streaming) Glyphs.Spinner(g, new Rectangle(x - UI.S(2), y, UI.S(18), row.Height), th.ChromeDim, phase);
                         else Glyphs.Draw(it.Expanded ? "down" : "right", g, new Rectangle(x - UI.S(1), y, UI.S(16), row.Height), c);
                         double live = (DateTime.UtcNow - it.Started).TotalSeconds;
-                        string label = it.Streaming ? (live >= 2 ? "Thinking  \u00B7  " + Secs(live) : "Thinking") : "Thought for " + Secs(it.Seconds);
+                        string about = ThoughtTitle(it.Text);
+                        string took = it.Streaming ? (live >= 2 ? Secs(live) : "") : Secs(it.Seconds);
+                        string label = about != null ? about + (took.Length > 0 ? "  \u00B7  " + took : "") : it.Streaming ? "Working" + (took.Length > 0 ? "  \u00B7  " + took : "") : "Thought for " + took;
                         if (it.Text.Trim().Length == 0 && !it.Streaming) label = "Thought briefly";
-                        TextRenderer.DrawText(g, label, f.Body, new Rectangle(x + UI.S(22), y, w - UI.S(22), row.Height), c, TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
+                        TextRenderer.DrawText(g, label, f.Body, new Rectangle(x + UI.S(22), y, w - UI.S(22), row.Height), c, TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
                         if (it.Md != null) PaintMd(g, it, idx, x, y, x + UI.S(22), y + row.Height + UI.S(4), clip, true, -1, -1);
                         break;
                     }
@@ -1428,9 +1417,11 @@ namespace MinGent
                 if (x.Kind == ChatKind.Assistant && x.Streaming && x.Text.Trim().Length > 0) { step = "Writing the answer"; return Glyphs.FaceWorking; }
                 if (x == a) break;
             }
-            if (last != null && last.Streaming && last.Kind == ChatKind.Thinking) { step = "Thinking"; return Glyphs.FaceThinking; }
+            if (last != null && last.Streaming && last.Kind == ChatKind.Thinking) { step = ThoughtTitle(last.Text) ?? "Working"; return Glyphs.FaceThinking; }
             step = a.Phase.Length > 0 ? a.Phase : "Working";
-            return step.StartsWith("Thinking") || step.StartsWith("Reading") ? Glyphs.FaceThinking : Glyphs.FaceWorking;
+            int mood = step.StartsWith("Thinking") || step.StartsWith("Reading") ? Glyphs.FaceThinking : Glyphs.FaceWorking;
+            if (step == "Thinking") step = "Working";
+            return mood;
         }
 
         static string Plural(int n, string one, string many) { return n + " " + (n == 1 ? one : many); }
@@ -1457,7 +1448,7 @@ namespace MinGent
         {
             tail = "";
             HashSet<string> read = new HashSet<string>(), edit = new HashSet<string>(), gone = new HashSet<string>(), sound = new HashSet<string>();
-            int cmd = 0, search = 0, web = 0, browse = 0, list = 0, help = 0, other = 0;
+            int cmd = 0, search = 0, web = 0, browse = 0, list = 0, help = 0, video = 0, other = 0;
             bool thought = false;
             if (a.Members != null)
                 foreach (ChatItem m in a.Members)
@@ -1476,16 +1467,18 @@ namespace MinGent
                         case "folder": list++; break;
                         case "branch": help++; break;
                         case "wave": sound.Add(FileKey(m.Label)); break;
+                        case "film": video++; break;
                         case "checklist": case "ask": break;
                         default: other++; break;
                     }
                 }
             List<string> parts = new List<string>();
-            if (!string.IsNullOrEmpty(a.Label) && read.Count + edit.Count + gone.Count + sound.Count + cmd + search + web + browse + list + help + other == 0) { tail = Secs(a.Seconds); return a.Label; }
+            if (!string.IsNullOrEmpty(a.Label) && read.Count + edit.Count + gone.Count + sound.Count + cmd + search + web + browse + list + help + video + other == 0) { tail = Secs(a.Seconds); return a.Label; }
             if (read.Count > 0) parts.Add("read " + Plural(read.Count, "file", "files"));
             if (edit.Count > 0) parts.Add("edited " + Plural(edit.Count, "file", "files"));
             if (gone.Count > 0) parts.Add("deleted " + Plural(gone.Count, "item", "items"));
             if (sound.Count > 0) parts.Add("analyzed " + Plural(sound.Count, "sound file", "sound files"));
+            if (video > 0) parts.Add("watched a video");
             if (cmd > 0) parts.Add("ran " + Plural(cmd, "command", "commands"));
             if (search > 0) parts.Add("searched " + (search == 1 ? "once" : search + " times"));
             if (web > 0) parts.Add("read " + Plural(web, "web page", "web pages"));
@@ -1496,6 +1489,15 @@ namespace MinGent
             string s;
             if (parts.Count == 0)
             {
+                string about = null;
+                if (thought)
+                    for (int i = a.Members.Count - 1; i >= 0 && about == null; i--)
+                        if (a.Members[i].Kind == ChatKind.Thinking) about = ThoughtTitle(a.Members[i].Text);
+                if (about != null)
+                {
+                    tail = a.Stopped ? "stopped" : Secs(a.Seconds);
+                    return about;
+                }
                 s = thought ? "Thought for " + Secs(a.Seconds) : "Worked for " + Secs(a.Seconds);
                 tail = a.Stopped ? "stopped" : "";
             }
@@ -1533,17 +1535,75 @@ namespace MinGent
                 TextRenderer.DrawText(g, hint, f.Small, hr, th.ChromeDim, TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
         }
 
+        public static string LiveText(ChatItem a)
+        {
+            if (a == null || !a.Running || a.Expanded || a.Members == null) return null;
+            for (int i = a.Members.Count - 1; i >= 0; i--)
+            {
+                ChatItem m = a.Members[i];
+                if (m.Kind == ChatKind.Assistant && m.Hidden && m.Text.Trim().Length > 0) return OneLine(m.Text, 400);
+                if (m.Kind == ChatKind.Thinking && m.Streaming) return null;
+            }
+            return null;
+        }
+
+        public static string ThoughtTitle(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return null;
+            string head = null, first = null;
+            foreach (string raw in text.Split('\n'))
+            {
+                string l = raw.Trim();
+                if (l.Length == 0) continue;
+                bool bold = l.Length > 4 && l.StartsWith("**", StringComparison.Ordinal) && l.EndsWith("**", StringComparison.Ordinal) && l.IndexOf("**", 2, StringComparison.Ordinal) == l.Length - 2;
+                if (bold || l[0] == '#') head = l;
+                else if (first == null) first = l;
+            }
+            string t = head ?? first;
+            if (t == null) return null;
+            if (head == null)
+            {
+                for (int i = 12; i < t.Length; i++)
+                {
+                    char c = t[i];
+                    if ((c == '.' || c == '!' || c == '?') && (i + 1 == t.Length || t[i + 1] == ' ')) { t = t.Substring(0, c == '.' ? i : i + 1); break; }
+                }
+            }
+            StringBuilder sb = new StringBuilder();
+            foreach (char c in t)
+                if (c != '*' && c != '`' && c != '#' && !char.IsControl(c)) sb.Append(c);
+            t = sb.ToString().Trim().TrimEnd(':', '.', ' ');
+            if (t.Length == 0) return null;
+            return t.Length > 80 ? t.Substring(0, 79).TrimEnd() + "\u2026" : t;
+        }
+
+        static string OneLine(string text, int most)
+        {
+            StringBuilder sb = new StringBuilder();
+            bool space = false;
+            foreach (char c in text.Trim())
+            {
+                if (char.IsWhiteSpace(c) || char.IsControl(c)) { space = true; continue; }
+                if (space && sb.Length > 0) sb.Append(' ');
+                space = false;
+                sb.Append(c);
+            }
+            string s = sb.ToString();
+            return s.Length <= most ? s : s.Substring(0, most).TrimEnd() + "\u2026";
+        }
+
         void PaintActivity(Graphics g, ChatItem it, int idx, int x, int y, int w)
         {
             ChatFonts f = fonts;
             bool hot = hoverItem == idx && hoverButton == BtnExpand;
-            int rowH = it.H;
+            int rowH = f.LineH + UI.S(12);
             bool expandable = it.Members != null && it.Members.Count > 0;
-            if (hot && expandable) Glyphs.Hover(g, th, th.TabHover, new Rectangle(x - UI.S(8), y, w + UI.S(16), rowH), UI.S(8));
+            if (hot && expandable) Glyphs.Hover(g, th, th.TabHover, new Rectangle(x - UI.S(8), y, w + UI.S(16), it.H), UI.S(8));
             int tx = x + UI.S(28);
             string label, time = "";
             Color lc, dc = th.ChromeDim;
             ChatItem tool = null;
+            bool plain = false;
             if (it.Running)
             {
                 string step;
@@ -1553,6 +1613,7 @@ namespace MinGent
                 Glyphs.Face(g, fr, th, mood, phase, blink);
                 faceRect = fr;
                 label = step;
+                plain = mood != Glyphs.FaceWaiting && tool == null && step == "Working";
                 double secs = it.Seconds + (DateTime.UtcNow - it.Started).TotalSeconds;
                 if (secs >= 1) time = Secs(secs);
                 lc = th.Fore;
@@ -1563,6 +1624,13 @@ namespace MinGent
                 label = SummaryHead(it, out time);
                 lc = hot ? th.Fore : th.ChromeDim;
             }
+            string task = it.Running ? (it.CurrentTask ?? "").Trim() : "";
+            if (tool != null && tool.Icon == "branch" && tool.LastKid != null) task = tool.LastKid.Label.Trim();
+            else if (plain && task.Length > 0)
+            {
+                label = task;
+                task = "";
+            }
             const TextFormatFlags one = TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine;
             int avail = Math.Max(UI.S(40), x + w - tx - UI.S(24));
             int tw = TextRenderer.MeasureText(g, time, f.Body, Size.Empty, one).Width;
@@ -1570,8 +1638,6 @@ namespace MinGent
             int lw = Math.Min(TextRenderer.MeasureText(g, label, f.Body, Size.Empty, one).Width + UI.S(2), avail - reserve);
             TextRenderer.DrawText(g, label, f.Body, new Rectangle(tx, y, Math.Max(UI.S(20), lw), rowH), lc, TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | one);
             int ex = tx + Math.Max(UI.S(20), lw);
-            string task = it.Running ? (it.CurrentTask ?? "").Trim() : "";
-            if (tool != null && tool.Icon == "branch" && tool.LastKid != null) task = tool.LastKid.Label.Trim();
             if (task.Length > 0 && task != label)
             {
                 string seg = "\u00B7  " + task;
@@ -1589,6 +1655,10 @@ namespace MinGent
                 ex += UI.S(8) + TextRenderer.MeasureText(g, "\u00B7  " + time, f.Body, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width;
             }
             if (it.Running && expandable) Glyphs.Draw(it.Expanded ? "down" : "right", g, new Rectangle(ex + UI.S(4), y, UI.S(16), rowH), hot ? th.Fore : th.ChromeDim);
+            if (!it.LiveShown) return;
+            string live = LiveText(it);
+            if (live == null) return;
+            TextRenderer.DrawText(g, live, f.Body, new Rectangle(tx, y + rowH - UI.S(4), Math.Max(UI.S(40), x + w - tx), f.LineH + UI.S(4)), th.Fore, TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | one);
         }
 
         static string Secs(double s)
@@ -1746,6 +1816,12 @@ namespace MinGent
                 Size ss = TextRenderer.MeasureText(g, a.Summary, f.Body, new Size(inner, 2000), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
                 TextRenderer.DrawText(g, a.Summary, f.Body, new Rectangle(ix, iy, inner, ss.Height + 2), th.Fore, TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
                 iy += ss.Height + UI.S(6);
+            }
+            if (!string.IsNullOrEmpty(a.Reading))
+            {
+                Size rd = TextRenderer.MeasureText(g, a.Reading, f.Body, new Size(inner, 2000), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+                TextRenderer.DrawText(g, a.Reading, f.Body, new Rectangle(ix, iy, inner, rd.Height + 2), th.Fore, TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+                iy += rd.Height + UI.S(6);
             }
             if (it.Md != null)
             {
@@ -2693,7 +2769,7 @@ namespace MinGent
             {
                 ChatItem it = Items[i];
                 string text = it.Kind == ChatKind.Tool ? (it.Label + (it.Summary.Length > 0 ? " - " + it.Summary : "") + (it.Detail.Length > 0 ? "\n" + it.Detail : it.Live.Length > 0 ? "\n" + it.Live : "") + (it.Report.Length > 0 ? "\n\n" + it.Report : ""))
-                            : it.Kind == ChatKind.Permission ? it.Ask.Title + (string.IsNullOrEmpty(it.Ask.Summary) ? "" : "\n" + it.Ask.Summary) + "\n" + it.Ask.Detail
+                            : it.Kind == ChatKind.Permission ? it.Ask.Title + (string.IsNullOrEmpty(it.Ask.Summary) ? "" : "\n" + it.Ask.Summary) + (string.IsNullOrEmpty(it.Ask.Reading) ? "" : "\n" + it.Ask.Reading) + "\n" + it.Ask.Detail
                             : it.Kind == ChatKind.Question ? QuestionText(it)
                             : it.Kind == ChatKind.Activity ? Summary(it) : it.Text;
                 string what = it.Kind == ChatKind.Assistant ? "Copy this reply (Markdown)" : it.Kind == ChatKind.User ? "Copy this message" : it.Kind == ChatKind.Error ? "Copy the error" : hasSel ? "Copy all of it" : "Copy";

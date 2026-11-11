@@ -389,7 +389,7 @@ namespace MinGent
             new string[] { "claude-opus-5-5", "Claude Opus 5.5" },
             new string[] { "claude-sonnet-5-5", "Claude Sonnet 5.5" },
             new string[] { "claude-haiku-5-5", "Claude Haiku 5.5" },
-            new string[] { "claude-fable-5-1", "Claude Fable 5.1" } };
+            new string[] { "claude-fable-5-2", "Claude Fable 5.2" } };
 
         static void ProbeAnthropic(string key, List<ModelEntry> list, ProviderState st, CancelToken ct)
         {

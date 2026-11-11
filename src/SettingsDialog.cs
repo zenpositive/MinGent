@@ -164,7 +164,7 @@ namespace MinGent
         InputBox lmToken, customUrl, customKey, customModel, workspace, instructions, memoryBox;
         ApiKeyRow anthropicKey, openaiKey, geminiKey, openrouterKey;
         string memoryOriginal = "";
-        ThemedCombo lmCtx, engineCtx, engineKv;
+        ThemedCombo lmCtx, engineCtx, engineKv, quickKey;
         Segmented themeBox, accentBox;
         public Action DeleteAllChats;
         public Func<IWin32Window, Action<bool>, bool> WipeBrowser;
@@ -227,6 +227,7 @@ namespace MinGent
             BuildModels();
             BuildAgent();
             BuildMemory();
+            BuildScheduled();
             BuildSafety();
             BuildPrivacy();
             Select(0);
@@ -415,6 +416,8 @@ namespace MinGent
             c.Add(new KeysRow(Th, "New, open and save notes", "Ctrl N", "Ctrl O", "Ctrl S"));
             c.Add(new KeysRow(Th, "Zoom in, out and back", "Ctrl +", "Ctrl -", "Ctrl 0"));
             c.Add(new KeysRow(Th, "Settings", "Ctrl ,"));
+            quickKey = MakeCombo(QuickEntry.Names, QuickEntry.Index(s.QuickKey));
+            Row(c, "Bring up MinGent from any program", "Press it anywhere and MinGent comes to the front with the message box ready. It works while MinGent is running.", quickKey, quickKey.PreferredWidth);
             Place(p, c);
 
             Section(p, "Commands", "Type them in the message box. A list shows up as soon as you type /.");
@@ -542,6 +545,17 @@ namespace MinGent
             c.Add(new FieldRow(Th, null, null, instructions, 0, UI.S(120), true, null));
             Place(p, c);
 
+            Section(p, "Skills", "How-tos for jobs that come up again, one Markdown file each. Type / in the message box to pick one, /skill to write a new one, or ask the agent to save one.");
+            c = NewCard(p);
+            string skillsDir = Skills.Folder(s.DefaultWorkspace);
+            PillButton skillsOpen = new PillButton("Open folder", Th, false);
+            skillsOpen.Click += delegate
+            {
+                try { Directory.CreateDirectory(skillsDir); System.Diagnostics.Process.Start(Native.WindowsExe("explorer.exe"), "\"" + skillsDir + "\""); } catch { }
+            };
+            Row(c, "Skills folder", skillsDir, skillsOpen, skillsOpen.Width);
+            Place(p, c);
+
             Section(p, "Tools", "Each group you switch on takes room in the model's context, so with a small local model, switch off what you don't use. Files, commands and planning are always on (" + Tokens(AgentToolbox.Create(false, false, false, 32768, false, false, false, false)) + ").");
             c = NewCard(p);
             web = Switch(c, "Web search and web pages", "Search the web and read pages and YouTube videos. With the built-in browser on, you can watch the searches there. Off: the agent can still open addresses on this PC and your network. " + Cap(Tokens(new WebSearchTool())) + ".", s.AiWeb);
@@ -551,13 +565,13 @@ namespace MinGent
             otherApps = Switch(c, "Programs you opened yourself", "The agent can ask to use a program you already have open; you decide for each one, in each chat, even in Full auto. Browsers, File Explorer, terminals and code editors are look-only, and mail, chat, password managers, money and remote-access programs are never offered. Needs \"Programs it starts itself\". " + Cap(Tokens(new AppAccessTool())) + ".", s.AiOtherApps);
             sideBySide = Switch(c, "Put MinGent and the program side by side", "When a program the agent uses would cover MinGent, each gets half the screen until the program closes.", s.AiSideBySide);
             helpersOn = Switch(c, "Helper agents", "The agent hands focused tasks to helpers with a fresh context, which keeps its own context small. On a local model they run one at a time, which takes longer. " + Cap(Tokens(new DelegateTool(false))) + ".", s.AiHelpers);
-            autoReview = Switch(c, "Review big changes", "When the agent changes a lot of code, a helper reviews the work before it answers.", s.AiAutoReview);
+            autoReview = Switch(c, "Review big changes", "When the agent changes a lot of code, a helper reviews the work before the final answer.", s.AiAutoReview);
             Place(p, c);
 
             Section(p, "Behavior", null);
             c = NewCard(p);
             autoSave = Switch(c, "Save files after the agent changes them", "Ctrl+Z still undoes each change.", s.AiAutoSave);
-            openFiles = Switch(c, "Show the files the agent writes", "Opens the files it creates or edits in tabs. Files you opened yourself always update.", s.AiOpenFiles);
+            openFiles = Switch(c, "Show the files the agent writes", "Opens the files it creates or edits in Notes tabs while it works. Off, Notes stays as you left it; the chat links to each file. Files you opened yourself always update.", s.AiOpenFiles);
             showThinking = Switch(c, "Show the model's thinking", "See its reasoning while it works.", s.AiShowThinking);
             sendContext = Switch(c, "Share the open notes tab", "Tells the agent which notes tab is open and sends the text you selected with each message.", s.AiSendContext);
             Place(p, c);
@@ -587,6 +601,137 @@ namespace MinGent
             Place(p, c);
             Note(p, "Saved in " + MemoryStore.FilePath + " on this PC only.");
             Finish(p);
+        }
+
+        List<ScheduledTask> tasks;
+        int taskAt = -1;
+        bool taskLoading;
+        ThemedCombo taskPick, taskKind, taskFolder;
+        readonly List<string> taskFolders = new List<string>();
+        InputBox taskName, taskPrompt, taskDay, taskTime;
+        SwitchRow taskOn;
+
+        string[] TaskNames()
+        {
+            List<string> names = new List<string>();
+            foreach (ScheduledTask t in tasks) names.Add(t.Name);
+            names.Add("New task");
+            return names.ToArray();
+        }
+
+        void ShowTask(int at)
+        {
+            taskLoading = true;
+            taskAt = at >= 0 && at < tasks.Count ? at : -1;
+            ScheduledTask t = taskAt >= 0 ? tasks[taskAt] : new ScheduledTask();
+            taskPick.SetItems(TaskNames(), taskAt >= 0 ? taskAt : tasks.Count);
+            for (int i = 0; i < tasks.Count; i++) taskPick.SetNote(i, tasks[i].On ? Schedule.When(tasks[i]) : "switched off");
+            taskName.Box.Text = t.Name;
+            taskPrompt.Box.Text = t.Prompt.Replace("\r\n", "\n").Replace("\n", "\r\n");
+            taskKind.SelectedIndex = Math.Max(0, Array.IndexOf(Schedule.Kinds, t.Kind));
+            taskDay.Box.Text = Schedule.DayText(t);
+            taskTime.Box.Text = t.Hour.ToString("00", System.Globalization.CultureInfo.InvariantCulture) + ":" + t.Minute.ToString("00", System.Globalization.CultureInfo.InvariantCulture);
+            taskOn.Checked = t.On;
+            List<string> known = Projects.Load();
+            string own = Projects.Clean(t.Folder);
+            if (own != null && Projects.Find(known, own) < 0) known.Add(own);
+            List<string> shown = Projects.Names(known);
+            taskFolders.Clear();
+            taskFolders.Add("");
+            taskFolders.AddRange(known);
+            shown.Insert(0, "The default folder");
+            taskFolder.SetItems(shown.ToArray(), own != null ? Projects.Find(known, own) + 1 : 0);
+            for (int i = 0; i < known.Count; i++) taskFolder.SetNote(i + 1, known[i]);
+            taskLoading = false;
+        }
+
+        string StoreTask()
+        {
+            string name = taskName.Box.Text.Trim(), prompt = taskPrompt.Box.Text.Replace("\r\n", "\n").Trim();
+            if (taskAt < 0 && name.Length == 0 && prompt.Length == 0) return null;
+            ScheduledTask t = taskAt >= 0 ? tasks[taskAt].Copy() : new ScheduledTask();
+            t.Name = name;
+            t.Prompt = prompt;
+            t.Kind = Schedule.Kinds[Math.Max(0, Math.Min(Schedule.Kinds.Length - 1, taskKind.SelectedIndex))];
+            int hour, minute;
+            if (!Schedule.TryTime(taskTime.Box.Text, out hour, out minute)) return "Time is a time of day such as 8:00 or 17:30.";
+            t.Hour = hour;
+            t.Minute = minute;
+            string wrong = Schedule.SetDay(t, taskDay.Box.Text);
+            if (wrong != null) return wrong;
+            t.On = taskOn.Checked;
+            int pick = taskFolder.SelectedIndex;
+            t.Folder = pick > 0 && pick < taskFolders.Count ? taskFolders[pick] : "";
+            DateTime now = DateTime.Now;
+            ScheduledTask was = taskAt >= 0 ? tasks[taskAt] : null;
+            bool moved = was == null || was.Kind != t.Kind || was.Hour != t.Hour || was.Minute != t.Minute || was.Day != t.Day || was.Date != t.Date || (t.On && !was.On);
+            if (moved && t.Kind == ScheduledTask.Once) t.LastRun = DateTime.MinValue;
+            wrong = Schedule.Check(t, moved ? now : DateTime.MinValue);
+            if (wrong != null) return wrong;
+            if (moved) t.Created = now;
+            if (was == null)
+            {
+                if (tasks.Count >= Schedule.Most) return "There is room for " + Schedule.Most + " scheduled tasks. Delete one first.";
+                t.Id = Guid.NewGuid().ToString("N");
+                tasks.Add(t);
+                taskAt = tasks.Count - 1;
+            }
+            else tasks[taskAt] = t;
+            return null;
+        }
+
+        void BuildScheduled()
+        {
+            ScrollHost p = AddPage("Scheduled", "history");
+            Section(p, "Scheduled tasks", "MinGent starts these by itself while it is open. Each run is a new chat, started when the agent is not busy and you are not in the middle of something in MinGent. A run that was missed while MinGent was closed is made up for once. A run asks for your OK like any other task, so Ask mode waits for you.");
+            Card c = NewCard(p);
+            tasks = Schedule.Load();
+            taskPick = MakeCombo(new string[] { "New task" }, 0);
+            Row(c, "Task", "Pick a task to change it, or New task to add one.", taskPick, UI.S(260));
+            taskName = MakeField("", false, false);
+            taskName.Box.AccessibleName = "Task name";
+            c.Add(new FieldRow(Th, "Name", null, taskName, UI.S(260), UI.S(32), false, null));
+            taskPrompt = MakeField("", false, true);
+            taskPrompt.Box.AccessibleName = "What the task should do";
+            c.Add(new FieldRow(Th, "What to do", "Write it the way you would ask in the chat.", taskPrompt, 0, UI.S(110), true, null));
+            taskKind = MakeCombo(Schedule.KindNames, 0);
+            Row(c, "How often", null, taskKind, UI.S(200));
+            taskDay = MakeField("", false, false);
+            taskDay.Box.AccessibleName = "Day";
+            c.Add(new FieldRow(Th, "Day", "Every week: a weekday such as Monday. Every month: a number from 1 to 31. Once: a date such as " + DateTime.Now.AddDays(1).ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) + ". Leave it empty otherwise.", taskDay, UI.S(160), UI.S(32), false, null));
+            taskTime = MakeField("08:00", false, false);
+            taskTime.Box.AccessibleName = "Time";
+            c.Add(new FieldRow(Th, "Time", "Such as 8:00 or 17:30.", taskTime, UI.S(100), UI.S(32), false, null));
+            taskFolder = MakeCombo(new string[] { "The default folder" }, 0);
+            Row(c, "Work in", "The folder the run works in: the default folder, or one of your projects. A project is a folder you chose with the folder button above a chat.", taskFolder, UI.S(260));
+            taskOn = Switch(c, "Switched on", "Off keeps the task but doesn't run it.", true);
+            PillButton remove = new PillButton("Delete", Th, false);
+            remove.Danger = true;
+            remove.Click += delegate
+            {
+                if (taskAt >= 0) tasks.RemoveAt(taskAt);
+                ShowTask(tasks.Count > 0 ? 0 : -1);
+            };
+            Row(c, "Delete this task", "Nothing is deleted until you press Save.", remove, remove.Width);
+            Place(p, c);
+            Note(p, "Saved in " + Schedule.FilePath + " on this PC only.");
+            Finish(p);
+            taskPick.SelectedIndexChanged += delegate
+            {
+                if (taskLoading) return;
+                int want = taskPick.SelectedIndex;
+                string wrong = StoreTask();
+                if (wrong != null)
+                {
+                    taskLoading = true;
+                    taskPick.SelectedIndex = taskAt >= 0 ? taskAt : tasks.Count;
+                    taskLoading = false;
+                    Alert.Show(this, Th, wrong, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                ShowTask(want >= 0 && want < tasks.Count ? want : -1);
+            };
+            ShowTask(tasks.Count > 0 ? 0 : -1);
         }
 
         void BuildSafety()
@@ -706,6 +851,13 @@ namespace MinGent
 
         bool Apply()
         {
+            string taskWrong = StoreTask();
+            if (taskWrong != null)
+            {
+                Select(pageTitles.IndexOf("Scheduled"));
+                Alert.Show(this, Th, taskWrong, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
             string wsText = workspace.Box.Text.Trim();
             if (wsText.Length > 0 && !string.Equals(wsText, s.DefaultWorkspace, StringComparison.OrdinalIgnoreCase))
             {
@@ -783,6 +935,7 @@ namespace MinGent
             s.AiBrowser = browserOn.Checked;
             s.AiApps = appsOn.Checked;
             s.AiSideBySide = sideBySide.Checked;
+            s.QuickKey = QuickEntry.Keys[Math.Max(0, Math.Min(QuickEntry.Keys.Length - 1, quickKey.SelectedIndex))];
             s.AiWebGuard = guard.Checked;
             s.AiCaptcha = captcha.Checked;
             s.AiSandbox = sandbox.Checked;
@@ -798,6 +951,10 @@ namespace MinGent
             s.AiAutoReview = autoReview.Checked;
             string mem = memoryBox.Box.Text.Replace("\r\n", "\n").Trim();
             if (mem != memoryOriginal.Replace("\r\n", "\n").Trim()) MemoryStore.SaveRaw(mem);
+            foreach (ScheduledTask saved in Schedule.Load())
+                foreach (ScheduledTask t in tasks)
+                    if (t.Id == saved.Id && saved.LastRun > t.LastRun) t.LastRun = saved.LastRun;
+            Schedule.Save(tasks);
             return true;
         }
     }

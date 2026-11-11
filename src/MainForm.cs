@@ -41,12 +41,14 @@ namespace MinGent
         public bool AiHelpers = true;
         public bool AiAutoReview = true;
         public bool AiAutoSave = true;
-        public bool AiOpenFiles = true;
+        public bool AiOpenFiles;
         public bool AiShowThinking = true;
         public bool AiSendContext = true;
         public string AiEffort = "";
         public string AiInstructions = "";
         public string AiWorkspace = "";
+        public string AiProject = "";
+        public string QuickKey = "";
         public string AiLastChat = "";
         public float ChatFontSize = 10f;
         public string KeyAnthropic = "", KeyOpenAi = "", KeyGemini = "", KeyOpenRouter = "", KeyCustom = "", KeyLmStudio = "";
@@ -156,12 +158,14 @@ namespace MinGent
                         case "aiHelpers": s.AiHelpers = v != "0"; break;
                         case "aiAutoReview": s.AiAutoReview = v != "0"; break;
                         case "aiAutoSave": s.AiAutoSave = v != "0"; break;
-                        case "aiOpenFiles": s.AiOpenFiles = v != "0"; break;
+                        case "aiShowFiles": s.AiOpenFiles = v == "1"; break;
                         case "aiShowThinking": s.AiShowThinking = v != "0"; break;
                         case "aiSendContext": s.AiSendContext = v != "0"; break;
                         case "aiEffort": if (v.Length < 20) s.AiEffort = v; break;
                         case "aiInstructions": s.AiInstructions = Unesc(v); break;
                         case "aiWorkspace": s.AiWorkspace = v; break;
+                        case "aiProject": s.AiProject = v; break;
+                        case "quickKey": s.QuickKey = QuickEntry.Clean(v); break;
                         case "aiLastChat": if (v.IndexOfAny(Path.GetInvalidFileNameChars()) < 0) s.AiLastChat = v; break;
                         case "chatFontSize":
                             if (float.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out fv) && fv >= 7 && fv <= 20) s.ChatFontSize = fv;
@@ -260,12 +264,14 @@ namespace MinGent
                 w("aiHelpers", AiHelpers ? "1" : "0");
                 w("aiAutoReview", AiAutoReview ? "1" : "0");
                 w("aiAutoSave", AiAutoSave ? "1" : "0");
-                w("aiOpenFiles", AiOpenFiles ? "1" : "0");
+                w("aiShowFiles", AiOpenFiles ? "1" : "0");
                 w("aiShowThinking", AiShowThinking ? "1" : "0");
                 w("aiSendContext", AiSendContext ? "1" : "0");
                 w("aiEffort", AiEffort);
                 w("aiInstructions", Esc(AiInstructions));
                 w("aiWorkspace", AiWorkspace);
+                w("aiProject", AiProject);
+                w("quickKey", QuickKey);
                 w("aiLastChat", AiLastChat);
                 w("chatFontSize", ChatFontSize.ToString(CultureInfo.InvariantCulture));
                 if (KeyAnthropic.Length > 0) w("keyAnthropic", KeyAnthropic);
@@ -497,6 +503,7 @@ namespace MinGent
             aiPanel.NotesClicked += delegate { ShowNotes(!shell.NotesOn, true); };
             aiPanel.BrowserClicked += delegate { ShowBrowser(!shell.BrowserOn, true); };
             aiPanel.ChatsChanged += delegate { RefreshSidebar(); };
+            aiPanel.Project = settings.AiProject;
             aiPanel.StateChanged += delegate { sidebar.SetActive(aiPanel.ActiveChatPath, aiPanel.Running); UpdateTitle(); };
             aiPanel.RenameRequested += delegate { if (aiPanel.ActiveChatPath != null) RenameChat(aiPanel.ActiveChatPath); };
             aiPanel.DeleteRequested += delegate { if (aiPanel.ActiveChatPath != null) DeleteChat(aiPanel.ActiveChatPath); };
@@ -509,6 +516,13 @@ namespace MinGent
             sidebar.ArchiveClicked += delegate (string p) { aiPanel.ArchiveChat(p); RefreshSidebar(); };
             sidebar.RestoreClicked += delegate (string p) { aiPanel.RestoreChat(p); RefreshSidebar(); };
             sidebar.ArchiveViewClicked += delegate { showArchived = !showArchived; RefreshSidebar(); };
+            sidebar.ProjectClicked += delegate (string f) { SelectProject(Projects.Same(f, settings.AiProject) ? "" : f); };
+            sidebar.ProjectRemoved += delegate (string f)
+            {
+                List<string> known = Projects.Load();
+                if (Projects.Forget(known, f)) Projects.Save(known);
+                RefreshSidebar();
+            };
             sidebar.DeleteClicked += DeleteChat;
             sidebar.RenameClicked += RenameChat;
             sidebar.SettingsClicked += delegate { ShowSettings(); };
@@ -1118,7 +1132,23 @@ namespace MinGent
             if (aiPanel == null) return;
             int archived = aiPanel.ArchivedCount();
             if (archived == 0) showArchived = false;
+            List<string> projects = Projects.Load();
+            if (settings.AiProject.Length > 0 && Projects.Find(projects, settings.AiProject) < 0)
+            {
+                settings.AiProject = "";
+                settings.Save();
+                aiPanel.Project = "";
+            }
+            sidebar.SetProjects(projects, settings.AiProject);
             sidebar.SetChats(showArchived ? aiPanel.ListArchived() : aiPanel.ListChats(), aiPanel.ActiveChatPath, aiPanel.Running, archived, showArchived);
+        }
+
+        void SelectProject(string folder)
+        {
+            settings.AiProject = folder ?? "";
+            settings.Save();
+            if (aiPanel != null) aiPanel.Project = settings.AiProject;
+            RefreshSidebar();
         }
 
         void OpenFromSidebar(string path)
@@ -1254,6 +1284,7 @@ namespace MinGent
             settings.Save();
             settings.ApplyPrivacy();
             ModelLibrary.Apply(settings);
+            ApplyQuickEntry();
             findBar.MatchCase = settings.MatchCase;
             findBar.WholeWord = settings.WholeWord;
             editor.WordWrap = settings.Wrap;
@@ -1747,7 +1778,7 @@ namespace MinGent
 
         public void ShowSettings(string page)
         {
-            string oldTheme = settings.ThemeName, oldAccent = settings.AccentName;
+            string oldTheme = settings.ThemeName, oldAccent = settings.AccentName, oldQuick = settings.QuickKey;
             ModelLibraryDialog parked = null;
             Point at = Point.Empty, client = Point.Empty;
             bool place = false;
@@ -1841,6 +1872,8 @@ namespace MinGent
             if (settings.ThemeName != oldTheme || settings.AccentName != oldAccent) ApplyTheme();
             if (aiPanel != null) aiPanel.SettingsChanged();
             UpdateAiChip();
+            if (!ApplyQuickEntry() && settings.QuickKey != oldQuick)
+                Alert.Show(this, theme, "Windows did not give MinGent the shortcut " + QuickEntry.Name(settings.QuickKey) + ", most likely because another program uses it. Choose another one in Settings > General.", Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
 
         ModelLibraryDialog library;
@@ -1882,7 +1915,7 @@ namespace MinGent
             if (m.Success && m.Groups[1].Value.Length > 2) { path = m.Groups[1].Value; int.TryParse(m.Groups[2].Value, out line); }
             bool def;
             string err;
-            string full = AgentPaths.Resolve(path, WorkspaceFolder(out def), out err);
+            string full = AgentPaths.Resolve(path, aiPanel != null ? aiPanel.WorkFolder(out def) : WorkspaceFolder(out def), out err);
             if (full == null || !File.Exists(full)) return;
             if (DocExport.CanWrite(full))
             {
@@ -2450,7 +2483,9 @@ namespace MinGent
 
         void UpdateTitle()
         {
-            if (Text != Program.AppName) Text = Program.AppName;
+            string note = aiPanel != null ? aiPanel.TitleNote : "";
+            string title = note.Length > 0 ? note + " - " + Program.AppName : Program.AppName;
+            if (Text != title) Text = title;
             UpdateAiChip();
         }
 
@@ -3150,6 +3185,33 @@ namespace MinGent
             {
                 try { ipc = new IpcWindow(this); } catch { ipc = null; }
             }
+            ApplyQuickEntry();
+        }
+
+        protected override void OnHandleDestroyed(EventArgs e)
+        {
+            if (primary) QuickEntry.Release();
+            base.OnHandleDestroyed(e);
+        }
+
+        bool ApplyQuickEntry()
+        {
+            if (!primary || !IsHandleCreated) return true;
+            return QuickEntry.Set(Handle, settings.QuickKey);
+        }
+
+        void Summon()
+        {
+            if (IsDisposed || closing) return;
+            if (!CanFocus)
+            {
+                Form front = null;
+                foreach (Form f in Application.OpenForms) if (f != this && f.Visible && f.Enabled) front = f;
+                Native.BringToFront(front ?? this);
+                return;
+            }
+            Native.BringToFront(this);
+            ShowAgent(true, true);
         }
 
         protected override void OnMove(EventArgs e)
@@ -3203,6 +3265,7 @@ namespace MinGent
         protected override void WndProc(ref Message m)
         {
             base.WndProc(ref m);
+            if (QuickEntry.Hit(m.Msg, m.WParam)) { Summon(); return; }
             if (m.Msg == 0x0016 && m.WParam == IntPtr.Zero && closing && !IsDisposed)
             {
                 closing = false;

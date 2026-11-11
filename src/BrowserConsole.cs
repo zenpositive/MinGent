@@ -529,7 +529,7 @@ namespace MinGent
         }
     }
 
-    static class ConsoleCheck
+    static partial class ConsoleCheck
     {
         const int Ident = 0, Str = 1, Num = 2, Punct = 3, Rx = 4, Tmpl = 5;
 
@@ -613,7 +613,7 @@ namespace MinGent
         static readonly string[] Puncts = { ">>>=", "...", "===", "!==", "**=", "<<=", ">>=", ">>>", "&&=", "||=", "??=", "=>", "==", "!=", "<=", ">=", "&&", "||", "??", "?.", "++", "--", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "**", "<<", ">>" };
         static readonly Regex DomHandler = new Regex(@"^(?:(?:on|handle)(?:Click|DoubleClick|DblClick|Submit|Change|Input|Key\w*|Mouse\w*|Pointer\w*|Touch\w*|Focus\w*|Blur|Select|Drag\w*|Drop|Paste|Copy|Cut|Press\w*|Tap|Toggle|Scroll|Wheel|ContextMenu|Login|LogIn|Logout|LogOut|SignIn|SignOut|SignUp|Register|Save|Delete|Remove|Send|Buy|Purchase|Checkout|Pay|Order|Confirm|Cancel|Accept|Decline|Next|Prev|Previous|Back|Upload|Add|Open|Close)(?![a-z])\w*|on(?:click|dblclick|submit|change|input|key\w+|mouse\w+|pointer\w+|touch\w+|focus\w*|blur|scroll|wheel|select|reset|contextmenu|drag\w*|drop|paste|copy|cut))$", RegexOptions.CultureInvariant);
         static readonly Regex HtmlRuns = new Regex(@"<\s*/?\s*(?:script|iframe|frame|frameset|object|embed|base|link|meta|portal|fencedframe|applet)\b|<[a-z][^>]*[\s/]on[a-z]+\s*=", RegexOptions.CultureInvariant);
-        static readonly Regex OuterUrl = new Regex(@"url\(\s*['""]?\s*(?:https?:|//)", RegexOptions.CultureInvariant);
+        static readonly Regex OuterUrl = new Regex(@"url\(\s*(?:['""]\s*)?(?:https?:|//)", RegexOptions.CultureInvariant);
         static readonly Regex FormWord = new Regex(@"(?:^|[^a-z])form|Form", RegexOptions.CultureInvariant);
         static readonly Regex WidgetWord = new Regex(@"modal|Modal|dialog|Dialog|Dropdown|dropdown|Collapse|Offcanvas|offcanvas|Popover|popover|Tooltip|tooltip|Toast", RegexOptions.CultureInvariant);
         static readonly Regex EditableWord = new Regex(@"contenteditable|textarea|textbox|activeelement|iscontenteditable", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
@@ -1292,8 +1292,8 @@ namespace MinGent
 
         static bool Definition(List<Tok> t, int i)
         {
-            if (i > 0 && t[i - 1].Kind == Ident && t[i - 1].Text == "function") return true;
-            if (i > 1 && t[i - 1].Kind == Punct && t[i - 1].Text == "*" && t[i - 2].Kind == Ident && t[i - 2].Text == "function") return true;
+            if (i > 0 && t[i - 1].Kind == Ident && t[i - 1].Text == "function" && !IsMember(t, i - 1)) return true;
+            if (i > 1 && t[i - 1].Kind == Punct && t[i - 1].Text == "*" && t[i - 2].Kind == Ident && t[i - 2].Text == "function" && !IsMember(t, i - 2)) return true;
             if (i == 0 || IsMember(t, i) || !Next(t, i, "(")) return false;
             int o = i + 1, c = Close(t, o);
             if (c + 1 >= t.Count || t[c + 1].Kind != Punct || t[c + 1].Text != "{") return false;
@@ -1400,8 +1400,8 @@ namespace MinGent
                 string n = x.Text;
                 if (EditableWord.IsMatch(n)) f.Editable = true;
                 if (FieldProps.Contains(n) && IsKey(t, i)) f.FieldKeys = true;
-                if ((n == "const" || n == "let" || n == "var") && i + 1 < t.Count && t[i + 1].Kind == Ident) { Declare(f, t, i + 1); continue; }
-                if (n == "function" || n == "class")
+                if ((n == "const" || n == "let" || n == "var") && i + 1 < t.Count && t[i + 1].Kind == Ident && !IsMember(t, i)) { Declare(f, t, i + 1); continue; }
+                if ((n == "function" || n == "class") && !IsMember(t, i))
                 {
                     int j = i + 1;
                     if (j < t.Count && t[j].Kind == Punct && t[j].Text == "*") j++;
@@ -1844,6 +1844,1038 @@ namespace MinGent
                 i += p.Length;
             }
             return l;
+        }
+    }
+
+    class ConsoleReading
+    {
+        public bool Requests, Unwritten, Here, Messages, CookiesRead, CookiesChanged, StoreRead, StoreChanged, SignIns, Fields, Changes, Lingers, Looks, Failed;
+        public readonly List<string> Hosts = new List<string>();
+        public readonly List<string> Calls = new List<string>();
+
+        public static string Clip(string name)
+        {
+            string n = (name ?? "").Trim();
+            return n.Length > 40 ? n.Substring(0, 39) + "\u2026" : n;
+        }
+
+        public void Call(string name)
+        {
+            string n = Clip(name);
+            if (n.Length > 0 && !Calls.Contains(n)) Calls.Add(n);
+        }
+
+        public void Host(string host)
+        {
+            string h = (host ?? "").Trim();
+            if (h.Length == 0) { Unwritten = true; return; }
+            if (h.Length > 60) h = h.Substring(0, 59) + "\u2026";
+            if (!Hosts.Contains(h)) Hosts.Add(h);
+        }
+
+        static string Some(List<string> items)
+        {
+            int shown = Math.Min(3, items.Count), more = items.Count - shown;
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < shown; i++)
+            {
+                if (i > 0) sb.Append(i == shown - 1 && more == 0 ? " and " : ", ");
+                sb.Append(items[i]);
+            }
+            if (more > 0) sb.Append(" and ").Append(more.ToString(CultureInfo.InvariantCulture)).Append(" more");
+            return sb.ToString();
+        }
+
+        public string Words()
+        {
+            if (Failed) return "";
+            List<string> p = new List<string>();
+            if (CookiesRead || CookiesChanged) p.Add(CookiesRead && CookiesChanged ? "reads and changes cookies" : CookiesChanged ? "changes cookies" : "reads cookies");
+            if (StoreRead || StoreChanged) p.Add((StoreRead && StoreChanged ? "reads and changes" : StoreChanged ? "changes" : "reads") + " data the site stored in the browser");
+            if (SignIns) p.Add("reads saved sign-ins");
+            if (Fields) p.Add("reads form fields");
+            if (Requests)
+            {
+                if (Hosts.Count > 0) p.Add("sends requests to " + Some(Hosts) + (Unwritten ? " and other addresses" : ""));
+                else p.Add(Unwritten ? "sends network requests" : "sends requests to this site");
+            }
+            if (Messages) p.Add("sends messages to other windows or frames");
+            if (Changes) p.Add("changes the page");
+            if (Calls.Count > 0) p.Add("calls the page's own functions (" + Some(Calls) + ")");
+            if (Lingers) p.Add("leaves code running in the page");
+            if (p.Count == 0) return Looks ? "reads the page" : "doesn't touch the page";
+            if (p.Count == 1) return p[0];
+            return string.Join(", ", p.GetRange(0, p.Count - 1).ToArray()) + " and " + p[p.Count - 1];
+        }
+    }
+
+    static class ConsoleWords
+    {
+        static readonly Regex GenericWords = new Regex(@"^(please\s+)?((run|runs|running|execute|executes|executing|evaluate|evaluates|evaluating|eval|do|use|try)\s+)?((a|an|the|this|that|some|my|following)\s+)?((js|javascript|console|browser|page|debug)\s+)?(code|script|snippet|expression|command|javascript|js|it|console)?(\s+(in|on|inside|from|with|using|into)\s+(the\s+)?(page|console|browser|devtools|developer tools|site|website|tab)(\s+console)?)*\s*[.!:]*$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        public static bool Generic(string description, string code)
+        {
+            string d = Regex.Replace(description ?? "", @"\s+", " ").Trim();
+            if (d.Length < 3 || GenericWords.IsMatch(d)) return true;
+            string c = Regex.Replace(code ?? "", @"\s+", " ").Trim();
+            return c.Length > 0 && string.Equals(d.TrimEnd('.', ';', ' '), c.TrimEnd(';', ' '), StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static void Explain(PermissionAsk ask, string description, string code, string pageUrl)
+        {
+            string d = PermissionAsk.PlainSummary(description, 160);
+            string words = PermissionAsk.PlainSummary(ConsoleCheck.Read(code, pageUrl).Words(), 400);
+            if (Generic(d, code))
+            {
+                ask.Summary = words.Length > 0 ? char.ToUpperInvariant(words[0]) + words.Substring(1) : "";
+                ask.Reading = "";
+                return;
+            }
+            ask.Summary = d;
+            ask.Reading = words.Length > 0 ? "MinGent's reading: the code " + words + "." : "";
+        }
+    }
+
+    static partial class ConsoleCheck
+    {
+        const int Unsure = 0, Deep = 1, Fresh = 2, Bag = 3, OfDom = 4, OfPage = 5, Native = 6, Stored = 7;
+
+        class Origins
+        {
+            public readonly Dictionary<string, int> Kinds = new Dictionary<string, int>(StringComparer.Ordinal);
+            public readonly HashSet<string> Methods = new HashSet<string>(StringComparer.Ordinal);
+            public readonly HashSet<string> Rebound = new HashSet<string>(StringComparer.Ordinal);
+
+            public int Kind(string name)
+            {
+                int k;
+                return name != null && Kinds.TryGetValue(name, out k) ? k : Unsure;
+            }
+
+            public void Put(string name, int kind)
+            {
+                int had;
+                if (!Kinds.TryGetValue(name, out had)) { Kinds[name] = kind; return; }
+                if (had == kind) return;
+                Kinds[name] = had == OfPage || kind == OfPage ? OfPage : Unsure;
+            }
+
+            public bool Own(string method) { return Methods.Contains(method) && !Rebound.Contains(method); }
+        }
+
+        static readonly HashSet<string> Plain = Set("if else for while do switch case default break continue return throw try catch finally function class extends super new delete typeof instanceof void in await yield var let const true false null undefined NaN Infinity this debugger import export with");
+        static readonly HashSet<string> Senders = Set("fetch fetchLater XMLHttpRequest sendBeacon WebSocket EventSource RTCPeerConnection WebTransport axios");
+        static readonly HashSet<string> Addressed = Set("fetch fetchLater sendBeacon WebSocket EventSource WebTransport axios");
+        static readonly HashSet<string> Stores = Set("localStorage sessionStorage indexedDB caches");
+        static readonly HashSet<string> StoreWrites = Set("setItem removeItem clear deleteDatabase delete put add");
+        static readonly HashSet<string> WindowNames = Set("window self globalThis top parent frames opener content");
+        static readonly HashSet<string> WindowProps = Set("document location history navigator screen performance console crypto customElements visualViewport innerWidth innerHeight outerWidth outerHeight scrollX scrollY pageXOffset pageYOffset devicePixelRatio screenX screenY screenLeft screenTop length origin isSecureContext closed frameElement");
+        static readonly HashSet<string> BuiltinObjs = Set("Object Array JSON Math Number String Boolean Symbol BigInt Date RegExp Promise Reflect Intl Map Set WeakMap WeakSet Error console performance navigator screen location history CSS crypto customElements URL URLSearchParams TextEncoder TextDecoder Blob File Atomics ArrayBuffer DataView Uint8Array Node NodeFilter Element HTMLElement Document Event XPathResult visualViewport DOMParser XMLSerializer");
+        static readonly HashSet<string> BuiltinCtors = Set("Set Map WeakMap WeakSet WeakRef Array Object Date RegExp Error TypeError RangeError SyntaxError EvalError AggregateError Promise URL URLSearchParams Headers Request Response Blob File FileReader TextEncoder TextDecoder AbortController DOMParser XMLSerializer Uint8Array Uint8ClampedArray Uint16Array Uint32Array Int8Array Int16Array Int32Array Float32Array Float64Array BigInt64Array BigUint64Array ArrayBuffer SharedArrayBuffer DataView Proxy Option DocumentFragment Range DOMRect DOMPoint DOMMatrix Path2D OffscreenCanvas CustomEvent Event FormData MessageChannel BroadcastChannel CSSStyleSheet Number String Boolean Text Comment ImageData XPathEvaluator Intl XMLHttpRequest WebSocket EventSource RTCPeerConnection WebTransport Image Audio MutationObserver IntersectionObserver ResizeObserver PerformanceObserver ReportingObserver");
+        static readonly HashSet<string> Watchers = Set("MutationObserver IntersectionObserver ResizeObserver PerformanceObserver ReportingObserver");
+        static readonly HashSet<string> GlobalCalls = Set("parseInt parseFloat isNaN isFinite encodeURIComponent decodeURIComponent encodeURI decodeURI escape btoa atob structuredClone getComputedStyle matchMedia getSelection requestAnimationFrame cancelAnimationFrame requestIdleCallback cancelIdleCallback queueMicrotask setTimeout setInterval setImmediate clearTimeout clearInterval clearImmediate reportError createImageBitmap getEventListeners keys values dir dirxml table inspect queryObjects clear String Number Boolean BigInt Symbol Array Object Date RegExp Error TypeError RangeError SyntaxError Promise $ $$ $x jQuery");
+        static readonly HashSet<string> ReadCalls = Set(
+            "querySelector querySelectorAll getElementById getElementsByClassName getElementsByTagName getElementsByTagNameNS getElementsByName closest matches contains getAttribute getAttributeNS getAttributeNames getAttributeNode hasAttribute hasAttributeNS hasAttributes hasChildNodes hasFocus hasPointerCapture getBoundingClientRect getClientRects getComputedStyle getPropertyValue getPropertyPriority getRootNode compareDocumentPosition isEqualNode isSameNode isDefaultNamespace lookupPrefix lookupNamespaceURI checkValidity checkVisibility item namedItem elementFromPoint elementsFromPoint caretRangeFromPoint caretPositionFromPoint getSelection getAnimations cloneNode importNode createElement createElementNS createTextNode createComment createDocumentFragment createRange createTreeWalker createNodeIterator createAttribute createExpression createNSResolver evaluate snapshotItem iterateNext nextNode previousNode getContext toDataURL toBlob getImageData measureText isPointInPath getTotalLength getPointAtLength getBBox getCTM getScreenCTM getSVGDocument assignedNodes assignedElements getRangeAt containsNode comparePoint intersectsNode cloneRange cloneContents matchMedia supports " +
+            "map filter forEach reduce reduceRight find findIndex findLast findLastIndex some every includes indexOf lastIndexOf slice join concat flat flatMap keys values entries at from of isArray toSorted toReversed toSpliced groupBy " +
+            "split trim trimStart trimEnd trimLeft trimRight toLowerCase toUpperCase toLocaleLowerCase toLocaleUpperCase startsWith endsWith substring substr charAt charCodeAt codePointAt padStart padEnd repeat localeCompare match matchAll search replace replaceAll normalize isWellFormed " +
+            "toString toFixed toPrecision toExponential toLocaleString toLocaleDateString toLocaleTimeString toISOString toJSON toUTCString toDateString toTimeString valueOf getTime getFullYear getMonth getDate getDay getHours getMinutes getSeconds getMilliseconds getTimezoneOffset getUTCFullYear getUTCMonth getUTCDate getUTCDay getUTCHours getUTCMinutes getUTCSeconds now parse stringify isInteger isSafeInteger isNaN isFinite parseFloat parseInt " +
+            "hasOwnProperty hasOwn getOwnPropertyNames getOwnPropertyDescriptor getOwnPropertyDescriptors getOwnPropertySymbols getPrototypeOf isPrototypeOf propertyIsEnumerable isFrozen isSealed isExtensible fromEntries ownKeys " +
+            "then catch finally all allSettled race any test " +
+            "getEntries getEntriesByType getEntriesByName getRegistrations getRegistration estimate format formatToParts formatRange resolvedOptions supportedLocalesOf encode decode digest getRandomValues randomUUID getItem key");
+        static readonly HashSet<string> ReadWhenEmpty = Set("text json blob arrayBuffer bytes clone html");
+        static readonly HashSet<string> PageVerbs = Set("remove prepend before after toggle");
+        static readonly HashSet<string> PageChanges = Set("appendChild insertBefore insertAdjacentElement insertAdjacentText replaceChild replaceChildren replaceWith removeChild removeAttribute removeAttributeNS removeAttributeNode setAttribute setAttributeNS setAttributeNode toggleAttribute setProperty removeProperty insertRule deleteRule addRule removeRule replaceSync adoptNode attachShadow requestFullscreen exitFullscreen requestPointerLock exitPointerLock setPointerCapture releasePointerCapture setCustomValidity reportValidity animate startViewTransition setSelectionRange removeAllRanges addRange collapseToStart collapseToEnd selectAllChildren deleteContents extractContents surroundContents insertNode setHTML showPicker removeEventListener");
+        static readonly HashSet<string> Finders = Set("querySelector querySelectorAll getElementById getElementsByClassName getElementsByTagName getElementsByTagNameNS getElementsByName closest elementFromPoint elementsFromPoint cloneNode importNode createElement createElementNS createTextNode createDocumentFragment item namedItem assignedNodes assignedElements getRootNode");
+        static readonly HashSet<string> Copies = Set("parse json structuredClone toJSON getBoundingClientRect");
+        static readonly HashSet<string> Makers = Set("map filter slice concat flat flatMap split from of keys values entries fromEntries parse stringify structuredClone toSorted toReversed toSpliced match matchAll join trim trimStart trimEnd toLowerCase toUpperCase toString toFixed substring substr padStart padEnd repeat replace replaceAll toISOString toJSON getEntries getEntriesByType getEntriesByName getAttribute getAttributeNames getPropertyValue getBoundingClientRect getClientRects getComputedStyle json text blob arrayBuffer");
+        static readonly HashSet<string> TakesFunctionFirst = Set("forEach map filter find findIndex findLast findLastIndex some every flatMap reduce reduceRight sort toSorted then catch finally setTimeout setInterval setImmediate requestAnimationFrame requestIdleCallback queueMicrotask");
+        static readonly HashSet<string> TakesFunctionSecond = Set("addEventListener replace replaceAll from then");
+        static readonly HashSet<string> Namespaces = Set("console Math JSON Number String Date Intl CSS crypto performance Symbol Promise Array URL Reflect");
+        static readonly HashSet<string> Verbs = Set("GET POST PUT DELETE PATCH HEAD OPTIONS");
+        static readonly HashSet<string> Quiet = Set("Math JSON Number String Boolean Date Intl Object Array Symbol BigInt RegExp Promise Error TypeError RangeError Map Set WeakMap WeakSet URL URLSearchParams TextEncoder TextDecoder Uint8Array ArrayBuffer parseInt parseFloat isNaN isFinite encodeURIComponent decodeURIComponent encodeURI decodeURI btoa atob console structuredClone of async get set static");
+        static readonly HashSet<string> Relied = Set("fetch fetchLater XMLHttpRequest sendBeacon WebSocket EventSource RTCPeerConnection WebTransport alert confirm prompt setTimeout setInterval requestAnimationFrame queueMicrotask JSON Object Array Promise Function Math Date RegExp Proxy Reflect Symbol Error document window globalThis navigator console localStorage sessionStorage indexedDB FormData URL URLSearchParams Request Response Headers MutationObserver Event CustomEvent addEventListener removeEventListener dispatchEvent postMessage eval parseInt parseFloat encodeURIComponent decodeURIComponent atob btoa");
+        static readonly HashSet<string> Joins = Set("return typeof instanceof in of new delete void throw case do else yield await async function class extends var let const if for while switch default try catch finally");
+        static readonly HashSet<string> Unplaced = Set("createElement createElementNS createTextNode createDocumentFragment createComment cloneNode");
+        static readonly Regex Handler = new Regex("^on[a-z]+$", RegexOptions.CultureInvariant);
+        static readonly Regex Authority = new Regex(@"^(?:[a-z][a-z0-9+.\-]*:)?[/\\]{2}([^/\\?#]*)([/\\?#]|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex Scheme = new Regex(@"^[a-z][a-z0-9+.\-]*:", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex CssUrl = new Regex(@"url\(\s*(?:['""]\s*)?((?:https?:)?//[^'"")\s]*)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        public static ConsoleReading Read(string code, string pageUrl)
+        {
+            ConsoleReading r = new ConsoleReading();
+            try
+            {
+                string s = code ?? "";
+                bool ambiguous;
+                ReadPass(s, false, pageUrl, r, out ambiguous);
+                if (ambiguous) ReadPass(s, true, pageUrl, r, out ambiguous);
+                if (r.Requests && !r.Here && r.Hosts.Count == 0) r.Unwritten = true;
+            }
+            catch (Exception) { r.Failed = true; }
+            return r;
+        }
+
+        static void ReadPass(string code, bool flip, string pageUrl, ConsoleReading r, out bool ambiguous)
+        {
+            string hidden;
+            List<Tok> t = Fold(Lex(code, flip, out hidden, out ambiguous));
+            Facts f = Study(t);
+            HashSet<string> kept = new HashSet<string>(StringComparer.Ordinal);
+            int depth = 0;
+            for (int i = 0; i < t.Count; i++)
+            {
+                if (t[i].Kind == Punct)
+                {
+                    if (t[i].Text == "{" || t[i].Text == "(" || t[i].Text == "[") depth++;
+                    else if (t[i].Text == "}" || t[i].Text == ")" || t[i].Text == "]") depth--;
+                    continue;
+                }
+                foreach (int j in Names(t, i))
+                {
+                    Declare(f, t, j);
+                    if (depth == 0 && t[i].Text == "var" && (!Is(t, j + 1, "=") || Mentions(t, j + 2, Until(t, j), t[j].Text))) kept.Add(t[j].Text);
+                }
+            }
+            Origins o = Trace(t, f);
+            foreach (string name in kept) o.Kinds[name] = OfPage;
+            string site = SiteOf(pageUrl);
+            for (int i = 0; i < t.Count; i++) See(t, i, f, o, site, r);
+            Leaves(t, r);
+        }
+
+        static void Leaves(List<Tok> t, ConsoleReading r)
+        {
+            int depth = 0;
+            for (int i = 0; i < t.Count; i++)
+            {
+                Tok k = t[i];
+                if (k.Kind == Punct)
+                {
+                    if (k.Text == "{" || k.Text == "(" || k.Text == "[") depth++;
+                    else if (k.Text == "}" || k.Text == ")" || k.Text == "]") depth--;
+                    continue;
+                }
+                if (depth != 0 || k.Kind != Ident || IsMember(t, i)) continue;
+                if (k.Text == "function" || k.Text == "class")
+                {
+                    int before = Word(t, i - 1, "async") ? i - 2 : i - 1, at = Is(t, i + 1, "*") ? i + 2 : i + 1;
+                    bool statement = before < 0 || (t[before].Kind == Punct ? t[before].Text == ";" || t[before].Text == "}" || t[before].Text == ")" || t[before].Text == "]" : t[before].Kind != Ident || !Before.Contains(t[before].Text));
+                    if (statement && at < t.Count && t[at].Kind == Ident && Relied.Contains(t[at].Text)) r.Changes = true;
+                    continue;
+                }
+                foreach (int j in Names(t, i)) if (Relied.Contains(t[j].Text)) r.Changes = true;
+            }
+        }
+
+        static List<int> Names(List<Tok> t, int i)
+        {
+            List<int> names = new List<int>();
+            if (!Word(t, i, "var") && !Word(t, i, "let") && !Word(t, i, "const") || IsMember(t, i)) return names;
+            int j = i + 1;
+            while (j < t.Count && t[j].Kind == Ident && !Plain.Contains(t[j].Text))
+            {
+                if (j + 1 < t.Count && !Is(t, j + 1, "=") && !Is(t, j + 1, ",") && !Is(t, j + 1, ";")) break;
+                names.Add(j);
+                int n = Until(t, j);
+                if (!Is(t, n, ",")) break;
+                j = n + 1;
+            }
+            return names;
+        }
+
+        static int Until(List<Tok> t, int j)
+        {
+            int d = 0, n = j + 1;
+            for (; n < t.Count; n++)
+            {
+                Tok x = t[n];
+                if (d == 0 && n > j + 1 && Starts(x) && Ends(t[n - 1])) break;
+                if (x.Kind != Punct) continue;
+                if (x.Text == "{" || x.Text == "(" || x.Text == "[") d++;
+                else if (x.Text == "}" || x.Text == ")" || x.Text == "]") { if (--d < 0) break; }
+                else if (d == 0 && (x.Text == "," || x.Text == ";")) break;
+            }
+            return n;
+        }
+
+        static bool Mentions(List<Tok> t, int from, int to, string name)
+        {
+            for (int i = from; i < to && i < t.Count; i++)
+                if (t[i].Kind == Ident && t[i].Text == name && !IsMember(t, i) && !IsKey(t, i)) return true;
+            return false;
+        }
+
+        static bool Starts(Tok x)
+        {
+            if (x.Kind == Ident) return x.Text != "in" && x.Text != "instanceof";
+            return x.Kind == Num || x.Kind == Str || x.Kind == Rx;
+        }
+
+        static bool Ends(Tok x)
+        {
+            if (x.Kind == Ident) return !Joins.Contains(x.Text);
+            if (x.Kind == Punct) return x.Text == ")" || x.Text == "]" || x.Text == "}";
+            return x.Kind == Num || x.Kind == Str || x.Kind == Rx || x.Kind == Tmpl;
+        }
+
+        static bool Is(List<Tok> t, int i, string punct)
+        {
+            return i >= 0 && i < t.Count && t[i].Kind == Punct && t[i].Text == punct;
+        }
+
+        static bool Word(List<Tok> t, int i, string ident)
+        {
+            return i >= 0 && i < t.Count && t[i].Kind == Ident && t[i].Text == ident;
+        }
+
+        static bool Dot(List<Tok> t, int i)
+        {
+            return Is(t, i, ".") || Is(t, i, "?.");
+        }
+
+        static int Head(List<Tok> t, int e)
+        {
+            int j = e, start = e, guard = 0;
+            while (j >= 0 && guard++ < 4000)
+            {
+                Tok x = t[j];
+                if (x.Kind == Punct && (x.Text == ")" || x.Text == "]"))
+                {
+                    int open = Opener(t, j);
+                    if (open < 0) return start;
+                    start = open;
+                    j = open - 1;
+                    if (Is(t, j, "?.")) j--;
+                    if (j >= 0 && ((t[j].Kind == Ident && !Before.Contains(t[j].Text)) || (t[j].Kind == Punct && (t[j].Text == ")" || t[j].Text == "]")))) continue;
+                    return start;
+                }
+                if (x.Kind == Ident)
+                {
+                    if (Before.Contains(x.Text)) return start;
+                    start = j;
+                }
+                else if (x.Kind == Str || x.Kind == Num || x.Kind == Rx || x.Kind == Tmpl) return j;
+                else return start;
+                if (!Dot(t, j - 1)) return start;
+                j -= 2;
+            }
+            return start;
+        }
+
+        static int SkipFunction(List<Tok> t, int s, int limit)
+        {
+            int j = s;
+            if (Word(t, j, "async")) j++;
+            if (Word(t, j, "function"))
+            {
+                j++;
+                if (Is(t, j, "*")) j++;
+                if (j < limit && t[j].Kind == Ident) j++;
+                if (!Is(t, j, "(")) return j;
+                j = Close(t, j) + 1;
+                return Is(t, j, "{") ? Close(t, j) + 1 : j;
+            }
+            if (Is(t, j, "(")) j = Close(t, j) + 1;
+            else j++;
+            if (!Is(t, j, "=>")) return j;
+            j++;
+            if (Is(t, j, "{")) return Close(t, j) + 1;
+            int depth = 0;
+            for (; j < limit; j++)
+            {
+                Tok x = t[j];
+                if (x.Kind != Punct) continue;
+                if (x.Text == "(" || x.Text == "[" || x.Text == "{") depth++;
+                else if (x.Text == ")" || x.Text == "]" || x.Text == "}") { if (depth == 0) return j; depth--; }
+                else if (x.Text == "," && depth == 0) return j;
+            }
+            return j;
+        }
+
+        static bool Sealed(List<Tok> t, int open, int close)
+        {
+            for (int j = open + 1; j < close && j < t.Count; j++)
+            {
+                Tok x = t[j];
+                if (x.Kind == Tmpl && !(x.Opens && x.Closes)) return false;
+                if (x.Kind != Ident) continue;
+                if (FunctionAt(t, j)) { j = SkipFunction(t, j, close) - 1; continue; }
+                if (Definition(t, j))
+                {
+                    int p = Close(t, j + 1);
+                    j = Is(t, p + 1, "{") ? Close(t, p + 1) : p;
+                    continue;
+                }
+                if (IsKey(t, j)) continue;
+                if ((x.Text == "get" || x.Text == "set" || x.Text == "static") && j + 1 < close && t[j + 1].Kind == Ident) continue;
+                if (x.Text == "true" || x.Text == "false" || x.Text == "null" || x.Text == "undefined" || x.Text == "NaN" || x.Text == "Infinity") continue;
+                if (x.Text == "new" && j + 1 < close && t[j + 1].Kind == Ident && BuiltinCtors.Contains(t[j + 1].Text) && !Senders.Contains(t[j + 1].Text) && (!Is(t, j + 2, "(") || Is(t, j + 3, ")"))) { j++; continue; }
+                return false;
+            }
+            return true;
+        }
+
+        static int WindowKind(List<Tok> t, int s)
+        {
+            if (!Dot(t, s + 1) || s + 2 >= t.Count || t[s + 2].Kind != Ident) return OfDom;
+            string m = t[s + 2].Text;
+            if (m == "document" || WindowNames.Contains(m)) return OfDom;
+            return WindowProps.Contains(m) || BuiltinObjs.Contains(m) || Stores.Contains(m) || GlobalCalls.Contains(m) || BuiltinCtors.Contains(m) || m == "cookieStore" ? Native : OfPage;
+        }
+
+        static int RootKind(List<Tok> t, int s, Facts f, Origins o)
+        {
+            string n = t[s].Text;
+            if (f.Declared.Contains(n)) return o.Kind(n);
+            if (n == "document") return OfDom;
+            if (WindowNames.Contains(n)) return WindowKind(t, s);
+            if (Stores.Contains(n) || n == "cookieStore") return Stored;
+            if (Senders.Contains(n)) return Native;
+            if (BuiltinObjs.Contains(n) || BuiltinCtors.Contains(n)) return Native;
+            if (n == "$" || n == "jQuery" || n == "$$" || n == "$x") return Is(t, s + 1, "(") ? OfDom : OfPage;
+            if (GlobalCalls.Contains(n)) return Native;
+            return OfPage;
+        }
+
+        static int AfterName(int kind, string name)
+        {
+            if (name == "length") return Deep;
+            if (name == "document" && (kind == Native || kind == OfDom)) return OfDom;
+            if (kind == Native && (Stores.Contains(name) || name == "cookieStore")) return Stored;
+            if (kind == Deep || kind == OfDom || kind == OfPage || kind == Native) return kind;
+            return Unsure;
+        }
+
+        static int AfterCall(int kind, string name)
+        {
+            if (name != null && (Makers.Contains(name) || Unplaced.Contains(name))) return Fresh;
+            if (name != null && Finders.Contains(name)) return OfDom;
+            return kind == OfPage ? OfPage : Unsure;
+        }
+
+        static int ValueKind(List<Tok> t, int s, int limit, Facts f, Origins o, int depth, out int end)
+        {
+            end = s;
+            if (s < 0 || s >= limit || s >= t.Count || depth > 12) return Unsure;
+            Tok x = t[s];
+            int kind;
+            int j;
+            string called = null;
+            if (x.Kind == Str || x.Kind == Num || x.Kind == Rx) { kind = Deep; j = s + 1; }
+            else if (x.Kind == Tmpl)
+            {
+                j = s;
+                int nest = 0;
+                bool mixed = !(x.Opens && x.Closes);
+                while (j < t.Count)
+                {
+                    if (t[j].Kind == Tmpl)
+                    {
+                        if (t[j].Opens) nest++;
+                        if (t[j].Closes) nest--;
+                        if (nest <= 0) { j++; break; }
+                    }
+                    j++;
+                }
+                kind = mixed ? Fresh : Deep;
+            }
+            else if (x.Kind == Punct)
+            {
+                if (x.Text == "[" || x.Text == "{")
+                {
+                    int c = Close(t, s);
+                    kind = Sealed(t, s, c) ? Deep : x.Text == "[" ? Fresh : Bag;
+                    j = c + 1;
+                }
+                else if (x.Text == "(")
+                {
+                    int c = Close(t, s), inner;
+                    kind = ValueKind(t, s + 1, c, f, o, depth + 1, out inner);
+                    if (inner < c) kind = kind == OfPage ? OfPage : Unsure;
+                    j = c + 1;
+                }
+                else if (x.Text == "!" || x.Text == "-" || x.Text == "+" || x.Text == "~") { end = s + 1; return Deep; }
+                else return Unsure;
+            }
+            else if (x.Kind != Ident) return Unsure;
+            else
+            {
+                string n = x.Text;
+                if (n == "await" || n == "yield") return ValueKind(t, s + 1, limit, f, o, depth + 1, out end);
+                if (n == "typeof" || n == "void" || n == "delete" || n == "true" || n == "false" || n == "null" || n == "undefined" || n == "NaN" || n == "Infinity") { end = s + 1; return Deep; }
+                if (n == "class" || FunctionAt(t, s)) { end = s + 1; return Deep; }
+                if (n == "new")
+                {
+                    j = s + 1;
+                    if (j >= t.Count || t[j].Kind != Ident) return Unsure;
+                    string ctor = t[j].Text;
+                    bool known = BuiltinCtors.Contains(ctor), own = f.Declared.Contains(ctor) && o.Kind(ctor) == Deep;
+                    j++;
+                    while (Dot(t, j) && j + 1 < t.Count && t[j + 1].Kind == Ident) j += 2;
+                    bool bare = true;
+                    if (Is(t, j, "(")) { int c = Close(t, j); bare = c == j + 1; j = c + 1; }
+                    kind = known ? (bare && !Senders.Contains(ctor) ? Deep : Fresh) : own ? Fresh : OfPage;
+                }
+                else if (n == "this" || n == "super") { kind = Unsure; j = s + 1; }
+                else if (Plain.Contains(n)) return Unsure;
+                else
+                {
+                    kind = RootKind(t, s, f, o);
+                    j = s + 1;
+                    called = n;
+                }
+            }
+            int guard = 0;
+            while (j < limit && j < t.Count && guard++ < 4000)
+            {
+                Tok y = t[j];
+                if (Dot(t, j) && j + 1 < t.Count && t[j + 1].Kind == Ident)
+                {
+                    if (j + 1 >= limit) break;
+                    called = t[j + 1].Text;
+                    j += 2;
+                    if (Is(t, j, "(") || (Is(t, j, "?.") && Is(t, j + 1, "("))) continue;
+                    kind = AfterName(kind, called);
+                    called = null;
+                    continue;
+                }
+                if (Is(t, j, "?.") && (Is(t, j + 1, "(") || Is(t, j + 1, "["))) { j++; continue; }
+                if (y.Kind == Punct && y.Text == "(")
+                {
+                    int c = Close(t, j);
+                    if (called == null) kind = kind == OfPage ? OfPage : Unsure;
+                    else if (called == "$" || called == "jQuery" || called == "$$" || called == "$x") kind = kind == OfPage ? OfPage : OfDom;
+                    else if (Copies.Contains(called) && kind != OfPage) kind = Deep;
+                    else if (kind == Native && (GlobalCalls.Contains(called) || BuiltinCtors.Contains(called))) kind = Fresh;
+                    else kind = AfterCall(kind, called);
+                    called = null;
+                    j = c + 1;
+                    continue;
+                }
+                if (y.Kind == Punct && y.Text == "[")
+                {
+                    kind = AfterName(kind, "[]");
+                    called = null;
+                    j = Close(t, j) + 1;
+                    continue;
+                }
+                break;
+            }
+            end = j;
+            if (j < limit && j < t.Count && t[j].Kind == Punct)
+            {
+                string op = t[j].Text;
+                if (op == "||" || op == "&&" || op == "??" || op == "?") return kind == OfPage ? OfPage : Unsure;
+                if (op == "+" || op == "-" || op == "*" || op == "/" || op == "%" || op == "**" || op == "<" || op == ">" || op == "<=" || op == ">=" || op == "==" || op == "===" || op == "!=" || op == "!==") return Deep;
+            }
+            else if (j < limit && j < t.Count && t[j].Kind == Tmpl && t[j].Opens) return kind == OfPage ? OfPage : Unsure;
+            return kind;
+        }
+
+        static int ReceiverKind(List<Tok> t, int i, Facts f, Origins o)
+        {
+            int e = i - 2;
+            if (e < 0) return Unsure;
+            int s = Head(t, e);
+            if (Word(t, s - 1, "new")) s--;
+            int end;
+            return ValueKind(t, s, i - 1, f, o, 0, out end);
+        }
+
+        static int Spread(int kind)
+        {
+            return kind == OfDom || kind == OfPage ? kind : Unsure;
+        }
+
+        static Origins Trace(List<Tok> t, Facts f)
+        {
+            Origins o = new Origins();
+            for (int i = 0; i < t.Count; i++)
+            {
+                Tok x = t[i];
+                if (x.Kind != Ident) continue;
+                string n = x.Text;
+                bool member = IsMember(t, i);
+                if (Definition(t, i))
+                {
+                    o.Methods.Add(n);
+                    if (!member && f.Declared.Contains(n)) o.Put(n, Deep);
+                    if (Is(t, i + 1, "(")) Params(t, i + 1, Close(t, i + 1), f, false);
+                    continue;
+                }
+                if (!member && (n == "function" || n == "class") && i + 1 < t.Count && t[i + 1].Kind == Ident && f.Declared.Contains(t[i + 1].Text)) { o.Put(t[i + 1].Text, Deep); continue; }
+                if (IsKey(t, i))
+                {
+                    if (FunctionAt(t, i + 2)) o.Methods.Add(n);
+                    else o.Rebound.Add(n);
+                    continue;
+                }
+                if (member && Is(t, i + 1, "="))
+                {
+                    if (FunctionAt(t, i + 2)) o.Methods.Add(n);
+                    else o.Rebound.Add(n);
+                    continue;
+                }
+                if (!member && (n == "const" || n == "let" || n == "var") && (Is(t, i + 1, "{") || Is(t, i + 1, "[")))
+                {
+                    int close = Close(t, i + 1);
+                    if (!Is(t, close + 1, "=")) continue;
+                    int end;
+                    int kind = Spread(ValueKind(t, close + 2, t.Count, f, o, 0, out end));
+                    bool whole = close + 2 < t.Count && t[close + 2].Kind == Ident && WindowNames.Contains(t[close + 2].Text) && !f.Declared.Contains(t[close + 2].Text) && end == close + 3;
+                    for (int j = i + 2; j < close; j++)
+                        if (t[j].Kind == Ident && f.Sites[j]) o.Put(t[j].Text, whole ? OfPage : kind);
+                    continue;
+                }
+                if (!member && n == "for" && Is(t, i + 1, "("))
+                {
+                    int close = Close(t, i + 1), depth = 0, cut = -1;
+                    for (int j = i + 2; j < close && cut < 0; j++)
+                    {
+                        Tok y = t[j];
+                        if (y.Kind == Punct)
+                        {
+                            if (y.Text == "(" || y.Text == "[" || y.Text == "{") depth++;
+                            else if (y.Text == ")" || y.Text == "]" || y.Text == "}") depth--;
+                            else if (y.Text == ";" && depth == 0) break;
+                        }
+                        else if (depth == 0 && y.Kind == Ident && (y.Text == "of" || y.Text == "in")) cut = j;
+                    }
+                    if (cut < 0) continue;
+                    int end;
+                    int kind = t[cut].Text == "in" ? Deep : Spread(ValueKind(t, cut + 1, close, f, o, 0, out end));
+                    for (int j = i + 2; j < cut; j++)
+                        if (t[j].Kind == Ident && f.Sites[j]) o.Put(t[j].Text, kind);
+                    continue;
+                }
+                if (!member && f.Declared.Contains(n) && Is(t, i + 1, "="))
+                {
+                    int end;
+                    o.Put(n, ValueKind(t, i + 2, t.Count, f, o, 0, out end));
+                }
+            }
+            return o;
+        }
+
+        static string SiteOf(string url)
+        {
+            Uri u;
+            if (!Uri.TryCreate(url ?? "", UriKind.Absolute, out u)) return "";
+            if (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "ws" && u.Scheme != "wss") return "";
+            string host = "";
+            try { host = u.IdnHost; } catch (Exception) { host = u.Host; }
+            host = (host ?? "").ToLowerInvariant();
+            return u.IsDefaultPort ? host : host + ":" + u.Port.ToString(CultureInfo.InvariantCulture);
+        }
+
+        static void Address(string text, bool whole, string site, ConsoleReading r)
+        {
+            string u = (text ?? "").Replace("\t", "").Replace("\n", "").Replace("\r", "").Trim();
+            if (u.Length == 0) { if (whole) r.Here = true; else r.Unwritten = true; return; }
+            Match m = Authority.Match(u);
+            if (m.Success)
+            {
+                string auth = m.Groups[1].Value;
+                if (auth.Length == 0 || (!whole && m.Groups[2].Value.Length == 0)) { r.Unwritten = true; return; }
+                string head = Scheme.IsMatch(u) ? u.Substring(0, u.IndexOf(':') + 1) : "http:";
+                string there = SiteOf(head + "//" + auth + "/");
+                if (there.Length == 0) { r.Unwritten = true; return; }
+                if (site.Length > 0 && there == site) r.Here = true;
+                else r.Host(there);
+                return;
+            }
+            string low = u.ToLowerInvariant();
+            if (low.StartsWith("data:", StringComparison.Ordinal) || low.StartsWith("blob:", StringComparison.Ordinal) || low.StartsWith("about:", StringComparison.Ordinal)) { r.Here = true; return; }
+            if (Scheme.IsMatch(u)) { r.Unwritten = true; return; }
+            bool rooted = u[0] == '?' || u[0] == '#' || u.StartsWith("./", StringComparison.Ordinal) || u.StartsWith("../", StringComparison.Ordinal) ||
+                          (u[0] == '/' && u.Length > 1 && u[1] != '/' && u[1] != '\\');
+            if (whole ? u[0] != '\\' : rooted) r.Here = true;
+            else r.Unwritten = true;
+        }
+
+        static void AddressArg(List<Tok> t, int i, int index, string site, ConsoleReading r)
+        {
+            List<KeyValuePair<int, int>> spans = ArgSpans(t, i);
+            if (index >= spans.Count) { r.Unwritten = true; return; }
+            int a = spans[index].Key, b = spans[index].Value;
+            Tok x = t[a];
+            if (x.Kind == Str) { Address(x.Text, b - a == 1, site, r); return; }
+            if (x.Kind == Tmpl && x.Opens) { Address(x.Text, x.Closes && b - a == 1, site, r); return; }
+            if (x.Kind == Punct && x.Text == "{")
+            {
+                int close = Close(t, a);
+                for (int j = a + 1; j < close; j++)
+                    if (Word(t, j, "url") && IsKey(t, j) && j + 2 < close && (t[j + 2].Kind == Str || (t[j + 2].Kind == Tmpl && t[j + 2].Opens)))
+                    {
+                        bool whole = t[j + 2].Kind == Str ? (Is(t, j + 3, ",") || Is(t, j + 3, "}")) : t[j + 2].Closes && (Is(t, j + 3, ",") || Is(t, j + 3, "}"));
+                        Address(t[j + 2].Text, whole, site, r);
+                        return;
+                    }
+            }
+            r.Unwritten = true;
+        }
+
+        static string Shown(List<Tok> t, int i)
+        {
+            List<string> parts = new List<string>();
+            parts.Add(t[i].Text);
+            int j = i - 1;
+            while (Dot(t, j) && j >= 1 && t[j - 1].Kind == Ident && (!Plain.Contains(t[j - 1].Text) || t[j - 1].Text == "this"))
+            {
+                parts.Insert(0, t[j - 1].Text);
+                j -= 2;
+            }
+            bool whole = !Dot(t, j);
+            if (parts.Count > 3 || (!whole && parts.Count > 1))
+            {
+                int keep = Math.Min(2, parts.Count);
+                parts = parts.GetRange(parts.Count - keep, keep);
+            }
+            string name = string.Join(".", parts.ToArray());
+            if (whole || parts.Count > 1) return name;
+            if (Is(t, j - 1, ")"))
+            {
+                int open = Opener(t, j - 1);
+                return (open > 0 && t[open - 1].Kind == Ident && !Plain.Contains(t[open - 1].Text) ? t[open - 1].Text : "") + "()." + name;
+            }
+            if (!Is(t, j - 1, "]")) return name;
+            int at = Opener(t, j - 1);
+            string index = at >= 0 && j - 1 - at == 2 && t[at + 1].Kind == Num ? t[at + 1].Text : "";
+            return (at > 0 && t[at - 1].Kind == Ident && !Plain.Contains(t[at - 1].Text) ? t[at - 1].Text : "") + "[" + index + "]." + name;
+        }
+
+        static bool Indexing(List<Tok> t, int i)
+        {
+            int depth = 0;
+            for (int j = i - 1; j >= 0; j--)
+            {
+                if (t[j].Kind != Punct) continue;
+                string x = t[j].Text;
+                if (x == ")" || x == "]" || x == "}") depth++;
+                else if (x == "(" || x == "[" || x == "{")
+                {
+                    if (depth > 0) { depth--; continue; }
+                    return x == "[" && j > 0 && MemberBase(t[j - 1]) && !(t[j - 1].Kind == Ident && Plain.Contains(t[j - 1].Text) && t[j - 1].Text != "this");
+                }
+            }
+            return false;
+        }
+
+        static bool Flagged(List<Tok> t, int i, ConsoleReading r)
+        {
+            if (!Is(t, i - 2, ")")) return false;
+            int open = Opener(t, i - 2);
+            if (open < 1 || t[open - 1].Kind != Ident) return false;
+            return r.Calls.Contains(ConsoleReading.Clip(IsMember(t, open - 1) ? Shown(t, open - 1) : t[open - 1].Text));
+        }
+
+        static bool Enclosed(List<Tok> t, int i)
+        {
+            int depth = 0;
+            for (int j = i - 1; j >= 0; j--)
+            {
+                if (t[j].Kind != Punct) continue;
+                if (t[j].Text == "}") depth++;
+                else if (t[j].Text == "{")
+                {
+                    if (depth > 0) { depth--; continue; }
+                    if (ClassOrObject(t, j)) return true;
+                }
+            }
+            return false;
+        }
+
+        static bool LocalWrite(List<Tok> t, int e, Facts f, Origins o, ConsoleReading r)
+        {
+            if (e < 0) return false;
+            int s = Head(t, e);
+            if (Word(t, s - 1, "new")) s--;
+            if (Word(t, s, "this") || Word(t, s, "super")) return Enclosed(t, s);
+            int end;
+            int kind = ValueKind(t, s, e + 1, f, o, 0, out end);
+            if (kind == Stored) { r.StoreChanged = true; return true; }
+            return kind == Deep || kind == Fresh || kind == Bag;
+        }
+
+        static void Wrote(List<Tok> t, int i, bool member, Facts f, Origins o, ConsoleReading r)
+        {
+            string n = t[i].Text;
+            if (!member)
+            {
+                if (!f.Declared.Contains(n) && !InBody(t, i)) r.Changes = true;
+                return;
+            }
+            if (!LocalWrite(t, i - 2, f, o, r)) r.Changes = true;
+        }
+
+        static void StoreUse(List<Tok> t, int i, ConsoleReading r)
+        {
+            bool cookies = t[i].Text == "cookieStore";
+            bool changed = false;
+            if (Dot(t, i + 1) && i + 2 < t.Count && t[i + 2].Kind == Ident)
+            {
+                string m = t[i + 2].Text;
+                bool called = Called(t, i + 2);
+                changed = (called && (StoreWrites.Contains(m) || (cookies && m == "set"))) || (!called && (Assigned(t, i + 2) || PrefixUpdate(t, i + 2)));
+            }
+            else if (Is(t, i + 1, "["))
+            {
+                int c = Close(t, i + 1);
+                changed = c + 1 < t.Count && t[c + 1].Kind == Punct && AssignOps.Contains(t[c + 1].Text);
+            }
+            if (i > 0 && Word(t, Head(t, i) - 1, "delete")) changed = true;
+            if (cookies) { if (changed) r.CookiesChanged = true; else r.CookiesRead = true; }
+            else if (changed) r.StoreChanged = true;
+            else r.StoreRead = true;
+        }
+
+        static void Passed(List<Tok> t, int i, int index, Facts f, Origins o, ConsoleReading r)
+        {
+            List<KeyValuePair<int, int>> spans = ArgSpans(t, i);
+            if (index >= spans.Count) return;
+            int a = spans[index].Key, b = spans[index].Value;
+            if (b <= a || (b - a) % 2 == 0) return;
+            for (int j = a; j < b; j++)
+            {
+                bool name = (j - a) % 2 == 0;
+                if (name ? t[j].Kind != Ident || Plain.Contains(t[j].Text) : !Dot(t, j)) return;
+            }
+            string root = t[a].Text;
+            if (b - a == 1)
+            {
+                if (f.Declared.Contains(root)) { if (o.Kind(root) == OfPage) r.Call(root); return; }
+                if (GlobalCalls.Contains(root) || BuiltinCtors.Contains(root) || BuiltinObjs.Contains(root)) return;
+                r.Call(root);
+                return;
+            }
+            int end;
+            int kind = ValueKind(t, a, b - 1, f, o, 0, out end);
+            if (kind == Deep || kind == Fresh || kind == Native) return;
+            r.Call(Shown(t, b - 1));
+        }
+
+        static void MemberCalled(List<Tok> t, int i, string n, Facts f, Origins o, string site, ConsoleReading r)
+        {
+            string recv = i >= 2 && t[i - 2].Kind == Ident ? t[i - 2].Text : "";
+            if (TakesFunctionFirst.Contains(n)) Passed(t, i, 0, f, o, r);
+            if (TakesFunctionSecond.Contains(n)) Passed(t, i, 1, f, o, r);
+            if (n == "addEventListener") { r.Lingers = true; return; }
+            if (recv == "cookieStore")
+            {
+                if (n == "set" || n == "delete") r.CookiesChanged = true;
+                else r.CookiesRead = true;
+                return;
+            }
+            if ((n == "ajax" || n == "get" || n == "post" || n == "getJSON") && (recv == "$" || recv == "jQuery" || recv == "axios")) { r.Requests = true; AddressArg(t, i, 0, site, r); return; }
+            if (n == "sendBeacon") { r.Requests = true; AddressArg(t, i, 0, site, r); return; }
+            if (n == "open")
+            {
+                string verb;
+                if (Arg(t, i, 0, out verb) && verb != null && Verbs.Contains(verb.ToUpperInvariant()) && ArgCount(t, i) >= 2) { r.Requests = true; AddressArg(t, i, 1, site, r); return; }
+            }
+            if (n == "load" && ArgIsString(t, i, 0)) { r.Requests = true; AddressArg(t, i, 0, site, r); return; }
+            if (n == "setAttribute" || n == "setAttributeNS")
+            {
+                string attr;
+                int at = n == "setAttributeNS" ? 1 : 0;
+                if (Arg(t, i, at, out attr) && attr != null && LoadAttrs.Contains(attr.ToLowerInvariant())) { r.Requests = true; AddressArg(t, i, at + 1, site, r); }
+                r.Changes = true;
+                return;
+            }
+            if (PageChanges.Contains(n)) { r.Changes = true; return; }
+            if (recv == "classList" || recv == "relList" || recv == "part")
+            {
+                if (n == "add" || n == "remove" || n == "toggle" || n == "replace") r.Changes = true;
+                return;
+            }
+            if (recv == "customElements") { if (n == "define") r.Changes = true; return; }
+            if (recv == "searchParams") return;
+            if (recv == "Object")
+            {
+                if (n == "assign" || n == "freeze" || n == "seal" || n == "preventExtensions")
+                {
+                    List<KeyValuePair<int, int>> spans = ArgSpans(t, i);
+                    if (spans.Count == 0) return;
+                    int end;
+                    int target = ValueKind(t, spans[0].Key, spans[0].Value, f, o, 0, out end);
+                    if (!(end >= spans[0].Value && (target == Deep || target == Fresh || target == Bag))) r.Changes = true;
+                }
+                return;
+            }
+            if (Namespaces.Contains(recv) && !f.Declared.Contains(recv)) return;
+            int kind = ReceiverKind(t, i, f, o);
+            if (kind == Stored)
+            {
+                if (StoreWrites.Contains(n)) r.StoreChanged = true;
+                else r.StoreRead = true;
+                return;
+            }
+            if (ReadCalls.Contains(n) && !(kind == OfPage && Unfit(t, i, n))) return;
+            if (ReadWhenEmpty.Contains(n) && EmptyCall(t, i)) return;
+            bool mine = Word(t, i - 2, "this") || Word(t, i - 2, "super");
+            if (mine && o.Own(n) && Enclosed(t, i)) return;
+            if (kind == Deep || kind == Fresh || kind == Native) return;
+            if (kind == Bag && o.Own(n)) return;
+            if (n == "append" || PageVerbs.Contains(n))
+            {
+                if (kind != OfPage && !mine) r.Changes = true;
+                else if (!Flagged(t, i, r)) r.Call(Shown(t, i));
+                return;
+            }
+            if (!Flagged(t, i, r)) r.Call(Shown(t, i));
+        }
+
+        static bool Held(List<Tok> t, int i, Facts f, Origins o)
+        {
+            int kind = ReceiverKind(t, i, f, o);
+            if (kind == Deep || kind == Fresh || kind == Bag) return true;
+            return kind == OfPage && i >= 2 && IsMember(t, i - 2) && !Rooted(t, i, f);
+        }
+
+        static bool Rooted(List<Tok> t, int i, Facts f)
+        {
+            int at = i - 2;
+            if (at < 0 || t[at].Kind != Ident) return false;
+            if (!IsMember(t, at)) return !f.Declared.Contains(t[at].Text);
+            return at >= 2 && t[at - 2].Kind == Ident && WindowNames.Contains(t[at - 2].Text) && !IsMember(t, at - 2) && !f.Declared.Contains(t[at - 2].Text);
+        }
+
+        static bool Unfit(List<Tok> t, int i, string n)
+        {
+            if (!TakesFunctionFirst.Contains(n)) return false;
+            List<KeyValuePair<int, int>> spans = ArgSpans(t, i);
+            if (spans.Count == 0 || spans[0].Value <= spans[0].Key) return false;
+            Tok a = t[spans[0].Key];
+            return a.Kind == Str || a.Kind == Num || a.Kind == Tmpl || (a.Kind == Punct && (a.Text == "[" || a.Text == "{"));
+        }
+
+        static void BareCalled(List<Tok> t, int i, string n, Facts f, Origins o, ConsoleReading r)
+        {
+            if (TakesFunctionFirst.Contains(n)) Passed(t, i, 0, f, o, r);
+            if (Word(t, i - 1, "new")) return;
+            if (f.Declared.Contains(n)) { if (o.Kind(n) == OfPage) r.Call(n); return; }
+            if (GlobalCalls.Contains(n) || BuiltinCtors.Contains(n) || BuiltinObjs.Contains(n)) return;
+            r.Call(n);
+        }
+
+        static void Built(List<Tok> t, int i, Facts f, Origins o, ConsoleReading r)
+        {
+            int j = i + 1;
+            if (j >= t.Count || t[j].Kind != Ident) return;
+            string ctor = t[j].Text;
+            if (Dot(t, j + 1)) return;
+            if (Watchers.Contains(ctor)) { r.Lingers = true; return; }
+            if (BuiltinCtors.Contains(ctor) || f.Declared.Contains(ctor) && o.Kind(ctor) != OfPage) return;
+            r.Call("new " + ctor);
+        }
+
+        static void See(List<Tok> t, int i, Facts f, Origins o, string site, ConsoleReading r)
+        {
+            Tok k = t[i];
+            if (k.Kind == Str || k.Kind == Tmpl)
+            {
+                if (k.Text.IndexOf("url(", StringComparison.OrdinalIgnoreCase) < 0) return;
+                foreach (Match m in CssUrl.Matches(k.Text)) { r.Requests = true; Address(m.Groups[1].Value, true, site, r); }
+                return;
+            }
+            if (k.Kind == Punct)
+            {
+                if (k.Text == "]" && NumberIndex(t, i) && (Called(t, i) || GroupCalled(t, i)))
+                {
+                    int open = Opener(t, i), end;
+                    int s = Head(t, open - 1);
+                    if (ValueKind(t, s, open, f, o, 0, out end) != Deep) r.Call(open > 0 && t[open - 1].Kind == Ident ? Shown(t, open - 1) + "[" + t[open + 1].Text + "]" : "a list entry");
+                }
+                else if (AssignOps.Contains(k.Text) && Is(t, i - 1, "]"))
+                {
+                    int open = Opener(t, i - 1);
+                    if (open > 0 && MemberBase(t[open - 1]) && !(t[open - 1].Kind == Ident && Plain.Contains(t[open - 1].Text) && t[open - 1].Text != "this") && !LocalWrite(t, open - 1, f, o, r)) r.Changes = true;
+                }
+                else if ((k.Text == "++" || k.Text == "--") && i + 1 < t.Count && (t[i + 1].Kind == Ident || Is(t, i + 1, "(")) && (i == 0 || !MemberBase(t[i - 1])))
+                {
+                    int e = Is(t, i + 1, "(") ? Close(t, i + 1) : i + 1, guard = 0;
+                    while (e + 1 < t.Count && guard++ < 400 && (Dot(t, e + 1) || Is(t, e + 1, "[")))
+                        e = Dot(t, e + 1) ? e + 2 : Close(t, e + 1);
+                    if (e < t.Count && Is(t, e, "]"))
+                    {
+                        int open = Opener(t, e);
+                        if (open > 0 && !LocalWrite(t, open - 1, f, o, r)) r.Changes = true;
+                    }
+                }
+                return;
+            }
+            if (k.Kind != Ident) return;
+            string n = k.Text;
+            bool member = IsMember(t, i);
+            if (!member && Plain.Contains(n))
+            {
+                if (n == "new") Built(t, i, f, o, r);
+                else if (n == "delete")
+                {
+                    int e = i + 1, guard = 0;
+                    if (e >= t.Count || (t[e].Kind != Ident && !Is(t, e, "("))) return;
+                    if (Is(t, e, "(")) e = Close(t, e);
+                    while (e + 1 < t.Count && guard++ < 400 && (Dot(t, e + 1) || Is(t, e + 1, "[")))
+                        e = Dot(t, e + 1) ? e + 2 : Close(t, e + 1);
+                    if (e >= t.Count) return;
+                    if (Is(t, e, "]"))
+                    {
+                        int open = Opener(t, e);
+                        if (open > 0 && !LocalWrite(t, open - 1, f, o, r)) r.Changes = true;
+                    }
+                    else if (t[e].Kind == Ident && IsMember(t, e) && !LocalWrite(t, e - 2, f, o, r)) r.Changes = true;
+                }
+                return;
+            }
+            if (!member && (n == "of" || (n == "async" && FunctionAt(t, i)))) return;
+            if (Definition(t, i)) return;
+            bool called = Called(t, i) || GroupCalled(t, i);
+            bool written = !called && (Assigned(t, i) || PrefixUpdate(t, i) || (f.Targets[i] && !Indexing(t, i)));
+            if (!member && !f.Declared.Contains(n) && !Quiet.Contains(n) && !IsKey(t, i)) r.Looks = true;
+            if (n == "cookie") { if (written) r.CookiesChanged = true; else r.CookiesRead = true; return; }
+            if (Stores.Contains(n) || n == "cookieStore") { if (!(member && f.Declared.Contains(Receiver(t, i)))) { StoreUse(t, i, r); return; } }
+            if (n == "credentials" || n == "PasswordCredential" || n == "FederatedCredential") { r.SignIns = true; return; }
+            if (n == "FormData") { r.Fields = true; return; }
+            if (n == "value" && !written && (member ? !AttributeValue(t, i) && !Held(t, i, f, o) : ValueKey(t, i))) r.Fields = true;
+            if (n.IndexOf("password", StringComparison.OrdinalIgnoreCase) >= 0) r.Fields = true;
+            if ((n == "val" || n == "serialize" || n == "serializeArray") && member && called && EmptyCall(t, i)) { r.Fields = true; return; }
+            if (Senders.Contains(n) && !(member && n == "axios"))
+            {
+                r.Requests = true;
+                if (Addressed.Contains(n) && called) AddressArg(t, i, 0, site, r);
+                return;
+            }
+            if (!member && (n == "Image" || n == "Audio") && Word(t, i - 1, "new")) { r.Requests = true; return; }
+            if (Watchers.Contains(n)) { r.Lingers = true; return; }
+            if (n == "postMessage" && called) { r.Messages = true; return; }
+            if (n == "setInterval" && called) r.Lingers = true;
+            if ((n == "setTimeout" || n == "setImmediate") && called)
+            {
+                int open = CallOpen(t, i);
+                bool waits = open >= 0 && open + 2 < t.Count && t[open + 1].Kind == Ident && f.PromiseParams.Contains(t[open + 1].Text) && (Is(t, open + 2, ",") || Is(t, open + 2, ")"));
+                List<KeyValuePair<int, int>> spans = waits ? null : ArgSpans(t, i);
+                if (spans != null && spans.Count > 0)
+                    for (int j = spans[0].Key; j < spans[0].Value && !waits; j++)
+                        waits = t[j].Kind == Ident && f.PromiseParams.Contains(t[j].Text) && !IsMember(t, j) && Is(t, j + 1, "(");
+                if (!waits) r.Lingers = true;
+            }
+            if (written)
+            {
+                if (member && LoadProps.Contains(n) && Receiver(t, i) != "style")
+                {
+                    r.Requests = true;
+                    if (Is(t, i + 1, "=") && i + 2 < t.Count && (t[i + 2].Kind == Str || (t[i + 2].Kind == Tmpl && t[i + 2].Opens)))
+                        Address(t[i + 2].Text, (t[i + 2].Kind == Str || t[i + 2].Closes) && Ends(t, i + 2), site, r);
+                    else r.Unwritten = true;
+                }
+                if (member && Handler.IsMatch(n) && Is(t, i + 1, "=") && (FunctionAt(t, i + 2) || (i + 2 < t.Count && t[i + 2].Kind == Ident && !Plain.Contains(t[i + 2].Text)))) r.Lingers = true;
+                Wrote(t, i, member, f, o, r);
+                return;
+            }
+            if (!called) return;
+            if (member) MemberCalled(t, i, n, f, o, site, r);
+            else BareCalled(t, i, n, f, o, r);
         }
     }
 }

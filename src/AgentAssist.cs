@@ -113,6 +113,8 @@ namespace MinGent
             AddImplied("memory", Json.O("action", "list"), "recall", "list_memory", "read_memory", "get_memory", "view_memory", "memories", "list_memories", "memory_list", "memory_read", "show_memory");
             AddImplied("memory", Json.O("action", "remove"), "forget", "remove_memory", "delete_memory", "memory_remove", "memory_delete", "forget_fact");
             Add("analyze_audio", "audio_analysis", "analyse_audio", "analyze_sound", "analyse_sound", "audio_analyze", "audio_info", "audio_stats", "inspect_audio", "read_audio", "listen", "listen_audio", "listen_to_audio", "hear_audio", "audio_analyzer", "analyze_music", "analyze_song", "analyze_wav", "analyze_mp3", "waveform", "spectrogram", "get_audio_info", "audio_metadata", "measure_audio", "loudness", "detect_beats", "find_beats", "beat_track", "beat_tracking", "detect_tempo", "detect_onsets", "align_audio", "sync_audio", "compare_audio");
+            Add("browser_upload", "upload_file", "file_upload", "browser_file_upload", "browser_upload_file", "upload", "attach_file", "browser_attach_file", "set_input_files", "browser_set_files", "choose_file", "browser_choose_file");
+            Add("watch_video", "view_video", "see_video", "video_frames", "video_frame", "get_video_frames", "extract_frames", "video_screenshot", "video_screenshots", "watch", "analyze_video", "analyse_video", "look_at_video", "inspect_video", "browser_watch_video");
             Add("system_info", "sysinfo", "system_information", "get_system_info", "os_info", "environment_info", "machine_info", "get_environment", "env_info", "computer_info", "hardware_info", "pc_info", "get_os_info", "system_details");
             Add("app_read", "read_app", "read_window", "window_read", "desktop_read", "ui_read", "get_window", "list_windows", "inspect_window", "app_snapshot", "window_snapshot", "get_ui", "app_inspect", "read_ui", "get_window_elements", "app_elements");
             Add("app_screenshot", "window_screenshot", "desktop_screenshot", "app_capture", "screenshot_window", "capture_window", "app_screen", "screenshot_app");
@@ -526,6 +528,20 @@ namespace MinGent
             }
             else if (tool == "browser_click" || tool == "browser_hover" || tool == "browser_scroll" || tool == "app_click" || tool == "app_hover" || tool == "app_scroll")
                 PointInto(a, "x", "y", ref changed, "coordinate", "coordinates", "position", "point", "pos", "xy", "at", "location", "coords");
+            else if (tool == "app_screenshot")
+                Rename(a, "zoom", ref changed, "area", "region", "box", "rect", "crop", "zoom_area", "zoom_region");
+            else if (tool == "browser_upload")
+            {
+                Rename(a, "path", ref changed, "file", "file_path", "filepath", "filename", "files", "paths", "file_paths", "local_path");
+                Rename(a, "ref", ref changed, "element", "selector", "target", "input", "file_input");
+                Rename(a, "field", ref changed, "index", "number", "n", "which");
+            }
+            else if (tool == "watch_video")
+            {
+                Rename(a, "times", ref changed, "time", "timestamps", "timestamp", "moments", "moment", "at", "seconds", "positions");
+                Rename(a, "from", ref changed, "start", "start_time", "begin", "from_time", "start_at");
+                Rename(a, "to", ref changed, "end", "end_time", "until", "to_time", "end_at", "stop");
+            }
             else if (tool == "analyze_audio")
             {
                 Rename(a, "start", ref changed, "start_time", "from", "begin", "start_seconds", "start_sec", "offset", "from_seconds", "seek", "start_at", "t0");
@@ -2131,7 +2147,7 @@ namespace MinGent
             AnyTool = true;
             if (name == "todo_write" && o != null && !o.Error) Listed = true;
             if (name.StartsWith("app_", StringComparison.Ordinal)) LastFamily = "app";
-            else if (name.StartsWith("browser_", StringComparison.Ordinal)) LastFamily = "browser";
+            else if (name.StartsWith("browser_", StringComparison.Ordinal) || name == "watch_video") LastFamily = "browser";
             if (o == null) return;
             if (o.WaitsOnUser) WaitingOnUser = true;
             if ((o.WaitsOnUser || o.HostBlocked) && !string.IsNullOrEmpty(o.Host)) browserBlocked.Add(o.Host);
@@ -2250,9 +2266,12 @@ namespace MinGent
             return null;
         }
 
+        public string Told;
+
         public string EndOfTurn(string text, List<TodoItem> todos)
         {
             string t = (text ?? "").Trim();
+            Told = null;
             if (Nudges >= 4) return null;
             bool question = EndsWithQuestion(t);
             if (!AnyTool && refusal == 0 && t.Length > 0 && t.Length < 2500)
@@ -2263,6 +2282,7 @@ namespace MinGent
                     {
                         refusal++;
                         Nudges++;
+                        Told = "The agent said it can't do this itself, so MinGent reminded it of its tools.";
                         return "[MinGent] You can do this yourself. In this app you have tools to read and write files, run commands on this PC, search the web and use a browser, and the app asks the user for permission when it is needed. Use the tools to do what the user asked.";
                     }
                 }
@@ -2271,6 +2291,7 @@ namespace MinGent
             {
                 announce++;
                 Nudges++;
+                Told = "The agent said what it would do next but stopped, so MinGent asked it to carry on.";
                 return "[MinGent] Your message says you are about to do something, but you ended your turn without calling a tool. If you meant to continue, make the tool call now. If you are finished, give your final answer.";
             }
             if (!question && !WaitingOnUser && todo == 0 && todos != null)
@@ -2281,6 +2302,7 @@ namespace MinGent
                 {
                     todo++;
                     Nudges++;
+                    Told = "The checklist still has open items, so MinGent asked the agent to carry on.";
                     StringBuilder sb = new StringBuilder("[MinGent] Your checklist still has unfinished items:\n");
                     foreach (string s in open) sb.Append("- ").Append(s).Append('\n');
                     sb.Append("Continue working on them. If an item is no longer needed or cannot be done, update the checklist with todo_write and explain why in your answer.");
@@ -2291,6 +2313,7 @@ namespace MinGent
             {
                 verify++;
                 Nudges++;
+                Told = "MinGent asked the agent to test its changes before it finishes.";
                 List<string> names = new List<string>();
                 foreach (string p in unverified) { if (names.Count < 5) names.Add(System.IO.Path.GetFileName(p)); }
                 return "[MinGent] You changed code (" + string.Join(", ", names.ToArray()) + ") but did not run or test it after the last change. If it can be checked here, check it now the way a person would - run it, run its tests or build it, or open it in the browser - and fix any problems you find. If it cannot be checked here, say so in your final answer.";
@@ -2299,6 +2322,7 @@ namespace MinGent
             {
                 summary++;
                 Nudges++;
+                Told = "MinGent asked the agent to sum up what it did.";
                 return "[MinGent] Give the user a short final summary: what you changed (with file paths), how you checked it, and anything they still need to do.";
             }
             return null;
@@ -2346,7 +2370,7 @@ namespace MinGent
         static readonly HashSet<string> Reads = new HashSet<string>(StringComparer.Ordinal) {
             "read_file", "list_directory", "find_files", "search_text", "web_fetch", "web_search", "system_info", "analyze_audio" };
         static readonly HashSet<string> Live = new HashSet<string>(StringComparer.Ordinal) {
-            "command_status", "browser_read", "browser_screenshot", "browser_console", "app_read", "app_screenshot" };
+            "command_status", "browser_read", "browser_screenshot", "watch_video", "browser_console", "app_read", "app_screenshot" };
         static readonly HashSet<string> Inert = new HashSet<string>(StringComparer.Ordinal) { "todo_write", "open_in_editor" };
         static readonly HashSet<string> AppActions = new HashSet<string>(StringComparer.Ordinal) { "app_click", "app_type", "app_key", "app_scroll", "app_hover", "app_drag" };
         static readonly Regex ScriptName = new Regex(@"cmd-[0-9a-f]{12}\.ps1", RegexOptions.CultureInvariant);

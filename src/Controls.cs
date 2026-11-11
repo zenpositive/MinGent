@@ -1325,6 +1325,19 @@ namespace MinGent
             if (selected >= 0 && selected < items.Count) sel = selected;
         }
 
+        public void SetItems(string[] list, int selected)
+        {
+            items.Clear();
+            foreach (string name in list)
+            {
+                Choice c = new Choice();
+                c.Title = name ?? "";
+                items.Add(c);
+            }
+            sel = selected >= 0 && selected < items.Count ? selected : -1;
+            Invalidate();
+        }
+
         public void SetNote(int i, string note) { if (i >= 0 && i < items.Count) items[i].Note = note ?? ""; }
         public void SetBadge(int i, string badge) { if (i >= 0 && i < items.Count) items[i].Badge = badge ?? ""; }
 

@@ -27,6 +27,7 @@ namespace MinGent
         public int Task = -1;
         public List<MdRun> Runs = new List<MdRun>();
         public string Code = "", Lang = "";
+        public bool Open;
         public List<List<string>> Rows;
         public List<char> Align;
     }
@@ -73,11 +74,12 @@ namespace MinGent
                     int indent = f.Groups[1].Value.Length;
                     StringBuilder code = new StringBuilder();
                     i++;
+                    b.Open = true;
                     while (i < lines.Length)
                     {
                         string l = lines[i];
                         string t = l.TrimStart();
-                        if (t.StartsWith(fence) && t.Trim().Trim(fence[0]).Length == 0) { i++; break; }
+                        if (t.StartsWith(fence) && t.Trim().Trim(fence[0]).Length == 0) { i++; b.Open = false; break; }
                         if (code.Length > 0) code.Append('\n');
                         int lead = l.Length - l.TrimStart().Length;
                         code.Append(indent > 0 ? l.Substring(Math.Min(indent, lead)) : l);
@@ -692,7 +694,7 @@ namespace MinGent
         public bool NoSelect;
         public MBox Box;
         public int Base;
-        public const int KText = 0, KCodeSpan = 1, KCodeBlock = 2, KLine = 3, KCheck = 4, KCopy = 5, KQuoteBar = 6, KTableBorder = 7, KStrike = 8, KHeaderBand = 9, KMath = 10;
+        public const int KText = 0, KCodeSpan = 1, KCodeBlock = 2, KLine = 3, KCheck = 4, KCopy = 5, KQuoteBar = 6, KTableBorder = 7, KStrike = 8, KHeaderBand = 9, KMath = 10, KBar = 11, KSeg = 12, KDot = 13;
         public const int RFore = 0, RDim = 1, RLink = 2, RCodeFore = 3, RAccent = 4, RError = 5, RSyntax = 100;
     }
 
@@ -790,8 +792,14 @@ namespace MinGent
                             break;
                         }
                     case MdKind.Code:
-                        y = CodeBlock(g, b, width, y, f, th, L);
-                        break;
+                        {
+                            bool charted = string.Equals(b.Lang, Charts.Lang, StringComparison.OrdinalIgnoreCase) && width >= UI.S(220);
+                            ChartSpec chart = charted ? Charts.Parse(b.Code) : null;
+                            if (chart != null) y = Charts.Layout(g, chart, b.Code, width, y, f, L);
+                            else if (charted && b.Open && (b.Code.Trim().Length == 0 || b.Code.TrimStart()[0] == '{')) y = Charts.Pending(g, b.Code, width, y, f, L);
+                            else y = CodeBlock(g, b, width, y, f, th, L);
+                            break;
+                        }
                     case MdKind.Table:
                         y = Table(g, b, width, y, f, L);
                         break;
@@ -1615,6 +1623,30 @@ namespace MinGent
                     case DrawOp.KLine:
                         using (Pen p = new Pen(th.Border)) g.DrawLine(p, r.X, r.Y, r.Right, r.Y);
                         break;
+                    case DrawOp.KBar:
+                        using (SolidBrush fill = new SolidBrush(Charts.Shade(th, op.Tag))) g.FillRectangle(fill, r);
+                        break;
+                    case DrawOp.KSeg:
+                    case DrawOp.KDot:
+                        {
+                            SmoothingMode was = g.SmoothingMode;
+                            g.SmoothingMode = SmoothingMode.AntiAlias;
+                            Color shade = Charts.Shade(th, op.Tag);
+                            if (op.Kind == DrawOp.KDot)
+                            {
+                                using (SolidBrush fill = new SolidBrush(shade)) g.FillEllipse(fill, r);
+                            }
+                            else
+                            {
+                                using (Pen stroke = new Pen(shade, UI.S(2)))
+                                {
+                                    stroke.StartCap = stroke.EndCap = LineCap.Round;
+                                    g.DrawLine(stroke, r.X, op.Role == 1 ? r.Bottom : r.Y, r.Right, op.Role == 1 ? r.Y : r.Bottom);
+                                }
+                            }
+                            g.SmoothingMode = was;
+                            break;
+                        }
                     case DrawOp.KQuoteBar:
                         using (SolidBrush b = new SolidBrush(th.Border)) g.FillRectangle(b, r);
                         break;

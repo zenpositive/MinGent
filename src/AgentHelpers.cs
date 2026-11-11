@@ -211,7 +211,7 @@ namespace MinGent
             lock (gate)
             {
                 Steps++;
-                if (c != null && (c.Name ?? "").StartsWith("browser_", StringComparison.Ordinal)) BrowserCalls++;
+                if (c != null && ((c.Name ?? "").StartsWith("browser_", StringComparison.Ordinal) || c.Name == "watch_video")) BrowserCalls++;
                 current = "";
                 if (c != null) labels[c] = Short(label, 90);
                 else log.Append(Short(label, 90)).Append('\n');
@@ -439,6 +439,7 @@ namespace MinGent
             h.CustomInstructions = "";
             h.RunId = c.RunId;
             h.Sandbox = c.Sandbox;
+            h.SkillsFolder = c.SkillsFolder;
             return h;
         }
 
@@ -706,12 +707,13 @@ namespace MinGent
             rc.Name = "delegate";
             rc.SetArgs(Json.O("kind", "review", "task", task, "title", "an independent review of the changes"));
             ToolContext own = tc.CopyFor(rc);
+            ui.Notice(AgentSession.ReviewNext, 0);
             ui.ToolStart(rc, "Independent review of the changes");
             ToolOutcome o = Run(own, rc, "review", task, delegate (ToolOutcome x) { return ReviewNote(x, main.StopAsked); });
             ui.ToolEnd(rc, o);
-            if (o.Background) return "[MinGent] An independent reviewer (a helper that did not see your reasoning) is checking your changes in the background. When it is done, MinGent adds its report to the conversation: then check its points and give the user your final answer. If the user asks you to stop the review, call delegate with stop=\"review\".";
+            if (o.Background) return "[MinGent] An independent reviewer (a helper that did not see your reasoning) is checking your changes in the background. When it is done, MinGent adds its report to the conversation: then check its points and give the user your final answer. Until then, nothing you tell the user is your final answer: say that the review is still running. If the user asks you to stop the review, call delegate with stop=\"review\".";
             if (tc.Ct.IsCancelled) return null;
-            return ReviewNote(o, main.StopAsked);
+            return ReviewNote(o, main.StopAsked) ?? AgentSession.ReviewUnfinished(o);
         }
 
         static string ReviewNote(ToolOutcome o, bool stopped)
@@ -727,7 +729,7 @@ namespace MinGent
                 return AgentSession.ReviewIntro + report +
                        "\n\nThe user asked you to stop, so don't change anything because of this report. Tell them in a sentence or two what the review found, and leave it to them to decide.";
             return AgentSession.ReviewIntro + report +
-                   "\n\nCheck each point yourself before acting on it - the reviewer can be wrong. Fix the real problems and test again. Then give the user your final answer, including what the review found and what you fixed.";
+                   "\n\nCheck each point yourself before acting on it - the reviewer can be wrong. Fix the real problems and test again. Then give the user your final answer. It has to stand on its own: what you changed, how you checked it, what the review found and what you fixed.";
         }
     }
 

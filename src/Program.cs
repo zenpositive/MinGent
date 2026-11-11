@@ -12,9 +12,9 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("MinGent - an AI agent for Windows with its own notepad and browser")]
 [assembly: AssemblyProduct("MinGent")]
 [assembly: AssemblyCopyright("Built locally from source")]
-[assembly: AssemblyVersion("1.1.1.0")]
-[assembly: AssemblyFileVersion("1.1.1.0")]
-[assembly: AssemblyInformationalVersion("1.1.1 beta")]
+[assembly: AssemblyVersion("1.1.2.0")]
+[assembly: AssemblyFileVersion("1.1.2.0")]
+[assembly: AssemblyInformationalVersion("1.1.2 beta")]
 
 namespace MinGent
 {
@@ -248,6 +248,9 @@ namespace MinGent
         static extern bool AllowSetForegroundWindow(int pid);
         [DllImport("user32.dll")]
         static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
         [DllImport("user32.dll")]
         static extern bool SetProcessDPIAware();
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -502,7 +505,11 @@ namespace MinGent
         {
             try
             {
-                if (f.WindowState == FormWindowState.Minimized) f.WindowState = FormWindowState.Normal;
+                if (f.WindowState == FormWindowState.Minimized)
+                {
+                    try { ShowWindow(f.Handle, 9); } catch { }
+                    if (f.WindowState == FormWindowState.Minimized) f.WindowState = FormWindowState.Normal;
+                }
                 f.Activate();
                 SetForegroundWindow(f.Handle);
             }
