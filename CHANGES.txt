@@ -1,6 +1,67 @@
 MinGent - what changed
 ======================
 
+Version 1.1.3 beta
+- Using your PC: the agent can open a program by its Start menu name, such
+  as Calculator or Excel, and work in it. It does this when its file,
+  command and browser tools can't do the job, or when using the program is
+  the natural way. MinGent asks first and shows the agent's reason; the OK
+  lasts until the chat ends. Browsers, terminals and File Explorer are
+  refused with a pointer to the agent's own tools. Mail, chat, password
+  managers, money and remote-access programs and Windows' own tools are
+  never handed to the agent.
+- Seeing its windows together: a model that can see images can get all the
+  windows it may use in one picture, each where it is on the main screen.
+  Your other windows, the taskbar and the desktop are never in the picture.
+- "Programs you opened yourself" in Settings > Agent > Tools is now on, so
+  the agent can ask for a program you already have open. The asking is as
+  before: for each program, in each chat, also in Full auto, and the same
+  programs stay look-only or are never offered. The question now shows the
+  agent's reason, and names a Store app as the Start menu does. Switch it
+  off there if you don't want to be asked.
+- One answer per task: what the agent says before MinGent sends it back to
+  work (to test its changes, to finish its checklist, or for the
+  independent review) folds into the line of steps. The chat shows one
+  final answer instead of two or three messages that each read like the
+  end, and a click on the line still shows all of it.
+- One status line while it works: the second line, which showed a piece of
+  what the agent last wrote, is gone. What it writes on the way stays
+  inside the steps.
+- Independent review: a small change is reviewed by reading only when the
+  agent ran nothing or its checks ended well, so the reviewer asks you for
+  nothing. For bigger work it reads first and re-runs only the checks that
+  matter. It leaves the page that is open for you in the browser as it is.
+- Fewer needless reminders: an answer that says what the agent can do
+  ("I'm an AI agent that works on this PC"), or one like "I can't say which
+  is better for your use case", no longer counts as a refusal. An answer
+  that already says the code was not run is not sent back to be tested.
+- The agent and its helpers are told not to run a command for what the file
+  tools do, such as reading a file or counting lines, since those never
+  wait for your OK.
+- System tools the agent starts itself (the Store, Process Explorer, the
+  performance monitor and the like) are off limits to it, the same as when
+  you have them open. Nothing can be written into the Start menu folders.
+- Choosing a folder opens the Explorer-style folder window instead of the
+  small old tree: for a chat's folder, the default folder and the folder
+  for models.
+- When a saved API key is rejected, a new chat says the key was not
+  accepted and offers to check it, instead of the first-run screen.
+- A shortcut that Windows refuses is not kept: the old choice comes back
+  and Settings opens at the shortcuts.
+- A command picked from the / list with Enter no longer leaves a line
+  break in the message box.
+- An answered question shows its whole title again ("Ready to start?"); on
+  Windows it was cut to "R...".
+- Thought titles drop lead-ins such as "The user wants", so a title reads
+  "A bar chart", and keep the # of C#.
+- A scheduled task waits five minutes without input, instead of one,
+  before it takes over while a chat is open in front of you.
+- Settings > Scheduled: the hint for Day fits the chosen "How often", and
+  Delete is off for a task that isn't saved yet.
+- The question for a site no longer says "for this chat" above a button
+  that allows it once. When the agent is refused a program you had open,
+  it tells you which switch allows it.
+
 Version 1.1.2 beta
 - Skills: a skill is a how-to for a job that comes up again, written once as
   a Markdown file. Type / in the message box and your skills show up next to

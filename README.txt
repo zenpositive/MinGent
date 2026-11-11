@@ -22,7 +22,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.1.2 beta: it works, and it still has rough edges. Report
+This is version 1.1.3 beta: it works, and it still has rough edges. Report
 problems at https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -89,7 +89,7 @@ sign-ins. MinGent has none of that.
   Full auto asks nothing. The check reads the command; it can't see what a
   script does once it runs.
 To check a download, compare its SHA-256 with the one on the release page.
-In PowerShell: Get-FileHash .\MinGent-1.1.2-beta.zip
+In PowerShell: Get-FileHash .\MinGent-1.1.3-beta.zip
 
 
 YOUR OWN ICON
@@ -141,8 +141,9 @@ CHATS
 - While it works, one line under your message shows its face and what it is
   doing right now ("Reading parser.py", "Waiting for your OK"), with the
   step of the plan it is on next to it. While the model thinks, the line
-  says what the thought is about instead of just that it is thinking, and
-  what the agent last said to you shows under the line.
+  says what the thought is about instead of just that it is thinking.
+  Nothing else shows while it works: what the agent writes on the way stays
+  inside the steps.
   Click the line to open every step: its thoughts, the files it read, the
   exact lines it changed, the commands it ran and their output. When it is
   done the line sums it up ("Read 2 files, edited parser.py, ran 1 command
@@ -449,10 +450,15 @@ Helpers
   browser either. When a helper has used the browser, the agent reads the page
   again before it clicks or types there.
 - After the agent changes a lot of code, a reviewer checks the work before the
-  final answer (Settings > Agent > Tools to switch this off). When the agent
-  says it is done, the chat notes that the review comes next, so what the
-  agent wrote before it is not the final answer yet. The final answer comes
-  after the review and covers what the review found.
+  final answer (Settings > Agent > Tools to switch this off). What the agent
+  wrote before the review folds into the line of steps, with a note that the
+  review comes next, so the chat shows one answer: the final one, which
+  comes after the review and covers what the review found. The same happens
+  when MinGent sends the agent back to work, for example to test its
+  changes. A small change that the agent made without running anything is
+  reviewed by reading only, so the reviewer asks you for nothing. For bigger
+  work it reads first and re-runs only the checks that matter. It leaves a
+  page that is open for you in the browser as it is.
 - Each step a helper takes shows as a row under its card, while it works and
   later. If you send a message while a helper works, the helper keeps going
   in the background and the agent answers you; the report is added when the
@@ -477,8 +483,8 @@ Tools
 - Each tool's description takes room in the model's context, which matters
   with a small local model. Settings > Agent > Tools switches whole groups on
   or off and shows what each one costs: web search (about 200 tokens), the
-  browser (about 1,600), desktop programs (about 1,700) and helpers (about
-  250). Files, commands, sound files and planning are always on (about
+  browser (about 1,600), desktop programs (about 2,350) and helpers (about
+  350). Files, commands, sound files and planning are always on (about
   2,950). The browser and desktop-program tools also switch off by
   themselves when the model's context is under 16K and 24K tokens.
 - With web search and pages off, the agent still opens addresses on this PC
@@ -499,9 +505,9 @@ Scheduled tasks
 - A task runs while MinGent is open. Each run is a new chat named after the
   task. It starts when the agent is not busy and you are not in the middle
   of something in MinGent: no half-written message, no question waiting,
-  and MinGent either in the background or untouched for a minute. A run
-  that was missed while MinGent was closed is made up for once, the next
-  time it is open.
+  and MinGent either in the background or left alone for five minutes (one
+  minute when the chat on screen is empty). A run that was missed while
+  MinGent was closed is made up for once, the next time it is open.
 - A run works like a task you start yourself. In Ask mode it waits for your
   OK, and the window title and the taskbar button show that it is waiting.
 - A task works in the default folder or in the project you pick for it. When
@@ -510,7 +516,29 @@ Scheduled tasks
 - Only you can add or change scheduled tasks: the agent has no tool for it,
   so nothing it reads can set one up. They are saved on this PC only.
 
-Testing programs it builds
+Programs on your PC
+- The agent does a job with its file, command and browser tools when they
+  can do it. It uses programs on your PC when they can't, or when that is
+  the natural way: you talk about a program you have open, a job goes across
+  several programs, or something only shows in a program's window. It asks
+  for what the job needs before it starts, and the question shows its reason.
+- It can open a program by its name in the Start menu, such as Calculator
+  or Excel. MinGent asks first, except in Full auto. After your OK the agent
+  sees that program's windows and can click and type in them until the chat
+  ends, without a second question. Browsers, terminals and File Explorer are
+  refused with a pointer to the agent's own browser, command and file tools.
+  Mail, chat, password managers, money and remote-access programs and
+  Windows' own tools (Settings, the Store, the registry editor and the like)
+  are never handed to the agent: the ones MinGent knows by name are refused
+  before they open, and any other one stays out of the agent's reach after
+  it opens. A program that was already running belongs to you: the agent has
+  to ask for it (see "Programs you opened yourself" below).
+- With a model that can see images, it can see all the windows it may use
+  in one picture, each where it is on the main screen, to find its way
+  between them. The picture is put together from those windows only, each
+  read from the program itself. Your other windows, the taskbar and the
+  desktop are never in it, also where one of your windows is in front. To
+  click or type, it still reads the one window it works in.
 - It can start a desktop program it wrote, read its window (buttons, fields,
   menus), click and type in it like a person, and take screenshots (with models
   that can see images), also a close-up of one part of the window when
@@ -539,8 +567,8 @@ Testing programs it builds
   one you opened at the same moment, MinGent asks before the agent looks at
   it, also in Auto mode, unless you switched off "Starting and using other
   programs" in Settings > Safety. Programs that were already open stay off
-  limits, unless you switch on "Programs you opened yourself" (below).
-- Programs you opened yourself (Settings > Agent, off by default): the agent
+  limits until you allow one (next point).
+- Programs you opened yourself (Settings > Agent, on by default): the agent
   can list the programs you have open, by name only, and ask to use one.
   MinGent asks you for each program, once in each chat, even in Full auto,
   and the agent sees its windows only after you allow it. Browsers, File
