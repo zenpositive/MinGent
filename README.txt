@@ -22,7 +22,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.1.3 beta: it works, and it still has rough edges. Report
+This is version 1.1.4 beta: it works, and it still has rough edges. Report
 problems at https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -89,7 +89,7 @@ sign-ins. MinGent has none of that.
   Full auto asks nothing. The check reads the command; it can't see what a
   script does once it runs.
 To check a download, compare its SHA-256 with the one on the release page.
-In PowerShell: Get-FileHash .\MinGent-1.1.3-beta.zip
+In PowerShell: Get-FileHash .\MinGent-1.1.4-beta.zip
 
 
 YOUR OWN ICON
@@ -141,9 +141,11 @@ CHATS
 - While it works, one line under your message shows its face and what it is
   doing right now ("Reading parser.py", "Waiting for your OK"), with the
   step of the plan it is on next to it. While the model thinks, the line
-  says what the thought is about instead of just that it is thinking.
-  Nothing else shows while it works: what the agent writes on the way stays
-  inside the steps.
+  says "Thinking"; the thought itself is inside the steps.
+  Text shows in the chat only once it will stay there. Short notes the
+  agent writes on the way stay inside the steps, and so does an answer that
+  MinGent is about to send back for testing or for a review, so nothing
+  shows up and then goes away.
   Click the line to open every step: its thoughts, the files it read, the
   exact lines it changed, the commands it ran and their output. When it is
   done the line sums it up ("Read 2 files, edited parser.py, ran 1 command
@@ -449,16 +451,18 @@ Helpers
   Explorer or other programs' windows, and dev servers it starts don't open a
   browser either. When a helper has used the browser, the agent reads the page
   again before it clicks or types there.
-- After the agent changes a lot of code, a reviewer checks the work before the
-  final answer (Settings > Agent > Tools to switch this off). What the agent
-  wrote before the review folds into the line of steps, with a note that the
-  review comes next, so the chat shows one answer: the final one, which
-  comes after the review and covers what the review found. The same happens
-  when MinGent sends the agent back to work, for example to test its
-  changes. A small change that the agent made without running anything is
-  reviewed by reading only, so the reviewer asks you for nothing. For bigger
-  work it reads first and re-runs only the checks that matter. It leaves a
-  page that is open for you in the browser as it is.
+- After the agent changes a lot of code, a reviewer checks the work before
+  you get the answer (Settings > Agent > Tools to switch this off). The
+  agent's answer waits inside the line of steps while the review runs. When
+  the review finds nothing, that answer is shown as it is, and the line of
+  steps ends with "reviewed". When it finds problems, the agent fixes them
+  and writes a new answer about the whole task, so you never have to open
+  the steps to understand the answer. The same goes when MinGent sends the
+  agent back to work, for example to test its changes: the chat shows one
+  answer, the last one. A small change that the agent made without running
+  anything is reviewed by reading only, so the reviewer asks you for
+  nothing. For bigger work it reads first and re-runs only the checks that
+  matter. It leaves a page that is open for you in the browser as it is.
 - Each step a helper takes shows as a row under its card, while it works and
   later. If you send a message while a helper works, the helper keeps going
   in the background and the agent answers you; the report is added when the
@@ -482,10 +486,10 @@ Tools
   change. With a local model they run one after another.
 - Each tool's description takes room in the model's context, which matters
   with a small local model. Settings > Agent > Tools switches whole groups on
-  or off and shows what each one costs: web search (about 200 tokens), the
-  browser (about 1,600), desktop programs (about 2,350) and helpers (about
-  350). Files, commands, sound files and planning are always on (about
-  2,950). The browser and desktop-program tools also switch off by
+  or off and shows what each one costs: web search (about 150 tokens), the
+  browser (about 2,550), desktop programs (about 2,350) and helpers (about
+  350). Files, commands, sound files, planning and scheduling are always on
+  (about 3,500). The browser and desktop-program tools also switch off by
   themselves when the model's context is under 16K and 24K tokens.
 - With web search and pages off, the agent still opens addresses on this PC
   and your local network, such as a development server.
@@ -513,8 +517,13 @@ Scheduled tasks
 - A task works in the default folder or in the project you pick for it. When
   that folder can't be used (a drive that is not plugged in, a folder that
   was moved), the run is skipped and a chat with the task's name says so.
-- Only you can add or change scheduled tasks: the agent has no tool for it,
-  so nothing it reads can set one up. They are saved on this PC only.
+- You can also ask the agent to set one up ("every weekday at 8, check my
+  site and write what changed to site.md"). It can add, change, pause,
+  remove and list tasks. Before anything is saved, MinGent shows you the
+  task's name, when it runs and the whole instruction, and waits for your
+  OK - also in Full auto, so nothing the agent reads can set up a task
+  behind your back. Helpers can't schedule tasks. Tasks are saved on this
+  PC only.
 
 Programs on your PC
 - The agent does a job with its file, command and browser tools when they
@@ -525,14 +534,35 @@ Programs on your PC
 - It can open a program by its name in the Start menu, such as Calculator
   or Excel. MinGent asks first, except in Full auto. After your OK the agent
   sees that program's windows and can click and type in them until the chat
-  ends, without a second question. Browsers, terminals and File Explorer are
-  refused with a pointer to the agent's own browser, command and file tools.
-  Mail, chat, password managers, money and remote-access programs and
-  Windows' own tools (Settings, the Store, the registry editor and the like)
-  are never handed to the agent: the ones MinGent knows by name are refused
-  before they open, and any other one stays out of the agent's reach after
-  it opens. A program that was already running belongs to you: the agent has
-  to ask for it (see "Programs you opened yourself" below).
+  ends, without a second question. Browsers, terminals, File Explorer, mail
+  and chat programs and Windows' own tools (Settings, Task Manager, the
+  registry editor and the like) are restricted: the agent is refused, and
+  tells you about the "Restricted programs" switch (below) when you asked
+  for one of them. Password managers, money and remote-access programs, the
+  Store, Windows' sign-in and admin prompts, the Windows Security app and
+  MinGent itself are never handed to the agent: the ones MinGent knows by
+  name are refused before they open, and any other one stays out of the
+  agent's reach after it opens. A program that was already running belongs
+  to you: the agent has to ask for it (see "Programs you opened yourself"
+  below).
+- Restricted programs (Settings > Agent > Tools, off by default): switch
+  this on when you want the agent to work in your own browser, File
+  Explorer, a terminal, a code editor, a mail or chat program or one of
+  Windows' own tools. It still needs your OK for each program, in each chat,
+  also in Full auto, and the question says what is at stake: in your own
+  browser the agent can act on any site you are signed in to, in a terminal
+  its commands run without MinGent checking them, in a mail or chat program
+  it can send messages as you. For the web the agent keeps using its own
+  browser unless you ask for yours. A terminal or File Explorer window
+  has to be one you opened yourself; for its own commands the agent opens
+  its own terminal, where MinGent checks them. Password managers, money and
+  remote-access programs, the Store, Windows' sign-in and admin prompts,
+  the Windows Security app and MinGent itself stay off limits with the
+  switch on.
+- A program that runs as administrator, such as Task Manager, can't be
+  clicked or read by a program that doesn't, so it is out of the agent's
+  reach unless you start MinGent as administrator. The agent says so and
+  does the job another way, for example ending a program with a command.
 - With a model that can see images, it can see all the windows it may use
   in one picture, each where it is on the main screen, to find its way
   between them. The picture is put together from those windows only, each
@@ -557,9 +587,9 @@ Programs on your PC
   itself (the Windows key, Alt+Tab, Ctrl+Esc, Ctrl+Shift+Esc, PrintScreen) are
   refused, and pasting your clipboard into a program asks first, unless the
   clipboard still holds what the agent itself just copied.
-- It only ever controls programs started by its own commands while MinGent
-  runs, also in an earlier chat - never browsers, mail, chat, password
-  managers, remote-access tools or system tools - and it asks before using a
+- Without "Restricted programs", it only ever controls programs started by
+  its own commands while MinGent runs, also in an earlier chat - never
+  browsers, mail, chat or system tools - and it asks before using a
   program that is not part of the project in the workspace. Programs that
   Windows opens for one of its commands (Store apps such as Calculator, or a
   program opened through a file type) count as its own when they start while
@@ -573,12 +603,14 @@ Programs on your PC
   MinGent asks you for each program, once in each chat, even in Full auto,
   and the agent sees its windows only after you allow it. Browsers, File
   Explorer, terminals and code editors can only be looked at, because a
-  click there can run a script or a command. In any other program you
-  allow, the agent can do whatever the program can do, macros and scripts
-  included; the question says so. Mail, chat, AI chat apps, password
-  managers, money and remote-access programs, Windows' own settings and
-  security tools, and MinGent itself are never offered; MinGent knows them
-  by their program names, so check the name in the question. When a chat
+  click there can run a script or a command, and mail, chat, AI chat apps
+  and Windows' own tools are not offered - unless "Restricted programs" is
+  on. In any other program you allow, the agent can do whatever the program
+  can do, macros and scripts included; the question says so. Password
+  managers, money and remote-access programs, Windows' sign-in and admin
+  prompts, the Windows Security app and MinGent itself are never offered;
+  MinGent knows them by their program names, so check the name in the
+  question. When a chat
   that has read web content goes on to click or type in a program you
   allowed earlier, MinGent asks once more. The agent always says which of
   your windows it means, and MinGent doesn't rearrange them. Switching this

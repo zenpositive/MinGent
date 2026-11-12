@@ -1,6 +1,41 @@
 MinGent - what changed
 ======================
 
+Version 1.1.4 beta
+- The status line says what the agent is doing ("Thinking", "Reading
+  parser.py", "Writing the answer") and no longer shows the words of its
+  thoughts. Those are inside the steps.
+- No text that shows up and goes away again: text is shown in the chat only
+  once it will stay. Short notes before a step stay inside the steps, and an
+  answer that MinGent is about to send back for testing or for a review
+  waits there too.
+- The answer is about the task, also after a review. When the independent
+  review finds nothing, the agent's own answer is shown as it is and the
+  line of steps ends with "reviewed". When it finds problems, the agent
+  fixes them and writes a new answer about the whole task. You never have
+  to open the steps to understand the answer.
+- The agent can schedule tasks when you ask: add, change, pause, remove and
+  list. MinGent shows you the name, the time and the whole instruction and
+  waits for your OK before anything is saved, also in Full auto.
+- Restricted programs: a new switch in Settings > Agent > Tools, off by
+  default. With it on, the agent can work in your own browser, File
+  Explorer, terminals, code editors, mail and chat programs and Windows' own
+  tools when you ask for it, after your OK for each program in each chat.
+  With it off, the agent tells you about the switch instead of just saying
+  no. Password managers, money and remote-access programs, the Store,
+  Windows' sign-in and admin prompts, the Windows Security app and MinGent
+  itself stay off limits either way.
+- Task Manager and other programs that run as administrator: the agent now
+  says that Windows keeps them out of its reach and does the job another
+  way, for example ending a program with a command. Before, it opened Task
+  Manager and then could not find it.
+- The agent knows MinGent: it is told where README.txt is and which
+  Settings page has what, so it can answer how to set something up.
+- The web console is used only when a task needs it: for something the
+  other browser tools can't show, or when it takes clearly fewer steps.
+- The token figures for the tool groups in README.txt were out of date;
+  they now match what Settings shows.
+
 Version 1.1.3 beta
 - Using your PC: the agent can open a program by its Start menu name, such
   as Calculator or Excel, and work in it. It does this when its file,
