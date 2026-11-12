@@ -73,6 +73,7 @@ namespace MinGent
         RunChangeLog runLog;
         bool running;
         ChatItem curAssistant, curThinking, curActivity;
+        bool holdText;
         DateTime thinkingStart;
         readonly object qGate = new object();
         readonly List<UiEvent> queue = new List<UiEvent>();
@@ -830,6 +831,7 @@ namespace MinGent
                     ChatItem x = chat.Items[i];
                     if (x.Kind == ChatKind.User || x.Kind == ChatKind.Tool || x.Kind == ChatKind.Thinking || x.Kind == ChatKind.Activity) break;
                     if (x.Kind != ChatKind.Assistant || x.Streaming || x.Text.Trim().Length == 0) continue;
+                    if (x.Surfaced) break;
                     x.Draft = true;
                     it.Draft = true;
                     chat.Changed(x);
@@ -838,7 +840,20 @@ namespace MinGent
             chat.Add(it);
         }
 
-        void KeepAnAnswer()
+        int WorkAfter(int at)
+        {
+            int to = -1;
+            for (int i = at + 1; i < chat.Items.Count; i++)
+            {
+                ChatItem x = chat.Items[i];
+                if (x.Kind == ChatKind.Tool || x.Kind == ChatKind.Thinking || x.Under != null || (x.Kind == ChatKind.Notice && x.Draft)) to = i;
+            }
+            return to;
+        }
+
+        void KeepAnAnswer() { KeepAnAnswer(false); }
+
+        void KeepAnAnswer(bool trailing)
         {
             ChatItem draft = null;
             for (int i = chat.Items.Count - 1; i >= 0; i--)
@@ -847,11 +862,24 @@ namespace MinGent
                 if (x.Kind == ChatKind.User && !x.MidRun) break;
                 if (x.Kind != ChatKind.Assistant || x.Text.Trim().Length == 0) continue;
                 if (!x.Draft) return;
+                if (WorkAfter(i) > i)
+                {
+                    if (trailing) return;
+                    if (!x.Whole) continue;
+                }
                 draft = x;
                 break;
             }
             if (draft == null) return;
-            draft.Draft = false;
+            int at = chat.Items.IndexOf(draft), to = WorkAfter(at), from = at;
+            while (from > 0 && chat.Items[from - 1].Kind == ChatKind.Assistant && chat.Items[from - 1].Draft && chat.Items[from - 1].Whole) from--;
+            List<ChatItem> parts = chat.Items.GetRange(from, at - from + 1);
+            foreach (ChatItem x in parts) x.Draft = false;
+            if (to > at)
+            {
+                chat.Items.RemoveRange(from, parts.Count);
+                chat.Items.InsertRange(to - parts.Count + 1, parts);
+            }
             chat.Changed(draft);
         }
 
@@ -1798,6 +1826,7 @@ namespace MinGent
             runLog = new RunChangeLog();
             curAssistant = null;
             curThinking = null;
+            holdText = false;
             toolItems.Clear();
             planLater = false;
             foreach (ChatItem u in queued)
@@ -1874,6 +1903,8 @@ namespace MinGent
                     cfg.SideBySide = settings.AiSideBySide;
                     cfg.Sandbox = settings.AiSandbox && Sandbox.Supported;
                     cfg.OtherApps = appsOk && settings.AiOtherApps;
+                    cfg.RestrictedApps = appsOk && settings.AiRestrictedApps;
+                    AppControl.Unlocked = cfg.RestrictedApps;
                     if (!cfg.OtherApps) AppTool.ForgetGrants(sess);
                     if (browserOk) { browser.CaptchaMode = cfg.TryCaptchas; browser.AgentCanSee = cfg.Vision; }
                     cfg.CustomInstructions = settings.AiInstructions;
@@ -2116,6 +2147,7 @@ namespace MinGent
             public void Todos(List<TodoItem> items) { List<TodoItem> copy = new List<TodoItem>(items); Post(delegate { p.todo.SetItems(copy); p.ShowTask(copy); p.PerformLayout(); }); }
             public void Notice(string text, int kind) { Post(delegate { p.Notice(text, kind); }); }
             public void Usage(int used, int context) { Post(delegate { p.composer.SetUsage(used, context); }); }
+            public void Hold(bool on) { Post(delegate { p.holdText = on; }); }
 
             public UserAnswer AskUser(UserQuestion q, CancelToken ct)
             {
@@ -2311,6 +2343,7 @@ namespace MinGent
                 curAssistant = new ChatItem();
                 curAssistant.Kind = ChatKind.Assistant;
                 curAssistant.Streaming = true;
+                curAssistant.Draft = holdText && !replyFirst;
                 AddReply(curAssistant);
             }
             curAssistant.Text += d;
@@ -2333,9 +2366,11 @@ namespace MinGent
             EndThinking();
             if (curThinking != null && string.IsNullOrEmpty(curThinking.Text) && !string.IsNullOrEmpty(m.Reasoning)) { curThinking.Text = m.Reasoning; chat.Changed(curThinking); }
             string text = m.Text ?? "";
+            bool whole = m.ToolCalls == null || m.ToolCalls.Count == 0;
             if (curAssistant != null && curAssistant.Streaming)
             {
                 curAssistant.Streaming = false;
+                curAssistant.Whole = whole;
                 curAssistant.Text = text;
                 curAssistant.Speed = m.Speed;
                 curAssistant.FirstToken = m.FirstToken;
@@ -2351,6 +2386,8 @@ namespace MinGent
                 a.Speed = m.Speed;
                 a.FirstToken = m.FirstToken;
                 a.SpeedGuess = m.SpeedGuess;
+                a.Draft = holdText && !replyFirst;
+                a.Whole = whole;
                 AddReply(a);
             }
             curAssistant = null;
@@ -2375,6 +2412,7 @@ namespace MinGent
             foreach (ChatItem u in queued) if (u.InboxId > 0 && ids.Contains(u.InboxId)) read.Add(u);
             if (read.Count == 0) { CheckInbox(); return; }
             FinishStreaming();
+            KeepAnAnswer(true);
             curAssistant = null;
             curThinking = null;
             foreach (ChatItem u in read)
@@ -2443,6 +2481,7 @@ namespace MinGent
                 case "analyze_audio": return "wave";
                 case "watch_video": return "film";
                 case "browser_console": return "terminal";
+                case "schedule_task": return "history";
             }
             if (tool.StartsWith("browser_")) return "cursor";
             return "dot";

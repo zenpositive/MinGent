@@ -4532,6 +4532,7 @@ namespace MinGent
             {
                 return "Read the console of the page open in the browser (errors, warnings and logs), or run JavaScript in the page like in the developer tools, to look into it and debug it: " +
                        "variables, app state, storage, element details, or calling the page's own functions to test them. The value of the last expression comes back, and await works. " +
+                       "Use it only when the task needs it: for something the other browser tools can't show, or when it takes clearly fewer steps than they do. What the page says, read with browser_read. " +
                        "Never use it to click, type, press keys, scroll, submit forms, navigate or open windows: the other browser tools do that, and MinGent refuses such code. " +
                        "On a website, code runs as the signed-in user; if the user asks you to run some there, tell them that.";
             }
@@ -5044,6 +5045,7 @@ namespace MinGent
             l.Add(new OpenInEditorTool());
             l.Add(new ClosePaneTool());
             if (memory) l.Add(new MemoryTool());
+            if (contextTokens >= 16000) l.Add(new ScheduleTaskTool());
             l.Add(new SystemInfoTool());
             if (helpers && contextTokens >= 16000) l.Add(new DelegateTool(parallelHelpers));
             return l;

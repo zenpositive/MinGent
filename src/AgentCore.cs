@@ -226,6 +226,7 @@ namespace MinGent
         void Todos(List<TodoItem> items);
         void Notice(string text, int kind);
         void Usage(int used, int context);
+        void Hold(bool on);
     }
 
     class ToolOutcome
@@ -765,7 +766,7 @@ namespace MinGent
         public bool BrowserAllowed = true;
         public bool TryCaptchas;
         public bool SideBySide;
-        public bool Sandbox, OtherApps;
+        public bool Sandbox, OtherApps, RestrictedApps;
         public string CustomInstructions = "";
         public string GuidePath, Skills, SkillsFolder;
         public int RunId;
@@ -1261,6 +1262,12 @@ namespace MinGent
             }
         }
 
+        bool ReviewDue(ToolContext tc, RunCoach coach, bool reviewed, bool canDelegate)
+        {
+            if (!AutoReview || IsHelper || StopAsked || ReviewDeclined || Perms.Planning || reviewed || coach.Reviewed || !canDelegate) return false;
+            return coach.FilesChanged || (tc.Changes != null && (tc.Changes.Created.Count > 0 || tc.Changes.Originals.Count > 0));
+        }
+
         bool DeliverHelpers()
         {
             List<HelperJob> done = new List<HelperJob>();
@@ -1607,7 +1614,7 @@ namespace MinGent
             Pace pace = new Pace();
             bool compactedForOverflow = false;
             int overflowFits = 0;
-            bool reviewed = false;
+            bool reviewed = false, reviewAhead = false;
             bool finalTurn = FinalTurn, dropToolsOnFinal = false;
             int pauses = 0;
             FinalTurn = false;
@@ -1658,6 +1665,14 @@ namespace MinGent
                 if (thinkBoost > req.MaxTokens) req.MaxTokens = Math.Min(thinkBoost, Math.Max(req.MaxTokens, cfg.ContextTokens - estimate - 256));
                 LastToolCount = req.Tools.Count;
                 ui.Usage(estimate, cfg.ContextTokens);
+                if (!IsHelper)
+                {
+                    bool due = ReviewDue(tc, coach, reviewed, byName.ContainsKey("delegate"));
+                    if (due && !reviewAhead) reviewAhead = Helpers.WorthReview(this, tc);
+                    bool helping;
+                    lock (jobGate) helping = jobs.Count > 0;
+                    ui.Hold((due && reviewAhead) || helping || coach.MayRemind(canPlan && Perms.Planning || !coach.Listed ? null : Todos));
+                }
                 ui.Phase("Thinking");
                 Sink sink = new Sink();
                 sink.Ui = ui;
@@ -1828,11 +1843,12 @@ namespace MinGent
                         History.Add(cn);
                         continue;
                     }
-                    if (AutoReview && !IsHelper && !StopAsked && !ReviewDeclined && !Perms.Planning && !reviewed && !coach.Reviewed && (coach.FilesChanged || (tc.Changes != null && (tc.Changes.Created.Count > 0 || tc.Changes.Originals.Count > 0))) && byName.ContainsKey("delegate") && !ct.IsCancelled && !RunCoach.IsQuestion(r.Text))
+                    if (ReviewDue(tc, coach, reviewed, byName.ContainsKey("delegate")) && !ct.IsCancelled && !RunCoach.IsQuestion(r.Text))
                     {
                         reviewed = true;
-                        string review = Helpers.AutoReview(this, tc, ui, r.Text);
-                        if (review != null) coach.ReviewDone();
+                        bool clean;
+                        string review = Helpers.AutoReview(this, tc, ui, r.Text, out clean);
+                        if (review != null || clean) coach.ReviewDone();
                         if (review != null && !ct.IsCancelled)
                         {
                             Msg rv = new Msg("user", review);
@@ -2460,10 +2476,11 @@ namespace MinGent
         }
 
         public const string BackgroundDone = " that was working in the background is done";
-        public const string ReviewIntro = "[MinGent] An independent reviewer (a helper that did not see your reasoning) checked your changes before your final answer. The user was told that the review comes first and that what you said before it was not final. Its report:\n\n";
+        public const string ReviewIntro = "[MinGent] An independent reviewer (a helper that did not see your reasoning) checked your changes before your final answer. The user does not see what you wrote before it as the answer. Its report:\n\n";
         public const string EarlierReviewIntro = "[MinGent] Before your answer reaches the user, an independent reviewer (a helper that did not see your reasoning) checked your changes. Its report:\n\n";
         public const string ReviewNext = "Next: an independent review of the changes, then the final answer.";
         public const int AfterDraft = 4;
+        public const string ReviewLabel = "Independent review of the changes";
         public const string ReviewRunning = "The independent review is still running. The final answer comes after it.";
         public const string HelperRunning = "A helper is still working in the background. The final answer comes after its report.";
 
@@ -2471,7 +2488,7 @@ namespace MinGent
         {
             string why = ((o != null ? o.Text : null) ?? "").Replace("Error: ", "").Trim();
             if (why.Length > 200) why = why.Substring(0, 200) + "...";
-            return "[MinGent] The automatic review could not finish" + (why.Length > 0 ? " (" + why + ")" : "") + ". Give the user your final answer now, and say in it that the independent review did not finish.";
+            return "[MinGent] The automatic review could not finish" + (why.Length > 0 ? " (" + why + ")" : "") + ". The user does not see what you wrote before it as the answer, so give your final answer about the task now, and say in it that the independent review did not finish.";
         }
 
         const int StepWorth = 0, ReportWorth = 1, ReplyWorth = 2, UserWorth = 3, SummaryWorth = 4;
@@ -2819,7 +2836,17 @@ namespace MinGent
         {
             return string.Join("|", new string[] {
                 cfg.Model != null ? cfg.Model.Provider + ":" + cfg.Model.Id : "",
-                browser ? "b" : "", vision ? "v" : "", apps ? "a" : "", memory ? "m" : "", cfg.WebAllowed ? "w" : "", cfg.Sandbox ? "s" : "", apps && cfg.OtherApps ? "o" : "", cfg.CustomInstructions ?? "", cfg.ContextTokens < 16000 ? "small" : "" });
+                browser ? "b" : "", vision ? "v" : "", apps ? "a" : "", memory ? "m" : "", cfg.WebAllowed ? "w" : "", cfg.Sandbox ? "s" : "", apps && cfg.OtherApps ? "o" : "", apps && cfg.RestrictedApps ? "r" : "", cfg.CustomInstructions ?? "", cfg.ContextTokens < 16000 ? "small" : "" });
+        }
+
+        static string Guide()
+        {
+            try
+            {
+                string f = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "README.txt");
+                return System.IO.File.Exists(f) ? f : null;
+            }
+            catch { return null; }
         }
 
         public static string Build(AgentConfig cfg, PermissionState perms, string projectNotes, string memory, bool browser, bool vision, bool apps, bool memoryOn)
@@ -2873,6 +2900,15 @@ namespace MinGent
             if (!vision) sb.Append("- The current model cannot see images.\n");
             sb.Append("- Each user message starts with a line in square brackets with the date and time, the current workspace, Auto or Ask mode, and the open tabs when they changed. The app adds it; it is not part of what the user typed. The latest one is what applies now.\n\n");
 
+            sb.Append("# MinGent itself\n");
+            string guide = Guide();
+            sb.Append("- You run inside MinGent: this chat, Notes (a notepad), a built-in browser and Settings. When the user asks how MinGent works or how to set something up, don't guess");
+            if (guide != null) sb.Append(": its guide is ").Append(guide).Append(" (long, so find the part with search_text, then read it), and CHANGES.txt next to it says what each version changed");
+            sb.Append(".\n");
+            sb.Append("- You can't change Settings yourself: tell the user the page and the switch. Settings is in the chat list on the left.");
+            if (!small) sb.Append(" Its pages: General (looks, files, shortcuts, updates), Models (built-in engine, cloud keys), Agent (workspace, the user's instructions, skills, the Tools switches, behavior), Memory, Scheduled, Safety (what Auto asks about, sandbox) and Privacy (offline mode, logs, data).");
+            sb.Append("\n\n");
+
             sb.Append("# Tool tips\n");
             sb.Append("- Call several independent tools in one turn when you can, for example to read three files at once.");
             if (Helpers.Parallel(cfg)) sb.Append(" With this model, read_file, list_directory, find_files, search_text, web_fetch and system_info calls next to each other in one turn run at the same time, so ask for all the reads you need together.");
@@ -2901,10 +2937,13 @@ namespace MinGent
                 sb.Append("- Unsaved tabs have no file on disk: use the tab name as the path. Edits to open tabs show up at once, and the user can undo them.\n");
                 sb.Append("- After you make a sound file, check it with analyze_audio focus=listen before you call it done: it tells you the clicks, fades, pitch and tone you can't hear.\n");
                 if (browser) sb.Append("- Browser: browser_read lists links, buttons and fields with refs like e12. Use browser_click and browser_type with those refs, and read the page again after it changes. browser_click also does right, middle and double clicks and clicks with Ctrl or Shift held; browser_hover, browser_drag and browser_scroll (also inside lists and maps, and sideways) cover the rest of the mouse, and browser_press_key presses any key or shortcut. For just reading documentation, web_fetch is faster.\n");
-                if (browser) sb.Append("- browser_console reads the page's console and runs JavaScript in the page, only to look into it and debug it. Never use it for what the other browser_ tools do: clicking, typing, keys, scrolling, submitting or navigating.\n");
+                if (browser) sb.Append("- browser_console reads the page's console and runs JavaScript in the page, only to look into it and debug it, and only when the task needs that: for something the other browser tools can't show, or when it takes clearly fewer steps than they do. Never use it for what the other browser_ tools do: clicking, typing, keys, scrolling, submitting or navigating.\n");
                 sb.Append("- close_pane closes the browser, its console or the notes pane: when the user asks (set user_asked), or when you are done with a pane and it shows nothing the user needs.\n");
                 if (apps) sb.Append("- Desktop programs: app_read lists a window's controls with refs like a5 for app_click and app_type. It works for programs you started in this chat, including ones Windows opened for your command (Store apps such as Calculator). app_click also does right, middle and double clicks and clicks with Ctrl or Shift held; app_scroll, app_hover and app_drag cover the rest of the mouse, and app_key presses any key or shortcut.\n");
-                if (apps) sb.Append("- Using this PC: do the job with your file, command and browser tools when they can do it. Use programs on the PC when they can't, or when that is the natural way: the user talks about a program they have open, a job goes across several programs, or something only shows in a program's window. app_open starts a program by its Start menu name").Append(cfg.OtherApps ? ", app_access asks the user for a program they already have open (without app it lists them)" : "").Append(vision ? ", and screen_look shows the whole screen with the programs you may use" : "").Append(". Ask for what the job needs before you start on it, and say why.").Append(cfg.OtherApps ? " The user's browsers, File Explorer, terminals and code editors can only be looked at." : " Programs the user already has open are off limits until they switch on \"Programs you opened yourself\" in Settings > Agent > Tools; tell them when a job needs one.").Append("\n");
+                if (apps) sb.Append("- Using this PC: do the job with your file, command and browser tools when they can do it. Use programs on the PC when they can't, or when that is the natural way: the user talks about a program they have open, a job goes across several programs, or something only shows in a program's window. app_open starts a program by its Start menu name").Append(cfg.OtherApps ? ", app_access asks the user for a program they already have open (without app it lists them)" : "").Append(vision ? ", and screen_look shows the whole screen with the programs you may use" : "").Append(". Ask for what the job needs before you start on it, and say why.").Append(cfg.OtherApps ? "" : " Programs the user already has open are off limits until they switch on \"Programs you opened yourself\" in Settings > Agent > Tools; tell them when a job needs one.")
+                    .Append(cfg.RestrictedApps ? " The user has switched on \"Restricted programs\": when they ask for it, you may also use their browsers, File Explorer, terminals, code editors, mail and chat programs and Windows' own tools, each after their OK. For the web, still use your own browser unless they ask for theirs."
+                                               : (cfg.OtherApps ? " The user's browsers, File Explorer, terminals and code editors can only be looked at, and their mail and chat programs and Windows' own tools not at all," : " Browsers, File Explorer, terminals, mail and chat programs and Windows' own tools are off limits") + " until they switch on \"Restricted programs\" in Settings > Agent > Tools: when they ask you to use one of these, tell them about that switch.")
+                    .Append(Program.Elevated ? "\n" : " A program that runs as administrator, such as Task Manager, is out of reach: to end a program, use run_command.\n");
                 if (apps) sb.Append("- Terminals: use run_command for commands. Only when the user wants to watch, or for an interactive ssh session, open your own terminal window with run_command (Start-Process wt -ArgumentList '-w','new', or Start-Process powershell where Windows Terminal is missing) and work in it with app_read, app_type (enter=true) and app_key. MinGent checks each command before Enter runs it; give description, as with run_command, so the user sees what the command is for.\n");
                 sb.Append("- system_info describes this PC (Windows version, hardware, installed developer tools) without running anything.\n");
             }
@@ -2919,7 +2958,7 @@ namespace MinGent
                 sb.Append("  - kind \"general\" for a self-contained piece of work.\n");
                 sb.Append("- A helper can't see this conversation. Give it everything it needs: the goal, the files or addresses, constraints, and what to report back. Check what it reports before you rely on it.\n");
                 if (Helpers.Parallel(cfg)) sb.Append("- Several explore helpers called in one turn run at the same time. With background=true, an explore helper works while you carry on with other steps: its report is added to the conversation when it is done, and MinGent waits for it before your final answer.\n");
-                if (autoReview) sb.Append("- When you change a lot of code, MinGent has an independent reviewer check the work once you say it is done, before your final answer. MinGent tells the user that the review comes first and shows you its report; your final answer comes after that.\n");
+                if (autoReview) sb.Append("- When you change a lot of code, MinGent has an independent reviewer check the work once you say it is done. Write that message as your complete final answer: if the review finds no problems, the user gets it as it is. If it finds problems, MinGent shows you the report, and you fix them and answer again.\n");
                 sb.Append('\n');
             }
 

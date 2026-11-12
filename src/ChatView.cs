@@ -39,7 +39,7 @@ namespace MinGent
         public List<Rectangle> Tiles;
         public int TrayH;
         public string ContextLabel;
-        public bool Queued, MidRun, Running, Stopped, SpeedGuess, Draft;
+        public bool Queued, MidRun, Running, Stopped, SpeedGuess, Draft, Surfaced, Whole;
         public double Speed, FirstToken;
         public string Phase = "", CurrentTask = "";
         public ChatItem Group, Under, LastKid;
@@ -637,8 +637,10 @@ namespace MinGent
             {
                 ChatItem it = Items[i];
                 if (it.Under != null) { it.Group = act; it.Hidden = !act.Expanded; continue; }
-                if (it.Kind == ChatKind.Assistant && !it.Draft && it.Text.Trim().Length > 0 && Answer(i, e)) continue;
-                bool pinned = (it.Kind == ChatKind.Question && it.Decision >= 0 && (it.Question == null || !it.Question.Wait)) || (it.Kind == ChatKind.Assistant && !it.Draft && Substantial(it.Text));
+                bool said = it.Kind == ChatKind.Assistant && !it.Draft && it.Text.Trim().Length > 0;
+                if (said && !it.Surfaced && (Substantial(it.Text) || Asks(i, e))) it.Surfaced = true;
+                if (said && Answer(i, e) && (it.Surfaced || !act.Running)) continue;
+                bool pinned = (it.Kind == ChatKind.Question && it.Decision >= 0 && (it.Question == null || !it.Question.Wait)) || (said && it.Surfaced);
                 bool member = it.Kind == ChatKind.Tool || it.Kind == ChatKind.Thinking || it.Kind == ChatKind.Assistant || (it.Kind == ChatKind.Permission && it.Decision >= 0) ||
                               (it.Kind == ChatKind.Question && it.Decision >= 0) || pinned || (it.Kind == ChatKind.Notice && it.Draft);
                 if (!member) continue;
@@ -659,13 +661,24 @@ namespace MinGent
 
         static readonly System.Text.RegularExpressions.Regex Structured = new System.Text.RegularExpressions.Regex(@"(^|\n)[^\S\n]*(#{1,6}\s|[-*]\s|\d+[.)]\s|\||```)", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
-        static bool Substantial(string text)
+        public static bool Substantial(string text)
         {
             string t = (text ?? "").Trim();
             if (t.Length >= 400) return true;
             if (t.Length >= 40 && Structured.IsMatch(t)) return true;
             if (t.Length < 120) return false;
             return System.Text.RegularExpressions.Regex.Matches(t, @"[.!?](\s|$)").Count >= 3;
+        }
+
+        bool Asks(int i, int e)
+        {
+            for (int j = i + 1; j < e; j++)
+            {
+                ChatItem n = Items[j];
+                if (n.Kind == ChatKind.Notice) continue;
+                return n.Kind == ChatKind.Question && n.Decision < 0;
+            }
+            return false;
         }
 
         bool Answer(int i, int e)
@@ -1408,10 +1421,10 @@ namespace MinGent
             for (int i = Items.Count - 1; i >= 0; i--)
             {
                 ChatItem x = Items[i];
-                if (x.Kind == ChatKind.Assistant && x.Streaming && x.Text.Trim().Length > 0) { step = "Writing the answer"; return Glyphs.FaceWorking; }
+                if (x.Kind == ChatKind.Assistant && x.Streaming && (x.Surfaced || (x.Draft && Substantial(x.Text)))) { step = "Writing the answer"; return Glyphs.FaceWorking; }
                 if (x == a) break;
             }
-            if (last != null && last.Streaming && last.Kind == ChatKind.Thinking) { step = ThoughtTitle(last.Text) ?? "Working"; return Glyphs.FaceThinking; }
+            if (last != null && last.Streaming && last.Kind == ChatKind.Thinking) { step = "Thinking"; return Glyphs.FaceThinking; }
             step = a.Phase.Length > 0 ? a.Phase : "Working";
             int mood = step.StartsWith("Thinking") || step.StartsWith("Reading") ? Glyphs.FaceThinking : Glyphs.FaceWorking;
             if (step == "Thinking") step = "Working";
@@ -1443,12 +1456,13 @@ namespace MinGent
             tail = "";
             HashSet<string> read = new HashSet<string>(), edit = new HashSet<string>(), gone = new HashSet<string>(), sound = new HashSet<string>();
             int cmd = 0, search = 0, web = 0, browse = 0, list = 0, help = 0, video = 0, other = 0;
-            bool thought = false;
+            bool thought = false, reviewed = false;
             if (a.Members != null)
                 foreach (ChatItem m in a.Members)
                 {
                     if (m.Kind == ChatKind.Thinking) { thought = true; continue; }
                     if (m.Kind != ChatKind.Tool || (m.Status == 3 && m.Summary != "stopped")) continue;
+                    if (m.Status == 1 && m.Under == null && m.Label == AgentSession.ReviewLabel) { reviewed = true; continue; }
                     switch (m.Icon)
                     {
                         case "file": read.Add(FileKey(m.Label)); break;
@@ -1483,15 +1497,6 @@ namespace MinGent
             string s;
             if (parts.Count == 0)
             {
-                string about = null;
-                if (thought)
-                    for (int i = a.Members.Count - 1; i >= 0 && about == null; i--)
-                        if (a.Members[i].Kind == ChatKind.Thinking) about = ThoughtTitle(a.Members[i].Text);
-                if (about != null)
-                {
-                    tail = a.Stopped ? "stopped" : Secs(a.Seconds);
-                    return about;
-                }
                 s = thought ? "Thought for " + Secs(a.Seconds) : "Worked for " + Secs(a.Seconds);
                 tail = a.Stopped ? "stopped" : "";
             }
@@ -1500,7 +1505,7 @@ namespace MinGent
                 if (parts.Count > 3) parts.RemoveRange(3, parts.Count - 3);
                 s = string.Join(", ", parts.ToArray());
                 s = char.ToUpperInvariant(s[0]) + s.Substring(1);
-                tail = Secs(a.Seconds) + (a.Stopped ? "  \u00B7  stopped" : "");
+                tail = Secs(a.Seconds) + (a.Stopped ? "  \u00B7  stopped" : reviewed ? "  \u00B7  reviewed" : "");
             }
             return s;
         }

@@ -177,7 +177,7 @@ namespace MinGent
         string AccentChoice { get { return accentBox.SelectedIndex == 1 ? "windows" : "green"; } }
 
         public const string ResetPrompt = "Reset every setting to its default?\n\nEverything on these pages goes back to how MinGent comes. Your chats, memory, API keys, instructions, models and offline mode stay.";
-        SwitchRow offline, netLog, errorLog, lmUnload, engineUpdates, autoSave, openFiles, showThinking, sendContext, web, browserOn, guard, appsOn, sideBySide, memoryOn, helpersOn, autoReview, captcha, sandbox, otherApps;
+        SwitchRow offline, netLog, errorLog, lmUnload, engineUpdates, autoSave, openFiles, showThinking, sendContext, web, browserOn, guard, appsOn, sideBySide, memoryOn, helpersOn, autoReview, captcha, sandbox, otherApps, restrictedApps;
         readonly Dictionary<string, SwitchRow> autoAsk = new Dictionary<string, SwitchRow>();
         readonly List<string> pageTitles = new List<string>();
 
@@ -559,7 +559,8 @@ namespace MinGent
             browserOn = Switch(c, "Built-in browser", "Open pages, click, type and scroll in MinGent's own browser, which keeps its own sign-ins. " + Cap(Tokens(AgentToolbox.BrowserTools(true))) + "; off by itself when the model's context is under 16K.", s.AiBrowser);
             captcha = Switch(c, "Let the agent try CAPTCHAs (experimental)", "The agent tries to solve CAPTCHAs in its own browser and hands them to you after five failed tries. Off: CAPTCHAs are left to you.", s.AiCaptcha);
             appsOn = Switch(c, "Programs it starts itself", "Open programs from the Start menu, start the ones it builds, and read, click, type and scroll in them. A program from the Start menu, a Store app or one Windows opens for it needs your OK first, except in Full auto. " + Cap(Tokens(AgentToolbox.AppTools(true))) + "; off by itself under 24K.", s.AiApps);
-            otherApps = Switch(c, "Programs you opened yourself", "The agent can ask to use a program you already have open; you decide for each one, in each chat, even in Full auto. Browsers, File Explorer, terminals and code editors are look-only, and mail, chat, password managers, money and remote-access programs are never offered. Needs \"Programs it starts itself\". " + Cap(Tokens(new AppAccessTool())) + ".", s.AiOtherApps);
+            otherApps = Switch(c, "Programs you opened yourself", "The agent can ask to use a program you already have open; you decide for each one, in each chat, even in Full auto. Browsers, File Explorer, terminals and code editors are look-only, and mail and chat programs are not offered, unless \"Restricted programs\" is on. Needs \"Programs it starts itself\". " + Cap(Tokens(new AppAccessTool())) + ".", s.AiOtherApps);
+            restrictedApps = Switch(c, "Restricted programs", "On: when you ask for it, the agent can also click and type in your browsers, File Explorer, terminals, code editors, mail and chat programs and Windows' own tools, after your OK for each program in each chat, even in Full auto. Password managers, money and remote-access programs, Windows' sign-in and admin prompts and the Windows Security app stay off limits either way. Needs \"Programs it starts itself\".", s.AiRestrictedApps);
             sideBySide = Switch(c, "Put MinGent and the program side by side", "When a program the agent uses would cover MinGent, each gets half the screen until the program closes.", s.AiSideBySide);
             helpersOn = Switch(c, "Helper agents", "The agent hands focused tasks to helpers with a fresh context, which keeps its own context small. On a local model they run one at a time, which takes longer. " + Cap(Tokens(new DelegateTool(false))) + ".", s.AiHelpers);
             autoReview = Switch(c, "Review big changes", "When the agent changes a lot of code, a helper reviews the work before the final answer.", s.AiAutoReview);
@@ -957,6 +958,7 @@ namespace MinGent
             s.AiCaptcha = captcha.Checked;
             s.AiSandbox = sandbox.Checked;
             s.AiOtherApps = otherApps.Checked;
+            s.AiRestrictedApps = restrictedApps.Checked;
             s.Offline = offline.Checked;
             s.KeepNetLog = netLog.Checked;
             s.KeepErrorLog = errorLog.Checked;

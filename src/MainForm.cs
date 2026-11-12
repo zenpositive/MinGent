@@ -32,6 +32,7 @@ namespace MinGent
         public bool AiCaptcha;
         public bool AiSandbox;
         public bool AiOtherApps = true;
+        public bool AiRestrictedApps;
         public bool AiWebGuard = true;
         public bool AiWeb = true;
         public bool AiBrowser = true;
@@ -149,6 +150,7 @@ namespace MinGent
                         case "aiCaptcha": s.AiCaptcha = v == "1"; break;
                         case "aiSandbox": s.AiSandbox = v == "1"; break;
                         case "aiOpenApps": s.AiOtherApps = v == "1"; break;
+                        case "aiRestrictedApps": s.AiRestrictedApps = v == "1"; break;
                         case "aiWebGuard": s.AiWebGuard = v != "0"; break;
                         case "aiWeb": s.AiWeb = v != "0"; break;
                         case "aiBrowser": s.AiBrowser = v != "0"; break;
@@ -255,6 +257,7 @@ namespace MinGent
                 w("aiCaptcha", AiCaptcha ? "1" : "0");
                 w("aiSandbox", AiSandbox ? "1" : "0");
                 w("aiOpenApps", AiOtherApps ? "1" : "0");
+                w("aiRestrictedApps", AiRestrictedApps ? "1" : "0");
                 w("aiWebGuard", AiWebGuard ? "1" : "0");
                 w("aiWeb", AiWeb ? "1" : "0");
                 w("aiBrowser", AiBrowser ? "1" : "0");

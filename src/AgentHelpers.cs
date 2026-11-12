@@ -260,6 +260,7 @@ namespace MinGent
             Push(true);
         }
         public void Usage(int used, int context) { }
+        public void Hold(bool on) { }
     }
 
     class HelperJob
@@ -705,8 +706,31 @@ namespace MinGent
             return sb.ToString();
         }
 
-        public static string AutoReview(AgentSession main, ToolContext tc, IAgentUi ui, string finalText)
+        public static bool WorthReview(AgentSession main, ToolContext tc)
         {
+            int changed;
+            return ReviewTask(main, tc.Changes, tc.Cfg.Workspace, out changed) != null && changed >= 30;
+        }
+
+        public static bool Clean(ToolOutcome o)
+        {
+            if (o == null || o.Error || o.Background) return false;
+            string report = o.Text ?? "";
+            int cut = report.IndexOf("\n\n", StringComparison.Ordinal);
+            if (cut > 0) report = report.Substring(cut + 2);
+            foreach (string line in report.Split('\n'))
+            {
+                string t = line.Trim().TrimStart('*', '#', '_', '>', '-', ' ', '"', '\'');
+                if (t.Length == 0) continue;
+                if (t.StartsWith("Verdict", StringComparison.OrdinalIgnoreCase)) t = t.Substring(7).TrimStart(':', '*', '_', ' ', '"', '\'');
+                return t.StartsWith("Looks good", StringComparison.OrdinalIgnoreCase);
+            }
+            return false;
+        }
+
+        public static string AutoReview(AgentSession main, ToolContext tc, IAgentUi ui, string finalText, out bool clean)
+        {
+            clean = false;
             int changed;
             string task = ReviewTask(main, tc.Changes, tc.Cfg.Workspace, finalText, out changed);
             if (task == null || changed < 30) return null;
@@ -716,11 +740,12 @@ namespace MinGent
             rc.SetArgs(Json.O("kind", "review", "task", task, "title", "an independent review of the changes"));
             ToolContext own = tc.CopyFor(rc);
             ui.Notice(AgentSession.ReviewNext, AgentSession.AfterDraft);
-            ui.ToolStart(rc, "Independent review of the changes");
+            ui.ToolStart(rc, AgentSession.ReviewLabel);
             ToolOutcome o = Run(own, rc, "review", task, delegate (ToolOutcome x) { return ReviewNote(x, main.StopAsked); });
             ui.ToolEnd(rc, o);
             if (o.Background) return "[MinGent] An independent reviewer (a helper that did not see your reasoning) is checking your changes in the background. When it is done, MinGent adds its report to the conversation: then check its points and give the user your final answer. Until then, nothing you tell the user is your final answer: say that the review is still running. If the user asks you to stop the review, call delegate with stop=\"review\".";
             if (tc.Ct.IsCancelled) return null;
+            if (Clean(o)) { clean = true; return null; }
             return ReviewNote(o, main.StopAsked) ?? AgentSession.ReviewUnfinished(o);
         }
 
@@ -737,7 +762,7 @@ namespace MinGent
                 return AgentSession.ReviewIntro + report +
                        "\n\nThe user asked you to stop, so don't change anything because of this report. Tell them in a sentence or two what the review found, and leave it to them to decide.";
             return AgentSession.ReviewIntro + report +
-                   "\n\nCheck each point yourself before acting on it - the reviewer can be wrong. Fix the real problems and test again. Then give the user your final answer. It has to stand on its own: what you changed, how you checked it, what the review found and what you fixed.";
+                   "\n\nCheck each point yourself before acting on it - the reviewer can be wrong. Fix the real problems and test again. Then write your final answer. The user does not see your earlier answer or this report, so write it as the one answer they read: what you did for the task and the result, how you checked it, and anything they still need to do. You can mention the review in a sentence.";
         }
     }
 

@@ -112,6 +112,9 @@ namespace MinGent
             AddImplied("memory", Json.O("action", "add"), "remember", "save_memory", "add_memory", "memorize", "store_memory", "save_note", "update_memory", "write_memory", "memory_add", "remember_fact", "save_fact", "store_fact", "memory_save");
             AddImplied("memory", Json.O("action", "list"), "recall", "list_memory", "read_memory", "get_memory", "view_memory", "memories", "list_memories", "memory_list", "memory_read", "show_memory");
             AddImplied("memory", Json.O("action", "remove"), "forget", "remove_memory", "delete_memory", "memory_remove", "memory_delete", "forget_fact");
+            Add("schedule_task", "schedule", "scheduled_task", "scheduled_tasks", "schedule_job", "task_schedule", "set_schedule");
+            AddImplied("schedule_task", Json.O("action", "add"), "create_scheduled_task", "add_scheduled_task", "create_schedule", "schedule_create", "set_reminder", "create_reminder");
+            AddImplied("schedule_task", Json.O("action", "list"), "list_scheduled_tasks", "list_schedules", "get_scheduled_tasks");
             Add("analyze_audio", "audio_analysis", "analyse_audio", "analyze_sound", "analyse_sound", "audio_analyze", "audio_info", "audio_stats", "inspect_audio", "read_audio", "listen", "listen_audio", "listen_to_audio", "hear_audio", "audio_analyzer", "analyze_music", "analyze_song", "analyze_wav", "analyze_mp3", "waveform", "spectrogram", "get_audio_info", "audio_metadata", "measure_audio", "loudness", "detect_beats", "find_beats", "beat_track", "beat_tracking", "detect_tempo", "detect_onsets", "align_audio", "sync_audio", "compare_audio");
             Add("browser_upload", "upload_file", "file_upload", "browser_file_upload", "browser_upload_file", "upload", "attach_file", "browser_attach_file", "set_input_files", "browser_set_files", "choose_file", "browser_choose_file");
             Add("watch_video", "view_video", "see_video", "video_frames", "video_frame", "get_video_frames", "extract_frames", "video_screenshot", "video_screenshots", "watch", "analyze_video", "analyse_video", "look_at_video", "inspect_video", "browser_watch_video");
@@ -1004,6 +1007,22 @@ namespace MinGent
                 case "todo_write":
                     NormTodos(a, ref changed);
                     break;
+                case "schedule_task":
+                    {
+                        object act;
+                        a.TryGetValue("action", out act);
+                        string s = (act as string ?? "").Trim().ToLowerInvariant();
+                        string ns = s;
+                        if (s.Length == 0) ns = a.ContainsKey("prompt") || a.ContainsKey("time") ? "add" : "list";
+                        else if (s == "create" || s == "new" || s == "set" || s == "schedule" || s == "insert" || s == "save") ns = "add";
+                        else if (s == "update" || s == "edit" || s == "modify" || s == "reschedule") ns = "change";
+                        else if (s == "pause" || s == "disable" || s == "stop") { ns = "change"; if (!a.ContainsKey("on")) a["on"] = false; }
+                        else if (s == "resume" || s == "enable" || s == "start") { ns = "change"; if (!a.ContainsKey("on")) a["on"] = true; }
+                        else if (s == "delete" || s == "cancel" || s == "erase" || s == "del" || s == "rm" || s == "drop") ns = "remove";
+                        else if (s == "get" || s == "read" || s == "show" || s == "view" || s == "all" || s == "ls") ns = "list";
+                        if (ns != s || !(act is string)) { a["action"] = ns; changed = true; }
+                        break;
+                    }
                 case "memory":
                     {
                         object act;
@@ -2276,7 +2295,15 @@ namespace MinGent
         }
 
         public string Told;
-        const string Standalone = "The user no longer sees what you wrote above as the answer, so your final answer has to stand on its own.";
+        const string Standalone = "The user no longer sees what you wrote above as the answer, so your final answer has to stand on its own: what you did for the task and the result, not only what you did after this message.";
+
+        public bool MayRemind(List<TodoItem> todos)
+        {
+            if (Nudges >= 4 || WaitingOnUser) return false;
+            if (todo == 0 && todos != null)
+                foreach (TodoItem it in todos) if (it.Status != "completed") return true;
+            return verify == 0 && unverified.Count > 0 && !Denied;
+        }
 
         public string EndOfTurn(string text, List<TodoItem> todos)
         {
@@ -2394,6 +2421,7 @@ namespace MinGent
             if (name == "browser_console") return (Json.Str(args, "code") ?? "").Trim().Length > 0;
             if (Reads.Contains(name) || Live.Contains(name) || Inert.Contains(name)) return false;
             if (name == "memory") { string a = (Json.Str(args, "action") ?? "").ToLowerInvariant(); return a != "list" && a != "read"; }
+            if (name == "schedule_task") return (Json.Str(args, "action") ?? "list").Trim().ToLowerInvariant() != "list";
             return true;
         }
 

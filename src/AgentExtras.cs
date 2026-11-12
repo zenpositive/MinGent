@@ -328,6 +328,171 @@ namespace MinGent
         }
     }
 
+    class ScheduleTaskTool : AgentTool
+    {
+        public override string Name { get { return "schedule_task"; } }
+        public override string Description { get { return "Scheduled tasks: jobs MinGent starts by itself at a set time, each in a new chat that can't see this one, so write prompt as a complete instruction. Use it when the user asks for something to be done later or regularly. MinGent asks the user before it saves a change."; } }
+        public override Dictionary<string, object> Schema
+        {
+            get
+            {
+                Dictionary<string, object> act = P("string", "What to do");
+                act["enum"] = Json.A("add", "change", "remove", "list");
+                Dictionary<string, object> rep = P("string", "How often");
+                rep["enum"] = Json.A("daily", "weekdays", "weekly", "monthly", "once");
+                return Obj("action", act, true, "name", P("string", "Task name; an existing one for change and remove"), false, "prompt", P("string", "The instruction to run"), false,
+                    "repeat", rep, false, "time", P("string", "Such as 08:30"), false, "day", P("string", "weekly: weekday; monthly: 1-31; once: date like 2026-12-24"), false,
+                    "folder", P("string", "Work folder; the default folder when left out"), false, "on", P("boolean", "false pauses it"), false);
+            }
+        }
+        public override string Label(Dictionary<string, object> a)
+        {
+            string act = (S(a, "action") ?? "list").Trim().ToLowerInvariant(), n = (S(a, "name") ?? "").Replace('\n', ' ').Trim();
+            if (n.Length > 40) n = n.Substring(0, 40) + "\u2026";
+            return act == "add" ? "Schedule a task: " + n : act == "change" ? "Change the scheduled task " + n : act == "remove" ? "Remove the scheduled task " + n : "List the scheduled tasks";
+        }
+
+        static string Line(ScheduledTask t, DateTime now)
+        {
+            DateTime next = t.On ? Schedule.Next(t, t.LastRun > t.Created ? t.LastRun : t.Created) : DateTime.MaxValue;
+            if (next != DateTime.MaxValue && next < now) next = now;
+            string p = t.Prompt.Replace("\r", "").Replace("\n", " ").Trim();
+            return "- \"" + t.Name + "\": " + Schedule.When(t) + (t.On ? "" : ", paused") + (next == DateTime.MaxValue ? (t.On ? ", no run left" : "") : ", next run " + next.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)) +
+                   (string.IsNullOrEmpty(t.Folder) ? "" : ", in " + t.Folder) + ". It does: " + (p.Length > 300 ? p.Substring(0, 300) + "..." : p) + "\n";
+        }
+
+        static ScheduledTask Find(List<ScheduledTask> tasks, string name, out string wrong)
+        {
+            wrong = null;
+            foreach (ScheduledTask t in tasks) if (string.Equals(t.Name.Trim(), name, StringComparison.OrdinalIgnoreCase)) return t;
+            List<ScheduledTask> hits = new List<ScheduledTask>();
+            foreach (ScheduledTask t in tasks) if (t.Name.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0) hits.Add(t);
+            if (hits.Count == 1) return hits[0];
+            StringBuilder sb = new StringBuilder();
+            foreach (ScheduledTask t in hits.Count > 1 ? hits : tasks) sb.Append(sb.Length > 0 ? ", " : "").Append('"').Append(t.Name).Append('"');
+            wrong = hits.Count > 1 ? "Several scheduled tasks match \"" + name + "\": " + sb + ". Use the full name." : tasks.Count == 0 ? "There are no scheduled tasks yet." : "No scheduled task is named \"" + name + "\". The tasks are: " + sb + ".";
+            return null;
+        }
+
+        public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
+        {
+            string act = (S(a, "action") ?? "list").Trim().ToLowerInvariant();
+            DateTime now = DateTime.Now;
+            List<ScheduledTask> tasks = Schedule.Load();
+            if (act == "list")
+            {
+                if (tasks.Count == 0) return ToolOutcome.Ok("There are no scheduled tasks.", "none");
+                StringBuilder sb = new StringBuilder("It is " + now.ToString("dddd yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " on this PC.\n");
+                foreach (ScheduledTask each in tasks) sb.Append(Line(each, now));
+                return ToolOutcome.Ok(sb.ToString(), tasks.Count + (tasks.Count == 1 ? " task" : " tasks"));
+            }
+            if (act != "add" && act != "change" && act != "remove") return ToolOutcome.Fail("action must be add, change, remove or list");
+            string name = Regex.Replace((S(a, "name") ?? "").Replace("\r", " ").Replace("\n", " "), @"\s+", " ").Trim();
+            if (name.Length == 0) return ToolOutcome.Fail("name is required");
+            if (name.Length > 60) return ToolOutcome.Fail("keep the name under 60 characters");
+            string wrong;
+            ScheduledTask was = Find(tasks, name, out wrong);
+            if (act == "add" && was != null && string.Equals(was.Name.Trim(), name, StringComparison.OrdinalIgnoreCase)) return ToolOutcome.Fail("A scheduled task named \"" + was.Name + "\" already exists. Change it with action \"change\", or pick another name.");
+            if (act == "add") was = null;
+            else if (was == null) return ToolOutcome.Fail(wrong);
+            if (act == "add" && tasks.Count >= Schedule.Most) return ToolOutcome.Fail("There is room for " + Schedule.Most + " scheduled tasks, and all are in use. The user can delete one in Settings > Scheduled.");
+            ScheduledTask t = was != null ? was.Copy() : new ScheduledTask();
+            PermissionState ps = ctx.Session.Perms;
+            PermissionAsk ask = new PermissionAsk();
+            ask.Kind = "schedule";
+            ask.EvenInFull = true;
+            ask.AllowRemember = false;
+            ask.Category = "";
+            if (act != "remove")
+            {
+                if (was == null) t.Name = name;
+                string prompt = (S(a, "prompt") ?? "").Replace("\r\n", "\n").Trim();
+                if (prompt.Length > 4000) return ToolOutcome.Fail("keep the prompt under 4000 characters");
+                if (prompt.Length > 0) t.Prompt = prompt;
+                string repeat = (S(a, "repeat") ?? "").Trim().ToLowerInvariant();
+                if (repeat.Length > 0)
+                {
+                    if (Array.IndexOf(Schedule.Kinds, repeat) < 0) return ToolOutcome.Fail("repeat must be daily, weekdays, weekly, monthly or once");
+                    t.Kind = repeat;
+                }
+                else if (was == null) return ToolOutcome.Fail("repeat is required: daily, weekdays, weekly, monthly or once");
+                string time = (S(a, "time") ?? "").Trim();
+                int hour, minute;
+                if (time.Length > 0)
+                {
+                    if (!Schedule.TryTime(time, out hour, out minute)) return ToolOutcome.Fail("time is a time of day such as 08:00 or 17:30");
+                    t.Hour = hour;
+                    t.Minute = minute;
+                }
+                else if (was == null) return ToolOutcome.Fail("time is required, such as 08:00");
+                string day = (S(a, "day") ?? "").Trim();
+                bool needsDay = t.Kind == ScheduledTask.Weekly || t.Kind == ScheduledTask.Monthly || t.Kind == ScheduledTask.Once;
+                if (day.Length > 0 || (needsDay && (was == null || was.Kind != t.Kind)))
+                {
+                    string bad = Schedule.SetDay(t, day);
+                    if (bad != null) return ToolOutcome.Fail(bad.Replace("Day is", "day is") + " It is " + now.ToString("dddd yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " on this PC.");
+                }
+                if (a != null && a.ContainsKey("folder"))
+                {
+                    string folder = (S(a, "folder") ?? "").Trim();
+                    if (folder.Length > 0)
+                    {
+                        string clean = Projects.Clean(folder);
+                        string no = Projects.Check(folder);
+                        if (clean == null || no != null) return ToolOutcome.Fail("The folder can't be used for a scheduled task: " + (no ?? "MinGent can't use that as a folder."));
+                        folder = clean;
+                    }
+                    t.Folder = folder;
+                }
+                if (a != null && a.ContainsKey("on")) t.On = B(a, "on", true);
+                else if (was == null) t.On = true;
+                bool moved = was == null || was.Kind != t.Kind || was.Hour != t.Hour || was.Minute != t.Minute || was.Day != t.Day || was.Date != t.Date || (t.On && !was.On);
+                if (moved && t.Kind == ScheduledTask.Once) t.LastRun = DateTime.MinValue;
+                string check = Schedule.Check(t, moved ? now : DateTime.MinValue);
+                if (check != null) return ToolOutcome.Fail(check + " It is " + now.ToString("dddd yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " on this PC.");
+                if (moved) t.Created = now;
+                ask.Title = was == null ? "Schedule a task: " + t.Name : "Change the scheduled task \"" + t.Name + "\"";
+                ask.Summary = Schedule.When(t) + (t.On ? "" : " (paused)") + (string.IsNullOrEmpty(t.Folder) ? "" : ", in " + t.Folder);
+                ask.Detail = t.Prompt;
+                ask.Reason = "MinGent will start this task by itself at that time, in a new chat, and do what is written here. Settings > Scheduled shows all tasks.";
+            }
+            else
+            {
+                ask.Title = "Remove the scheduled task \"" + was.Name + "\"";
+                ask.Summary = Schedule.When(was);
+                ask.Detail = was.Prompt;
+                ask.Reason = "The task will no longer run.";
+            }
+            if (ps.WebGuard && ps.Tainted) ask.Reason += " This chat has read web content (" + ps.TaintSource + "), so make sure a page didn't slip in this request.";
+            ask.Key = "schedule:" + act + ":" + (was != null ? was.Id : name.ToLowerInvariant()) + ":" + (t.Prompt + "|" + Schedule.When(t) + "|" + t.On + "|" + t.Folder).GetHashCode().ToString(CultureInfo.InvariantCulture);
+            if (!ctx.Approve(ask))
+            {
+                ToolOutcome d = ToolOutcome.Fail("The user did not allow this change to the scheduled tasks. Don't set it up another way; ask the user what they want instead.");
+                d.Denied = true;
+                d.Summary = "Not allowed";
+                return d;
+            }
+            tasks = Schedule.Load();
+            int at = was == null ? -1 : tasks.FindIndex(delegate (ScheduledTask x) { return x.Id == was.Id; });
+            if (was != null && at < 0) return ToolOutcome.Fail("The task \"" + was.Name + "\" is no longer there; it was removed in the meantime.");
+            if (act == "remove") tasks.RemoveAt(at);
+            else if (was == null)
+            {
+                if (tasks.Count >= Schedule.Most) return ToolOutcome.Fail("There is room for " + Schedule.Most + " scheduled tasks, and all are in use.");
+                t.Id = Guid.NewGuid().ToString("N");
+                tasks.Add(t);
+            }
+            else
+            {
+                if (tasks[at].LastRun > t.LastRun && t.LastRun != DateTime.MinValue) t.LastRun = tasks[at].LastRun;
+                tasks[at] = t;
+            }
+            if (!Schedule.Save(tasks)) return ToolOutcome.Fail("MinGent could not save the scheduled tasks.");
+            if (act == "remove") return ToolOutcome.Ok("Removed the scheduled task \"" + was.Name + "\".", "Removed");
+            return ToolOutcome.Ok((was == null ? "Scheduled. " : "Changed. ") + Line(t, now).Substring(2).TrimEnd() + "\nIt runs only while MinGent is open, and waits until the user is not in the middle of something. The user can change it in Settings > Scheduled.", was == null ? "Scheduled" : "Changed");
+        }
+    }
+
     class SystemInfoTool : AgentTool
     {
         public override string Name { get { return "system_info"; } }
@@ -865,8 +1030,8 @@ namespace MinGent
         public int Pid;
         public string Title = "", Process = "", Class = "";
         public Rectangle Rect;
-        public bool Adopted, Terminal, Granted;
-        public string Tier = AppTier.Full;
+        public bool Adopted, Terminal, Granted, Veiled, Barred;
+        public string Tier = AppTier.Full, Behind = "";
         public int Id;
 
         public string Ref(List<AppWindow> all) { return "w" + (Id > 0 ? Id : all.IndexOf(this) + 1).ToString(CultureInfo.InvariantCulture); }
@@ -887,6 +1052,7 @@ namespace MinGent
     {
         public string Exe = "", Process = "", Name = "", Tier = AppTier.Full;
         public int Windows;
+        public bool Admin;
     }
 
     class AppElement
@@ -1030,11 +1196,13 @@ namespace MinGent
             "browser", "floorp", "zen", "palemoon", "basilisk", "seamonkey", "maxthon", "whale", "epic", "duckduckgo", "sidekick", "comet", "ladybird", "mullvadbrowser",
             "iron", "slimjet", "chrome_proxy", "avastbrowser", "avgbrowser", "ccleanerbrowser", "dragon", "cent", "min", "ungoogled-chromium", "supermium", "mercury" };
 
-        static readonly HashSet<string> Private = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+        static readonly HashSet<string> Messaging = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
             "outlook", "olk", "hxoutlook", "thunderbird", "mailbird", "em client", "mailclient", "teams", "ms-teams", "slack", "discord", "telegram", "whatsapp", "signal", "skype", "zoom", "messenger",
             "claude", "chatgpt", "copilot", "perplexity", "lm studio", "jan", "msty", "anythingllm", "chatbox", "gpt4all", "ollama app",
             "element", "viber", "line", "kakaotalk", "wechat", "weixin", "qq", "threema", "wire", "session", "mattermost", "rocket.chat", "zulip", "lync", "jitsi meet",
-            "beeper", "ferdium", "franz", "rambox", "discordptb", "discordcanary", "whatsapp.root", "telegramdesktop", "skypeapp",
+            "beeper", "ferdium", "franz", "rambox", "discordptb", "discordcanary", "whatsapp.root", "telegramdesktop", "skypeapp" };
+
+        static readonly HashSet<string> Vault = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
             "msrdc", "rdcman", "mremoteng", "vmconnect", "virtualboxvm", "virtualbox", "vmware", "vmplayer", "royalts", "remotedesktopmanager", "remotedesktopmanager64",
             "termius", "mobaxterm", "securecrt", "xshell", "winscp", "filezilla", "nxplayer", "moonlight", "logmein", "ultraviewer", "remotepc", "aa_v3", "ammyy_admin",
             "dwagent", "screenconnect.windowsclient", "connectwisecontrol.client", "bomgar-scc", "g2mui", "zohoassist",
@@ -1042,7 +1210,38 @@ namespace MinGent
             "bitcoin-qt", "monero-wallet-gui", "electrum-ltc",
             "keepass", "keepassxc", "1password", "bitwarden", "lastpass", "dashlane", "enpass", "roboform", "nordpass", "proton pass", "keeper",
             "mstsc", "teamviewer", "teamviewer_service", "anydesk", "rustdesk", "parsec", "vncviewer", "tvnviewer", "remoting_host", "quickassist", "msra", "splashtop", "supremo",
-            "exodus", "electrum", "ledger live", "trezor suite", "metamask" };
+            "exodus", "electrum", "ledger live", "trezor suite", "metamask", "winstore.app", "phoneexperiencehost" };
+
+        static readonly HashSet<string> Guard = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+            "consent", "credentialuibroker", "lockapp", "logonui", "securityhealthsystray", "securityhealthhost", "windowsdefender", "msmpeng", "sechealthui",
+            "useraccountcontrolsettings", "mingent", "justpad" };
+
+        static readonly HashSet<string> RemoteTerminals = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "putty", "kitty" };
+
+        static readonly HashSet<string> Private = Both(Messaging, Vault);
+
+        static HashSet<string> Both(HashSet<string> x, HashSet<string> y)
+        {
+            HashSet<string> all = new HashSet<string>(x, StringComparer.OrdinalIgnoreCase);
+            all.UnionWith(y);
+            return all;
+        }
+
+        public static volatile bool Unlocked;
+        public const string Switch = "\"Restricted programs\" in Settings > Agent > Tools";
+        public const string LockedNote = " The user can allow it with the switch " + Switch + ": if they asked you to use this program, tell them about that switch, and don't work around it.";
+
+        public static bool Hard(string process)
+        {
+            string p = process ?? "";
+            return Vault.Contains(p) || Guard.Contains(p) || SystemHosts.Contains(p);
+        }
+
+        public static bool Limited(string process, string cls)
+        {
+            string p = process ?? "", c = cls ?? "";
+            return Blocked.Contains(p) || SystemTools.Contains(p) || Browsers.Contains(p) || Messaging.Contains(p) || c == "ConsoleWindowClass" || c == "CASCADIA_HOSTING_WINDOW_CLASS" || c == "PseudoConsoleWindow";
+        }
 
         static readonly HashSet<string> Terminals = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
             "cmd", "powershell", "pwsh", "powershell_ise", "conhost", "openconsole", "windowsterminal", "wt", "bash", "wsl", "wslhost", "mintty", "putty", "kitty",
@@ -1065,8 +1264,10 @@ namespace MinGent
         public static string TierFor(string process, string cls)
         {
             string p = process ?? "";
-            if (SystemTools.Contains(p) || Private.Contains(p) || SystemHosts.Contains(p)) return AppTier.Never;
-            if (Browsers.Contains(p) || Terminals.Contains(p) || Editors.Contains(p) || string.Equals(p, "explorer", StringComparison.OrdinalIgnoreCase) || TerminalClass(cls ?? "") || cls == "PseudoConsoleWindow") return AppTier.Look;
+            if (Hard(p)) return AppTier.Never;
+            if (Messaging.Contains(p) || SystemTools.Contains(p)) return Unlocked ? AppTier.Full : AppTier.Never;
+            if (RemoteTerminals.Contains(p)) return AppTier.Look;
+            if (Browsers.Contains(p) || Terminals.Contains(p) || Editors.Contains(p) || string.Equals(p, "explorer", StringComparison.OrdinalIgnoreCase) || TerminalClass(cls ?? "") || cls == "PseudoConsoleWindow") return Unlocked ? AppTier.Full : AppTier.Look;
             return AppTier.Full;
         }
 
@@ -1074,8 +1275,15 @@ namespace MinGent
         {
             string p = process ?? "";
             if (string.Equals(p, "mingent", StringComparison.OrdinalIgnoreCase) || string.Equals(p, "justpad", StringComparison.OrdinalIgnoreCase)) return "it is MinGent itself";
-            if (Private.Contains(p)) return "it handles your messages, passwords, money or remote access";
-            return "it is part of Windows' own settings, security or sign-in";
+            if (Vault.Contains(p)) return "it handles your passwords, money or remote access";
+            return "it is part of Windows' sign-in and security";
+        }
+
+        public static string Refusal(string name, string process)
+        {
+            string p = process ?? "";
+            if (Hard(p)) return "MinGent never lets the agent use " + name + ", because " + NeverWhy(p) + ".";
+            return name + " is " + Kind(p, "") + ", which MinGent keeps off limits." + LockedNote;
         }
 
         public static string Kind(string process, string cls)
@@ -1084,9 +1292,113 @@ namespace MinGent
             if (Browsers.Contains(p)) return "a web browser";
             if (string.Equals(p, "explorer", StringComparison.OrdinalIgnoreCase)) return "File Explorer";
             if (Editors.Contains(p)) return "a code editor";
-            if (Terminals.Contains(p) || TerminalClass(cls ?? "") || cls == "PseudoConsoleWindow") return "a terminal";
+            if (Terminals.Contains(p) || TerminalClass(cls ?? "") || cls == "PseudoConsoleWindow" || cls == "ConsoleWindowClass") return "a terminal";
+            if (Messaging.Contains(p)) return "a mail or chat program";
+            if (SystemTools.Contains(p)) return "one of Windows' own tools";
             return "a program";
         }
+
+        public static string Risk(string kind)
+        {
+            return kind == "a web browser" ? "This is your own browser, with your sign-ins. The agent will see its windows and can click and type in them, so it can act on any site you are signed in to." :
+                   kind == "File Explorer" ? "The agent will see File Explorer's windows and can click and type in them, so it can move, rename or delete files and start programs there without asking for each one." :
+                   kind == "a terminal" ? "The agent will see this terminal and can type in it. Commands typed there run without MinGent checking them first." :
+                   kind == "a code editor" ? "The agent will see this editor's windows and can click and type in them, including a terminal built into it." :
+                   kind == "a mail or chat program" ? "This program holds your messages. The agent will see them and can click and type in it, so it can send messages as you." :
+                   kind == "one of Windows' own tools" ? "This is one of Windows' own tools. The agent will see its windows and can click and type in them, so it can change how your PC works." : null;
+        }
+
+        [DllImport("kernel32.dll", EntryPoint = "OpenProcess", SetLastError = true)] static extern IntPtr OpenProcessErr(uint access, bool inherit, int pid);
+        [DllImport("advapi32.dll", SetLastError = true)] static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+        [DllImport("advapi32.dll", SetLastError = true)] static extern bool GetTokenInformation(IntPtr token, int cls, out int info, int len, out int ret);
+
+        static readonly Dictionary<int, KeyValuePair<bool, DateTime>> adminSeen = new Dictionary<int, KeyValuePair<bool, DateTime>>();
+
+        public static bool Admin(int pid)
+        {
+            if (Program.Elevated || pid == 0 || pid == OwnPid || Environment.OSVersion.Platform != PlatformID.Win32NT) return false;
+            DateTime now = DateTime.UtcNow;
+            lock (adminSeen)
+            {
+                KeyValuePair<bool, DateTime> known;
+                if (adminSeen.TryGetValue(pid, out known) && (now - known.Value).TotalSeconds < 30) return known.Key;
+            }
+            bool raised = AdminNow(pid);
+            lock (adminSeen)
+            {
+                if (adminSeen.Count > 400) adminSeen.Clear();
+                adminSeen[pid] = new KeyValuePair<bool, DateTime>(raised, now);
+            }
+            return raised;
+        }
+
+        static bool AdminNow(int pid)
+        {
+            try
+            {
+                IntPtr hp = OpenProcessErr(0x1000, false, pid);
+                if (hp == IntPtr.Zero) return Marshal.GetLastWin32Error() == 5;
+                try
+                {
+                    IntPtr tok;
+                    if (!OpenProcessToken(hp, 8, out tok)) return Marshal.GetLastWin32Error() == 5;
+                    try
+                    {
+                        int raised, got;
+                        return GetTokenInformation(tok, 20, out raised, 4, out got) && raised != 0;
+                    }
+                    finally { CloseHandle(tok); }
+                }
+                finally { CloseHandle(hp); }
+            }
+            catch { return false; }
+        }
+
+        public static Dictionary<IntPtr, string> AdminWindows()
+        {
+            Dictionary<IntPtr, string> found = new Dictionary<IntPtr, string>();
+            if (Program.Elevated || Environment.OSVersion.Platform != PlatformID.Win32NT) return found;
+            Dictionary<int, bool> admin = new Dictionary<int, bool>();
+            EnumProc cb = delegate (IntPtr h, IntPtr l)
+            {
+                try
+                {
+                    if (!IsWindowVisible(h) || Cloaked(h)) return true;
+                    RECT r;
+                    if (!GetWindowRect(h, out r) || r.Right - r.Left < 40 || r.Bottom - r.Top < 30) return true;
+                    int pid;
+                    GetWindowThreadProcessId(h, out pid);
+                    bool raised;
+                    if (!admin.TryGetValue(pid, out raised)) { raised = Admin(pid); admin[pid] = raised; }
+                    if (!raised) return true;
+                    StringBuilder sb = new StringBuilder(256);
+                    GetWindowText(h, sb, sb.Capacity);
+                    string title = Regex.Replace(sb.ToString(), @"[\x00-\x1F\x7F""]", " ").Trim();
+                    if (title.Length == 0) return true;
+                    found[h] = title.Length > 60 ? title.Substring(0, 60) : title;
+                }
+                catch { }
+                return true;
+            };
+            EnumWindows(cb, IntPtr.Zero);
+            GC.KeepAlive(cb);
+            return found;
+        }
+
+        public static string AdminNote(string name)
+        {
+            return "\"" + name + "\" runs with administrator rights, and Windows does not let a program without them read, click or type in its window, so it is out of your reach unless MinGent itself is started as administrator. It stays open for the user. Do the job another way, for example with run_command (to end a program: Stop-Process -Name <name>), or tell the user.";
+        }
+
+        public static string AdminMatch(string part)
+        {
+            string w = (part ?? "").Trim();
+            if (w.Length < 3) return "";
+            foreach (string title in AdminWindows().Values) if (title.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0) return " " + AdminNote(title);
+            return "";
+        }
+
+        public static bool AlwaysLook(string process) { return RemoteTerminals.Contains(process ?? ""); }
 
         public static IntPtr Foreground()
         {
@@ -1230,12 +1542,14 @@ namespace MinGent
         }
 
         static readonly HashSet<string> PrivateStart = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
-            "Microsoft Teams", "Microsoft Teams (work or school)", "Outlook (new)", "Outlook (classic)", "Mail", "Calendar", "Quick Assist", "Zoom Workplace",
-            "Telegram Desktop", "Remote Desktop Connection", "Phone Link", "Messenger", "Skype" };
+            "Microsoft Teams", "Microsoft Teams (work or school)", "Outlook (new)", "Outlook (classic)", "Mail", "Calendar", "Zoom Workplace",
+            "Telegram Desktop", "Messenger", "Skype" };
+        static readonly HashSet<string> RemoteStart = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+            "Quick Assist", "Remote Desktop Connection", "Remote Desktop", "Phone Link", "Microsoft Store", "Windows Security" };
         static readonly HashSet<string> BrowserStart = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
             "Google Chrome", "Microsoft Edge", "Opera Browser", "Opera GX Browser", "Firefox Private Browsing", "Tor Browser", "Brave Browser", "DuckDuckGo" };
 
-        public static string OpenBlock(string name, string id)
+        static List<string> StartNames(string name, string id)
         {
             List<string> names = new List<string>();
             string i = (id ?? "").Trim(), n = (name ?? "").Trim();
@@ -1250,6 +1564,7 @@ namespace MinGent
             else if (i.Length > 0 && i.IndexOfAny(new char[] { '!', '_' }) < 0) names.Add(i);
             if (n.Length > 0) names.Add(n);
             if (PrivateStart.Contains(n)) names.Add("outlook");
+            if (RemoteStart.Contains(n)) names.Add(n == "Windows Security" ? "sechealthui" : "mstsc");
             if (BrowserStart.Contains(n)) names.Add("chrome");
             if (i.IndexOf("git-bash", StringComparison.OrdinalIgnoreCase) >= 0) names.Add("mintty");
             if (i.IndexOf("Microsoft.WindowsStore", StringComparison.OrdinalIgnoreCase) >= 0) names.Add("winstore.app");
@@ -1258,15 +1573,42 @@ namespace MinGent
             if (i.IndexOf("immersivecontrolpanel", StringComparison.OrdinalIgnoreCase) >= 0) names.Add("systemsettings");
             if (i.IndexOf("SecHealthUI", StringComparison.OrdinalIgnoreCase) >= 0) names.Add("sechealthui");
             if (i.IndexOf("Microsoft.Windows.Explorer", StringComparison.OrdinalIgnoreCase) >= 0) names.Add("explorer");
+            return names;
+        }
+
+        public static string OpenKind(string name, string id, out string process)
+        {
+            process = null;
+            List<string> names = StartNames(name, id);
+            foreach (string x in names) if (Hard(x)) { process = x; return "never"; }
             foreach (string x in names)
             {
-                if (Private.Contains(x)) return "MinGent never lets the agent use " + n + ", because " + NeverWhy(x) + ".";
-                if (Browsers.Contains(x)) return n + " is a web browser, and a browser you open can't be read or clicked. For the web, use your browser tools.";
-                if (Terminals.Contains(x) || string.Equals(x, "mintty", StringComparison.OrdinalIgnoreCase)) return n + " is a terminal. Run commands with run_command; to work in a terminal window the user can watch, open one with run_command as your instructions say.";
-                if (string.Equals(x, "explorer", StringComparison.OrdinalIgnoreCase)) return "Work with files through your file tools. To show the user a folder in File Explorer, start it with run_command: explorer \"<folder>\".";
-                if (SystemTools.Contains(x) || SystemHosts.Contains(x) || Blocked.Contains(x)) return "MinGent never lets the agent use " + n + ", because " + NeverWhy(x) + ". If the user only wants it opened for themselves, start it with run_command.";
+                process = x;
+                if (Messaging.Contains(x)) return "a mail or chat program";
+                if (Browsers.Contains(x)) return "a web browser";
+                if (RemoteTerminals.Contains(x)) return "never";
+                if (Terminals.Contains(x)) return "a terminal";
+                if (string.Equals(x, "explorer", StringComparison.OrdinalIgnoreCase)) return "File Explorer";
+                if (SystemTools.Contains(x) || Blocked.Contains(x)) return "one of Windows' own tools";
             }
+            process = null;
             return null;
+        }
+
+        public static string OpenBlock(string name, string id)
+        {
+            string x, n = (name ?? "").Trim();
+            string kind = OpenKind(name, id, out x);
+            if (kind == null) return null;
+            if (kind == "never") return RemoteTerminals.Contains(x) ? n + " reaches other computers, so MinGent never lets the agent use it. For a server, open a terminal with run_command as your instructions say." : "MinGent never lets the agent use " + n + ", because " + NeverWhy(x) + ".";
+            if (kind == "a terminal" && Unlocked) return n + " is a terminal. Run commands with run_command; to work in a terminal window the user can watch, open one with run_command as your instructions say. To type in a terminal the user already has open, ask for it with app_access.";
+            if (kind == "File Explorer" && Unlocked) return "File Explorer opens inside the user's own session, so it can't be opened for you. Work with files through your file tools; to click and type in a File Explorer window the user has open, ask for it with app_access.";
+            if (Unlocked) return null;
+            if (kind == "a mail or chat program") return n + " is a mail or chat program, which MinGent keeps off limits." + LockedNote;
+            if (kind == "a web browser") return n + " is a web browser, and MinGent keeps the user's own browser off limits. For the web, use your browser tools." + LockedNote;
+            if (kind == "a terminal") return n + " is a terminal. Run commands with run_command; to work in a terminal window the user can watch, open one with run_command as your instructions say." + LockedNote;
+            if (kind == "File Explorer") return "Work with files through your file tools. To show the user a folder in File Explorer, start it with run_command: explorer \"<folder>\"." + LockedNote;
+            return n + " is one of Windows' own tools, which MinGent keeps off limits. If the user only wants it opened for themselves, start it with run_command" + (string.Equals(x, "taskmgr", StringComparison.OrdinalIgnoreCase) ? "; to end a program, use run_command (Stop-Process -Name <name>)." : ".") + LockedNote;
         }
 
         static readonly object startGate = new object();
@@ -1370,7 +1712,7 @@ namespace MinGent
             return !string.Equals(process, "explorer", StringComparison.OrdinalIgnoreCase) || cls == "CabinetWClass" || cls == "#32770" || cls == "OperationStatusWindow";
         }
 
-        static string FriendlyName(string exe, string process)
+        public static string FriendlyName(string exe, string process)
         {
             if (string.Equals(process, "explorer", StringComparison.OrdinalIgnoreCase)) return "File Explorer";
             string plain = null;
@@ -1461,7 +1803,7 @@ namespace MinGent
                         pid = HostedPid(h);
                         if (pid == 0) return true;
                     }
-                    if (pid == 0 || pid == OwnPid || InJob(pid, jobs, member) || (anyLaunch && Adopt(pid, seen))) return true;
+                    if (pid == 0 || pid == OwnPid || InJob(pid, jobs, member) || (anyLaunch && !TerminalClass(cls) && Adopt(pid, seen))) return true;
                     string name;
                     if (!names.TryGetValue(pid, out name))
                     {
@@ -1480,6 +1822,7 @@ namespace MinGent
                         app.Exe = exe;
                         app.Process = name;
                         app.Tier = TierFor(name, cls);
+                        app.Admin = !Hard(name) && Admin(pid);
                         byExe[exe] = app;
                     }
                     app.Windows++;
@@ -1544,7 +1887,7 @@ namespace MinGent
                 }
                 if (launches.Count == 0) return false;
             }
-            if (Blocked.Contains(name) || SystemTools.Contains(name) || Browsers.Contains(name) || Private.Contains(name) || SystemHosts.Contains(name)) return false;
+            if (Hard(name) || (!Unlocked && (Blocked.Contains(name) || SystemTools.Contains(name) || Browsers.Contains(name) || Private.Contains(name)))) return false;
             lock (adoptGate)
             {
                 foreach (KeyValuePair<DateTime, DateTime> w in launches)
@@ -1811,15 +2154,19 @@ namespace MinGent
         public static string Allowed(AppWindow w)
         {
             if (w.Terminal) return null;
+            if (Vault.Contains(w.Process) || Guard.Contains(w.Process)) return "'" + w.Process + "' can't be used because " + NeverWhy(w.Process);
+            if (Admin(w.Pid)) return AdminNote(w.Title.Length > 0 ? w.Title : w.Behind.Length > 0 ? w.Behind : w.Process);
             if (w.Granted)
             {
-                if (TierFor(w.Process, w.Class) == AppTier.Never) return "'" + w.Process + "' can't be used because " + NeverWhy(w.Process);
-                return null;
+                if (TierFor(w.Process, w.Class) != AppTier.Never) return null;
+                return Hard(w.Process) ? "'" + w.Process + "' can't be used because " + NeverWhy(w.Process) : "'" + w.Process + "' is " + Kind(w.Process, w.Class) + ", which MinGent keeps off limits." + LockedNote;
             }
-            if (Blocked.Contains(w.Process) || SystemTools.Contains(w.Process)) return "'" + w.Process + "' is a shell or system tool, which the assistant may not control (use run_command for commands)";
-            if (Browsers.Contains(w.Process)) return "'" + w.Process + "' is a web browser with the user's own sign-ins, which the assistant may not control. Use MinGent's built-in browser (browser_navigate) instead";
-            if (Private.Contains(w.Process)) return "'" + w.Process + "' handles the user's messages, passwords, money or remote access, so the assistant may not control it";
-            if (w.Class == "ConsoleWindowClass" || w.Class == "CASCADIA_HOSTING_WINDOW_CLASS" || w.Class == "PseudoConsoleWindow") return "console windows cannot be controlled (use run_command for commands)";
+            if (RemoteTerminals.Contains(w.Process)) return "'" + w.Process + "' reaches other computers, so the assistant may not control it. For a server, open a terminal with run_command as your instructions say";
+            if (Unlocked) return null;
+            if (Blocked.Contains(w.Process) || SystemTools.Contains(w.Process)) return "'" + w.Process + "' is a shell or system tool, which the assistant may not control (use run_command for commands)." + LockedNote;
+            if (Browsers.Contains(w.Process)) return "'" + w.Process + "' is a web browser with the user's own sign-ins, which the assistant may not control. Use MinGent's built-in browser (browser_navigate) instead." + LockedNote;
+            if (Messaging.Contains(w.Process)) return "'" + w.Process + "' handles the user's messages, so the assistant may not control it." + LockedNote;
+            if (w.Class == "ConsoleWindowClass" || w.Class == "CASCADIA_HOSTING_WINDOW_CLASS" || w.Class == "PseudoConsoleWindow") return "console windows cannot be controlled (use run_command for commands)." + LockedNote;
             return null;
         }
 
@@ -1895,16 +2242,18 @@ namespace MinGent
             if (all.Count == 0)
             {
                 error = "No window of a program you started is open. Open the program with app_open, or start your own with run_command (background=true), wait a moment, then try again. " +
-                        (others ? "To use a program the user opened themselves, ask for it with app_access first." : "A program that was already open before your command belongs to the user. They can let you ask for such programs with the switch \"Programs you opened yourself\" in Settings > Agent > Tools: tell them that, and don't work around it.");
+                        (others ? "To use a program the user opened themselves, ask for it with app_access first." : "A program that was already open before your command belongs to the user. They can let you ask for such programs with the switch \"Programs you opened yourself\" in Settings > Agent > Tools: tell them that, and don't work around it.") + AdminMatch(which);
                 return null;
             }
             string w = (which ?? "").Trim();
             if (w.Length == 0)
             {
                 IntPtr fg = Foreground();
-                foreach (AppWindow x in all) if (x.Hwnd == fg && !x.Granted) return x;
-                foreach (AppWindow x in all) if (!x.Granted) return x;
-                error = "Say which window to use with window=\"w...\": windows of the user's own programs are never picked by default.\n" + ListText(all);
+                foreach (AppWindow x in all) if (x.Hwnd == fg && !x.Granted && !x.Veiled) return x;
+                foreach (AppWindow x in all) if (!x.Granted && !x.Veiled) return x;
+                bool users = false;
+                foreach (AppWindow x in all) if (x.Granted) users = true;
+                error = "Say which window to use with window=\"w...\"" + (users ? ": windows of the user's own programs are never picked by default." : ".") + "\n" + ListText(all);
                 return null;
             }
             Match m = Regex.Match(w, @"^w(\d+)$", RegexOptions.IgnoreCase);
@@ -1921,7 +2270,7 @@ namespace MinGent
                 return null;
             }
             foreach (AppWindow x in all) if (x.Title.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0) return x;
-            error = "no window of your programs has \"" + w + "\" in its title; call app_read to list them";
+            error = "no window of your programs has \"" + w + "\" in its title; call app_read to list them." + AdminMatch(w);
             return null;
         }
 
@@ -1935,6 +2284,7 @@ namespace MinGent
                 sb.Append(w.Ref(all)).Append(": \"").Append(w.Title).Append("\" (").Append(w.Process).Append(", ").Append(w.Rect.Width).Append('x').Append(w.Rect.Height);
                 if (w.Class == "#32770") sb.Append(", dialog");
                 if (w.Granted) sb.Append(w.Tier == AppTier.Look ? ", the user's, look only" : ", the user's");
+                if (w.Veiled) sb.Append(w.Barred ? ", off limits" : ", needs the user's OK first");
                 AppWindow d = BlockingDialog(w, all);
                 if (d != null) sb.Append(", waiting for ").Append(d.Ref(all));
                 sb.Append(")\n");
@@ -2618,6 +2968,15 @@ namespace MinGent
                     }
                 }
             }
+            foreach (AppWindow w in all)
+            {
+                if (w.Granted || w.Terminal) continue;
+                w.Barred = AppControl.Allowed(w) != null;
+                if (!w.Barred && Restricted(ctx, w, false) == null) continue;
+                w.Veiled = true;
+                w.Behind = w.Title;
+                w.Title = "";
+            }
             return all;
         }
 
@@ -2641,7 +3000,40 @@ namespace MinGent
                    (kind == "a web browser" ? "To open pages, click or type on the web, use MinGent's own browser (browser_navigate)." :
                     kind == "a terminal" ? "Run commands with run_command instead." :
                     kind == "File Explorer" ? "Work with files through your file tools instead." :
-                    "Change files with your file tools and run commands with run_command instead.");
+                    "Change files with your file tools and run commands with run_command instead.") +
+                   (AppControl.AlwaysLook(w.Process) ? "" : AppControl.Unlocked ? " The user has switched on " + AppControl.Switch + ": ask again with app_access to click and type in it." : AppControl.LockedNote);
+        }
+
+        protected static string Restricted(ToolContext ctx, AppWindow w, bool ask)
+        {
+            if (w.Granted || w.Terminal || !AppControl.Limited(w.Process, w.Class)) return null;
+            if (!AppControl.Unlocked || AppControl.Allowed(w) != null) return "'" + w.Process + "' is off limits";
+            PermissionState ps = ctx.Session.Perms;
+            string key = "restricted:" + UseName(w);
+            lock (ps.AskLock) if (ps.AllowedKeys.Contains(key)) return null;
+            if (!ask) return "not allowed yet";
+            string exe = AppControl.ExePath(w.Pid) ?? w.Process;
+            return AskRestricted(ctx, key, AppControl.FriendlyName(exe, w.Process), exe, AppControl.Kind(w.Process, w.Class), w.Adopted);
+        }
+
+        public static string AskRestricted(ToolContext ctx, string key, string name, string exe, string kind, bool adopted)
+        {
+            PermissionState ps = ctx.Session.Perms;
+            PermissionAsk a = new PermissionAsk();
+            a.Kind = "app";
+            a.EvenInFull = true;
+            a.AllowRemember = false;
+            a.Category = "";
+            a.High = true;
+            a.Title = "Let the agent use " + name;
+            a.Detail = exe;
+            a.Where = "Until this chat ends";
+            a.Reason = (adopted ? "Windows opened this program for something the agent did in this chat. " : "The agent started this program in this chat. ") + (AppControl.Risk(kind) ?? "The agent will see its windows and can click and type in them.") +
+                       (ps.WebGuard && ps.Tainted ? " This chat has read web content (" + ps.TaintSource + "), so make sure a page didn't slip in this request." : "");
+            a.Key = key;
+            if (!ctx.Approve(a)) return "The user did not allow using " + name + ". Don't try to reach it another way; continue without it or ask the user.";
+            lock (ps.AskLock) ps.AllowedKeys.Add(key);
+            return null;
         }
 
         protected string Gate(ToolContext ctx, AppWindow w, bool acting)
@@ -2714,6 +3106,13 @@ namespace MinGent
         {
             PermissionState ps = ctx.Session.Perms;
             bool tainted = ps.WebGuard && ps.Tainted;
+            string limited = Restricted(ctx, w, true);
+            if (limited != null) return limited;
+            if (w.Veiled && AppControl.Allowed(w) == null)
+            {
+                w.Veiled = false;
+                w.Title = w.Behind;
+            }
             if (w.Terminal && !acting && ps.Auto) return null;
             if (acting && !cancelOnly && AppControl.IsFileDialog(w))
             {
@@ -2860,7 +3259,7 @@ namespace MinGent
             {
                 if (!AppControl.Exists(w.Hwnd) || AppControl.Enabled(w.Hwnd)) break;
                 AppWindow d = AppControl.BlockingDialog(w, All(ctx));
-                if (d != null)
+                if (d != null && !d.Veiled)
                 {
                     ctx.Ct.Sleep(350);
                     foreach (AppWindow x in All(ctx)) if (x.Hwnd == d.Hwnd) d = x;
@@ -2872,12 +3271,18 @@ namespace MinGent
             List<AppWindow> all = All(ctx);
             if (all.Count == 0) return null;
             string e2;
-            if (!w.Granted) return AppControl.Pick(all, null, out e2) ?? all[0];
+            if (!w.Granted) return AppControl.Pick(all, null, out e2) ?? Open(all);
             IntPtr fg = AppControl.Foreground();
             foreach (AppWindow x in all) if (x.Hwnd == fg && x.Pid == w.Pid) return x;
             foreach (AppWindow x in all) if (x.Hwnd == w.Hwnd) return x;
             foreach (AppWindow x in all) if (x.Pid == w.Pid) return x;
-            return AppControl.Pick(all, null, out e2) ?? all[0];
+            return AppControl.Pick(all, null, out e2) ?? Open(all);
+        }
+
+        static AppWindow Open(List<AppWindow> all)
+        {
+            foreach (AppWindow x in all) if (!x.Veiled) return x;
+            return null;
         }
 
         protected static string TerminalEnter(ToolContext ctx, AppWindow w, TerminalState t, string act)
@@ -3071,7 +3476,7 @@ namespace MinGent
     class AppAccessTool : AppTool
     {
         public override string Name { get { return "app_access"; } }
-        public override string Description { get { return "Ask to use a program the user opened themselves (one you didn't start). Without app it lists the open programs you can ask for. With app MinGent asks the user, and once they allow it, its windows show up in app_read for the rest of this chat. Web browsers, File Explorer, terminals and code editors can only be looked at."; } }
+        public override string Description { get { return "Ask to use a program the user opened themselves (one you didn't start). Without app it lists the open programs you can ask for. With app MinGent asks the user, and once they allow it, its windows show up in app_read for the rest of this chat." + (AppControl.Unlocked ? "" : " Web browsers, File Explorer, terminals and code editors can only be looked at."); } }
         public override Dictionary<string, object> Schema { get { return Obj("app", P("string", "The program's name from the list, e.g. \"Notepad\""), false, "reason", P("string", "One short sentence for the user: what you need the program for"), false); } }
         public override string Label(Dictionary<string, object> a) { string n = (S(a, "app") ?? "").Trim(); return n.Length == 0 ? "List the open programs" : "Ask to use " + (n.Length > 40 ? n.Substring(0, 40) + "\u2026" : n); }
         public override bool Untrusted { get { return true; } }
@@ -3096,11 +3501,12 @@ namespace MinGent
                     if (x.Tier == AppTier.Never) continue;
                     if (have.ContainsKey(x.Exe.ToLowerInvariant())) { allowed.Add(x.Name); continue; }
                     sb.Append("- ").Append(x.Name).Append(" (").Append(x.Process).Append(", ").Append(x.Windows).Append(x.Windows == 1 ? " window" : " windows");
-                    if (x.Tier != AppTier.Full) sb.Append(", ").Append(TierNote(x.Tier));
+                    if (x.Admin) sb.Append(", runs as administrator: out of reach");
+                    else if (x.Tier != AppTier.Full) sb.Append(", ").Append(TierNote(x.Tier));
                     sb.Append(")\n");
                 }
                 string head = allowed.Count > 0 ? "Already allowed in this chat (see app_read): " + string.Join(", ", allowed.ToArray()) + ".\n" : "";
-                if (sb.Length == 0) return ToolOutcome.Ok(head + "No other programs you could ask for are open. Programs for mail, chat, passwords, money, remote access and Windows' own settings are never offered.", "No programs to ask for");
+                if (sb.Length == 0) return ToolOutcome.Ok(head + "No other programs you could ask for are open. " + (AppControl.Unlocked ? "Programs for passwords, money and remote access and Windows' sign-in and security are never offered." : "Programs for passwords, money and remote access are never offered, and mail, chat and Windows' own tools only when the user switches on " + AppControl.Switch + "."), "No programs to ask for");
                 ToolOutcome lo = ToolOutcome.Ok(head + "Programs the user has open that you can ask to use:\n" + sb + "Ask with app_access app=\"<name>\" only when the task needs that program; MinGent asks the user first.", "Listed open programs");
                 lo.Untrusted = true;
                 return lo;
@@ -3108,17 +3514,21 @@ namespace MinGent
             OtherApp hit = AppControl.FindApp(apps, want);
             if (hit == null)
             {
-                string tier = AppControl.TierFor(want.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? want.Substring(0, want.Length - 4) : want, "");
-                if (tier == AppTier.Never) return ToolOutcome.Fail("MinGent never lets the agent use " + want + ", because " + AppControl.NeverWhy(want) + ".");
+                string proc = want.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? want.Substring(0, want.Length - 4) : want;
+                if (AppControl.TierFor(proc, "") == AppTier.Never) return ToolOutcome.Fail(AppControl.Refusal(want, proc));
                 return ToolOutcome.Fail("No open program matches \"" + want + "\". Call app_access without app to list them, and use a name from that list.");
             }
-            if (hit.Tier == AppTier.Never) return ToolOutcome.Fail("MinGent never lets the agent use " + hit.Name + ", because " + AppControl.NeverWhy(hit.Process) + ".");
+            if (hit.Admin) return ToolOutcome.Fail(AppControl.AdminNote(hit.Name));
+            if (hit.Tier == AppTier.Never) return ToolOutcome.Fail(AppControl.Refusal(hit.Name, hit.Process));
             string key = hit.Exe.ToLowerInvariant();
-            if (!have.ContainsKey(key))
+            AppGrant old;
+            bool more = have.TryGetValue(key, out old) && old.Tier == AppTier.Look && hit.Tier == AppTier.Full;
+            if (!have.ContainsKey(key) || more)
             {
                 PermissionState ps = ctx.Session.Perms;
                 bool tainted = ps.WebGuard && ps.Tainted;
                 string kind = AppControl.Kind(hit.Process, "");
+                string risk = hit.Tier == AppTier.Full ? AppControl.Risk(kind) : null;
                 PermissionAsk ask = new PermissionAsk();
                 ask.Kind = "app";
                 ask.EvenInFull = true;
@@ -3129,13 +3539,14 @@ namespace MinGent
                 ask.Summary = PermissionAsk.PlainSummary(S(a, "reason"), 160);
                 ask.Detail = hit.Exe;
                 ask.Where = "Until this chat ends";
-                ask.Reason = hit.Tier == AppTier.Full ? "You opened this program yourself. The agent will see its windows and can click, type and press keys in them, like a person at your PC. Whatever the program can do, such as running macros or scripts, the agent can do in it too." :
+                ask.Reason = risk != null ? "You opened this program yourself. " + risk :
+                             hit.Tier == AppTier.Full ? "You opened this program yourself. The agent will see its windows and can click, type and press keys in them, like a person at your PC. Whatever the program can do, such as running macros or scripts, the agent can do in it too." :
                              kind == "a web browser" ? "You opened this browser yourself. The agent will see its windows, including the pages you have open, but can't click or type in them; for the web it uses MinGent's own browser." :
                              kind == "File Explorer" ? "You opened File Explorer yourself. The agent will see its windows, but can't click or type in them; it works with files through its own file tools." :
                              kind == "a terminal" ? "You opened this terminal yourself. The agent will see what it shows, but can't click or type in it, so it can't run anything there." :
                              "You opened this editor yourself. The agent will see its windows, but can't click or type in them; it changes files with its own file tools.";
                 if (tainted) ask.Reason += " This chat has read web content (" + ps.TaintSource + "), so make sure a page didn't slip in this request.";
-                ask.Key = "appgrant:" + key;
+                ask.Key = (more ? "appgrant-full:" : "appgrant:") + key;
                 if (!ctx.Approve(ask))
                 {
                     ToolOutcome d = ToolOutcome.Fail("The user did not allow using " + hit.Name + ". Don't try to reach it another way; continue without it or ask the user.");
@@ -3198,7 +3609,14 @@ namespace MinGent
             string name = apps[at].Key, id = apps[at].Value;
             string block = AppControl.OpenBlock(name, id);
             if (block != null) return ToolOutcome.Fail(block);
+            string kindOf;
+            string risk = AppControl.Risk(AppControl.OpenKind(name, id, out kindOf));
             if (id.IndexOf('"') >= 0) return ToolOutcome.Fail("Windows gave an unusable entry for " + name + ". Start it with run_command (background=true) instead.");
+            if (risk != null)
+                foreach (OtherApp x in AppControl.OtherApps())
+                    if (string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase) || AppControl.FromEntry(x.Exe.ToLowerInvariant(), id) ||
+                        (string.Equals(x.Process, kindOf, StringComparison.OrdinalIgnoreCase) && (id.IndexOf(kindOf, StringComparison.OrdinalIgnoreCase) >= 0 || name.IndexOf(kindOf, StringComparison.OrdinalIgnoreCase) >= 0)))
+                        return ToolOutcome.Ok(name + " is already open, so it is the user's. " + (Others ? "Ask for it with app_access app=\"" + x.Name + "\"." : "It is off limits until they switch on \"Programs you opened yourself\" in Settings > Agent > Tools: tell them that."), name + " is already open");
             PermissionState ps = ctx.Session.Perms;
             PermissionAsk ask = new PermissionAsk();
             ask.Kind = "app";
@@ -3210,7 +3628,16 @@ namespace MinGent
             ask.Where = "Until this chat ends";
             ask.Reason = "The agent wants to start this program from the Start menu. It will see its windows and can click, type and press keys in them, like a person at your PC. Whatever the program can do, such as running macros or scripts, the agent can do in it too.";
             ask.Key = "open:" + id.ToLowerInvariant();
-            bool asked = !ps.Full && !(ps.Auto && ps.AutoAllows(ask.Category));
+            if (risk != null)
+            {
+                ask.Category = "";
+                ask.EvenInFull = true;
+                ask.AllowRemember = false;
+                ask.High = true;
+                ask.Title = "Open " + name + " and let the agent use it";
+                ask.Reason = "The agent wants to start this program from the Start menu. " + risk + (ps.WebGuard && ps.Tainted ? " This chat has read web content (" + ps.TaintSource + "), so make sure a page didn't slip in this request." : "");
+            }
+            bool asked = risk != null || (!ps.Full && !(ps.Auto && ps.AutoAllows(ask.Category)));
             if (!ctx.Approve(ask))
             {
                 ToolOutcome d = ToolOutcome.Fail("The user did not allow opening " + name + ". Don't start it another way; continue without it or ask the user.");
@@ -3220,6 +3647,7 @@ namespace MinGent
             }
             Dictionary<IntPtr, bool> before = new Dictionary<IntPtr, bool>();
             foreach (AppWindow w in All(ctx)) before[w.Hwnd] = true;
+            Dictionary<IntPtr, string> raised = AppControl.AdminWindows();
             DateTime now = DateTime.UtcNow;
             AppControl.LaunchWindow(now, now.AddSeconds(30));
             try
@@ -3239,13 +3667,17 @@ namespace MinGent
             }
             if (fresh.Count == 0)
             {
+                string admin = null;
+                foreach (KeyValuePair<IntPtr, string> x in AppControl.AdminWindows())
+                    if (!raised.ContainsKey(x.Key) || x.Value.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0) { admin = x.Value; break; }
+                if (admin != null) return ToolOutcome.Ok("Windows opened " + name + " for the user. " + AppControl.AdminNote(admin), "Opened " + name + ", out of reach");
                 StringBuilder have = new StringBuilder();
-                if (all != null) foreach (AppWindow w in all) have.Append(w.Ref(all)).Append(": \"").Append(w.Title).Append("\" (").Append(w.Process).Append(")\n");
+                if (all != null) foreach (AppWindow w in all) if (!w.Veiled) have.Append(w.Ref(all)).Append(": \"").Append(w.Title).Append("\" (").Append(w.Process).Append(")\n");
                 ToolOutcome late = ToolOutcome.Ok("Windows was asked to open " + name + ", but no new window of it has shown up for you. " +
                     (have.Length > 0 ? "Windows you may use now:\n" + have : "") +
                     "It may still be starting: look with app_read in a moment. If it is not there then, either it was already running and came to the front, which makes it the user's" +
                     (Others ? " (ask for it with app_access)" : " (off limits until they switch on \"Programs you opened yourself\" in Settings > Agent > Tools)") +
-                    ", or it is a kind of program MinGent never hands to you: browsers, mail, chat, password, money and remote-access programs and Windows' own tools.", "Asked to open " + name);
+                    ", or it is a kind of program MinGent never hands to you: " + (AppControl.Unlocked ? "" : "browsers, mail, chat, ") + "password, money and remote-access programs and Windows' " + (AppControl.Unlocked ? "sign-in and security." : "own tools."), "Asked to open " + name);
                 late.Untrusted = have.Length > 0;
                 return late;
             }
@@ -3259,7 +3691,16 @@ namespace MinGent
                     if (one == null) one = u;
                     else if (one != u) same = false;
                 }
-                if (same && !fresh[0].Terminal && AppControl.FromEntry(one, id)) lock (ps.AskLock) ps.AllowedKeys.Add("app:" + one);
+                if (same && !fresh[0].Terminal && AppControl.FromEntry(one, id))
+                    lock (ps.AskLock)
+                    {
+                        ps.AllowedKeys.Add("app:" + one);
+                        if (risk != null) ps.AllowedKeys.Add("restricted:" + one);
+                    }
+                all = All(ctx);
+                List<AppWindow> again = new List<AppWindow>();
+                foreach (AppWindow w in all) foreach (AppWindow f in fresh) if (f.Hwnd == w.Hwnd) again.Add(w);
+                if (again.Count > 0) fresh = again;
             }
             StringBuilder ws = new StringBuilder();
             foreach (AppWindow w in fresh) ws.Append(w.Ref(all)).Append(": \"").Append(w.Title).Append("\" (").Append(w.Process).Append(")\n");
@@ -3287,7 +3728,7 @@ namespace MinGent
             Dictionary<IntPtr, bool> refused = new Dictionary<IntPtr, bool>();
             foreach (AppWindow w in AppControl.OnScreen(all))
             {
-                if (AppControl.Allowed(w) == null && Check(ctx, w, false, false, "look") == null) may.Add(w);
+                if (AppControl.Allowed(w) == null && Restricted(ctx, w, false) == null && Check(ctx, w, false, false, "look") == null) may.Add(w);
                 else refused[w.Hwnd] = true;
                 if (ctx.Ct.IsCancelled) return ToolOutcome.Fail("stopped");
             }
@@ -3318,7 +3759,7 @@ namespace MinGent
             }
             foreach (AppWindow w in all)
             {
-                if (listed.ContainsKey(w.Hwnd) || refused.ContainsKey(w.Hwnd)) continue;
+                if (listed.ContainsKey(w.Hwnd) || refused.ContainsKey(w.Hwnd) || w.Veiled) continue;
                 string where = AppControl.Place(w);
                 sb.Append("- ").Append(w.Ref(all)).Append(" \"").Append(w.Title).Append("\" (").Append(w.Process).Append(")").Append(where.Length > 0 ? ": " + where + ", not in the picture" : ": not in the picture").Append('\n');
             }
