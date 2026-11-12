@@ -1,6 +1,30 @@
 MinGent - what changed
 ======================
 
+Version 1.1.6 beta
+- Several chats at once: open another chat or start a new one while the
+  agent works, and the first chat keeps working in the background, up to
+  five at a time. The chat list shows a spinner on every working chat and a
+  dot when one waits for you. Each chat has its own browser. With a model on
+  this PC the chats take turns, one task at a time; with a cloud model they
+  work side by side.
+- The agent no longer goes back to your first message in a chat. MinGent's
+  own notes that sent it back to work (to test its changes, to sum up, the
+  review report) stayed in the conversation as if you had written them, and
+  so did the answers they replaced. They are dropped when you send the next
+  message.
+- After the agent reads a web page, changing MINGENT.md asks first, since
+  the agent reads that file at the start of every request in the folder.
+- Text that selected itself in the chat: after a drag, a click or a stopped
+  run, MinGent now lets go of any mouse button or key its own input left
+  held down.
+- The folder menu says which folder "No project" uses, and a folder that is
+  no longer one of your projects shows "(this chat only)". Removing the
+  project you are filtering by clears the filter.
+- The round "jump to the end" button sits beside the text instead of on it.
+- Close-ups of a program: the agent can ask for one control it found in the
+  window instead of guessing the area.
+
 Version 1.1.5 beta
 - The status line says what the agent is doing, in plain words, all the
   time. The agent writes a few words for each step ("Checking how the

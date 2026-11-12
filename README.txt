@@ -22,7 +22,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.1.5 beta: it works, and it still has rough edges. Report
+This is version 1.1.6 beta: it works, and it still has rough edges. Report
 problems at https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -89,7 +89,7 @@ sign-ins. MinGent has none of that.
   Full auto asks nothing. The check reads the command; it can't see what a
   script does once it runs.
 To check a download, compare its SHA-256 with the one on the release page.
-In PowerShell: Get-FileHash .\MinGent-1.1.5-beta.zip
+In PowerShell: Get-FileHash .\MinGent-1.1.6-beta.zip
 
 
 YOUR OWN ICON
@@ -121,6 +121,15 @@ THE WINDOW
   leave the list but stay on your PC; "Archived chats" at the bottom of the
   list shows them, and opening one moves it back. "Delete all chats" in
   Settings > Privacy deletes archived chats too.
+- Several chats can work at once. When you open another chat or start a new
+  one while the agent works, the first chat keeps working in the background,
+  up to five chats at a time. Working chats show a spinner in the list, and a
+  dot when the agent waits for your OK or an answer. Each chat has its own
+  browser. With a model on this PC (the built-in engine, LM Studio or your
+  own server here) the chats take turns, one whole task at a time, since one
+  model serves them all; with a cloud model they work side by side. Only one
+  chat at a time uses the mouse and keyboard in a program. A temporary chat
+  can't work in the background, since it isn't in the list.
 - Middle: the chat and the message box.
 - Right, when you or the agent need them: Notes (a full text editor with tabs;
   each chat keeps its own) and the browser. The two buttons at the top right
@@ -497,7 +506,7 @@ Tools
 - Each tool's description takes room in the model's context, which matters
   with a small local model. Settings > Agent > Tools switches whole groups on
   or off and shows what each one costs: web search (about 150 tokens), the
-  browser (about 2,500), desktop programs (about 2,350) and helpers (about
+  browser (about 2,500), desktop programs (about 2,400) and helpers (about
   350). Files, commands, sound files, planning and scheduling are always on
   (about 3,500). The browser and desktop-program tools also switch off by
   themselves when the model's context is under 16K and 24K tokens.
@@ -581,8 +590,8 @@ Programs on your PC
   click or type, it still reads the one window it works in.
 - It can start a desktop program it wrote, read its window (buttons, fields,
   menus), click and type in it like a person, and take screenshots (with models
-  that can see images), also a close-up of one part of the window when
-  something is too small to read. It presses any key or shortcut (matched
+  that can see images), also a close-up of one part of the window, or of
+  one control it found in the window, when something is too small to read. It presses any key or shortcut (matched
   to your keyboard layout), holds keys down (up to 10 seconds at a time),
   also several at once
   (Shift+W, W+D), right-, middle-, double- and triple-clicks, clicks with Ctrl
@@ -928,6 +937,8 @@ chats, or for looking at the files the agent works on.
   chat's notes close when you leave it or close MinGent (MinGent asks first if
   one has unsaved changes), and deleting a chat closes its notes. Until then
   their unsaved text is backed up like any other, so a crash doesn't lose it.
+  Notes belong to the chat on screen: a chat working in the background
+  changes the files on disk instead, and an open tab follows the change.
 - The agent's files don't open in Notes by themselves: Notes stays the way
   you left it, and the chat shows each change and links to the file.
   Settings > Agent > "Show the files the agent writes" opens the files it
