@@ -1088,6 +1088,7 @@ namespace MinGent
         [DllImport("user32.dll", EntryPoint = "SendInput", SetLastError = true)] static extern uint SendInputRaw(uint n, INPUT[] inputs, int size);
         [DllImport("user32.dll", EntryPoint = "keybd_event")] static extern void KeybdEventRaw(byte vk, byte scan, uint flags, UIntPtr extra);
         [DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
+        [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vk);
         [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
         [DllImport("kernel32.dll")] static extern bool IsProcessInJob(IntPtr process, IntPtr job, out bool result);
         [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
@@ -2594,7 +2595,7 @@ namespace MinGent
             }
             finally { Mods(m, true); }
             Thread.Sleep(60);
-            if (m.HoldMs == 0) SetCursorPos(old.X, old.Y);
+            if (m.HoldMs == 0) { Unstick(); SetCursorPos(old.X, old.Y); }
         }
 
         public static void Hover(int x, int y)
@@ -2639,17 +2640,38 @@ namespace MinGent
             SetCursorPos(x1, y1);
             Thread.Sleep(50);
             Button("left", false);
-            Thread.Sleep(120);
-            const int steps = 15;
-            for (int k = 1; k <= steps; k++)
+            try
             {
-                SetCursorPos(x1 + (x2 - x1) * k / steps, y1 + (y2 - y1) * k / steps);
-                Thread.Sleep(20);
+                Thread.Sleep(120);
+                const int steps = 15;
+                for (int k = 1; k <= steps; k++)
+                {
+                    SetCursorPos(x1 + (x2 - x1) * k / steps, y1 + (y2 - y1) * k / steps);
+                    Thread.Sleep(20);
+                }
+                Thread.Sleep(120);
             }
-            Thread.Sleep(120);
-            Button("left", true);
+            finally { Button("left", true); }
             Thread.Sleep(80);
+            Unstick();
             SetCursorPos(old.X, old.Y);
+        }
+
+        static readonly int[] Held = { 0x01, 0x02, 0x04, 0x10, 0x11, 0x12, 0x5B, 0x5C };
+
+        public static void Unstick()
+        {
+            foreach (int vk in Held)
+            {
+                if ((GetAsyncKeyState(vk) & 0x8000) == 0) continue;
+                if (vk <= 0x04) Button(vk == 0x01 ? "left" : vk == 0x02 ? "right" : "middle", true);
+                else keybd_event((byte)vk, 0, 2, UIntPtr.Zero);
+            }
+        }
+
+        public static void UnstickAfterOwnInput()
+        {
+            if (ownInputSent && unchecked(Environment.TickCount - ownInputTo) < 10000) Unstick();
         }
 
         public static string Move(AppWindow w, int dx, int dy, CancelToken ct)
@@ -3243,6 +3265,7 @@ namespace MinGent
 
         protected static ToolOutcome After(ToolContext ctx, AppWindow w, int ms, string how)
         {
+            AppControl.UnstickAfterOwnInput();
             string note;
             AppWindow now = Settle(ctx, w, ms, out note);
             if (now == null) return ToolOutcome.Ok(how + ". The program has no open windows now.", how);
@@ -3808,16 +3831,17 @@ namespace MinGent
     class AppScreenshotTool : AppTool
     {
         public override string Name { get { return "app_screenshot"; } }
-        public override string Description { get { return "Take a screenshot of a window of a desktop program you started, to check how it looks. Positions in the image can be clicked with app_click x/y. When something in it is too small to read, call again with zoom."; } }
+        public override string Description { get { return "Take a screenshot of a window of a desktop program you started, to check how it looks. Positions in the image can be clicked with app_click x/y. When something in it is too small to read, call again with ref (a control from app_read, the easiest way) or zoom."; } }
         public override Dictionary<string, object> Schema
         {
             get
             {
                 return Obj("window", WindowArg(), false,
+                           "ref", P("string", "A control ref from app_read, e.g. a12, to see that control enlarged. No screenshot is needed first."), false,
                            "zoom", P("string", "An area of the last screenshot to see enlarged, as x,y,width,height in its pixels, such as \"400,300,500,250\". Clicks keep using positions from the full screenshot."), false);
             }
         }
-        public override string Label(Dictionary<string, object> a) { return AppZoom.Asked(a) ? "Look closer at the app" : "Screenshot the app"; }
+        public override string Label(Dictionary<string, object> a) { return AppZoom.Asked(a) || !string.IsNullOrEmpty(S(a, "ref")) ? "Look closer at the app" : "Screenshot the app"; }
         public override bool Untrusted { get { return true; } }
 
         public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
@@ -3830,7 +3854,18 @@ namespace MinGent
             ImageData img;
             int iw, ih;
             int[] box = null;
-            if (AppZoom.Asked(a))
+            string r = (S(a, "ref") ?? "").Trim();
+            AppElement el = null;
+            if (r.Length > 0 && !AppZoom.Asked(a))
+            {
+                AppSession rs = State(ctx);
+                if (!rs.Refs.TryGetValue(r, out el)) return ToolOutcome.Fail(r + " is not a known ref. Call app_read first (refs change when the window changes).");
+                string rwhy;
+                w = RefWindow(ctx, a, w, rs, out rwhy, "ref");
+                if (w == null) return ToolOutcome.Fail(rwhy);
+                if (el.Rect.Width <= 0 || el.Rect.Height <= 0) return ToolOutcome.Fail(r + " has no position on screen (it may be hidden or scrolled away). Use app_screenshot and zoom instead.");
+            }
+            else if (AppZoom.Asked(a))
             {
                 string wrong = AppZoom.Parse(a["zoom"], out box);
                 if (wrong != null) return ToolOutcome.Fail(wrong);
@@ -3841,6 +3876,21 @@ namespace MinGent
             }
             Bitmap shot = AppControl.Capture(w);
             if (shot == null) return ToolOutcome.Fail("the window did not respond to the screenshot (the program may be busy or frozen)");
+            if (el != null)
+            {
+                AppSession fs = State(ctx);
+                double fit = Math.Min(1.0, 1366.0 / Math.Max(shot.Width, shot.Height));
+                fs.ShotW = Math.Max(1, (int)(shot.Width * fit));
+                fs.ShotH = Math.Max(1, (int)(shot.Height * fit));
+                fs.ShotScale = (double)shot.Width / fs.ShotW;
+                fs.ShotWindow = w.Hwnd;
+                int pad = UI.S(8);
+                box = new int[] {
+                    (int)((el.Rect.X - w.Rect.X - pad) / fs.ShotScale), (int)((el.Rect.Y - w.Rect.Y - pad) / fs.ShotScale),
+                    (int)Math.Ceiling((el.Rect.Width + pad * 2) / fs.ShotScale), (int)Math.Ceiling((el.Rect.Height + pad * 2) / fs.ShotScale) };
+                string off = AppZoom.Fit(box, fs.ShotW, fs.ShotH);
+                if (off != null) { shot.Dispose(); return ToolOutcome.Fail(r + " is outside the window's picture. Use app_screenshot and zoom instead."); }
+            }
             if (box != null)
             {
                 using (Bitmap whole = shot)

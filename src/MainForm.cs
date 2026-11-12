@@ -495,28 +495,12 @@ namespace MinGent
             editor.MouseDown += sideButtons;
             tabs.MouseDown += sideButtons;
 
-            browser = new BrowserPane();
-            browser.Visible = false;
-            browser.AppShortcut = BrowserShortcut;
-            browser.ConsoleHeight = settings.BrowserConsoleHeight > 0 ? UI.S(settings.BrowserConsoleHeight) : 0;
-            browser.ConsoleHeightChanged += delegate (int h) { settings.BrowserConsoleHeight = (int)Math.Round(h / UI.Scale); };
-            browser.ShowRequested += delegate { ShowBrowser(true, false); };
-            browser.CloseRequested += delegate { ShowBrowser(false, false); };
-            aiPanel = new AiPanel(settings, this);
-            aiPanel.NotesClicked += delegate { ShowNotes(!shell.NotesOn, true); };
-            aiPanel.BrowserClicked += delegate { ShowBrowser(!shell.BrowserOn, true); };
-            aiPanel.ChatsChanged += delegate { RefreshSidebar(); };
-            aiPanel.Project = settings.AiProject;
-            aiPanel.StateChanged += delegate { sidebar.SetActive(aiPanel.ActiveChatPath, aiPanel.Running); UpdateTitle(); };
-            aiPanel.RenameRequested += delegate { if (aiPanel.ActiveChatPath != null) RenameChat(aiPanel.ActiveChatPath); };
-            aiPanel.DeleteRequested += delegate { if (aiPanel.ActiveChatPath != null) DeleteChat(aiPanel.ActiveChatPath); };
-            aiPanel.ContextToggled += delegate { UpdateAiChip(); };
-            aiPanel.CloseClicked += delegate { ShowAgent(false, true); };
-            aiPanel.NotesChatChanged += delegate { SyncNotesChat(); };
+            browser = NewPane();
+            aiPanel = MakePanel(browser);
 
             sidebar.NewChatClicked += delegate { aiPanel.NewChat(); };
             sidebar.OpenClicked += delegate (string p) { OpenFromSidebar(p); };
-            sidebar.ArchiveClicked += delegate (string p) { aiPanel.ArchiveChat(p); RefreshSidebar(); };
+            sidebar.ArchiveClicked += delegate (string p) { (PanelWith(p) ?? aiPanel).ArchiveChat(p); RefreshSidebar(); };
             sidebar.RestoreClicked += delegate (string p) { aiPanel.RestoreChat(p); RefreshSidebar(); };
             sidebar.ArchiveViewClicked += delegate { showArchived = !showArchived; RefreshSidebar(); };
             sidebar.ProjectClicked += delegate (string f) { SelectProject(Projects.Same(f, settings.AiProject) ? "" : f); };
@@ -524,6 +508,7 @@ namespace MinGent
             {
                 List<string> known = Projects.Load();
                 if (Projects.Forget(known, f)) Projects.Save(known);
+                if (Projects.Same(f, settings.AiProject)) SelectProject("");
                 RefreshSidebar();
             };
             sidebar.DeleteClicked += DeleteChat;
@@ -958,8 +943,8 @@ namespace MinGent
             navTip.Th = t;
             findBar.SetTheme(t);
             if (contentPanel != null) contentPanel.BackColor = t.Chrome;
-            if (aiPanel != null) aiPanel.SetTheme(t);
-            if (browser != null) browser.SetTheme(t);
+            foreach (AiPanel p in panels) p.SetTheme(t);
+            foreach (PanelHost h in hosts.Values) if (h.Pane != null) h.Pane.SetTheme(t);
             shell.SetTheme(t);
             ResumeLayout();
             Native.SetTitleBar(this, t);
@@ -992,7 +977,7 @@ namespace MinGent
             Font old = editorFont;
             editorFont = f;
             editor.SetEditorFont(f);
-            if (aiPanel != null) aiPanel.SetEditorFont(f);
+            foreach (AiPanel p in panels) p.SetEditorFont(f);
             if (old != null) old.Dispose();
             UpdateStatus();
         }
@@ -1144,19 +1129,33 @@ namespace MinGent
             }
             sidebar.SetProjects(projects, settings.AiProject);
             sidebar.SetChats(showArchived ? aiPanel.ListArchived() : aiPanel.ListChats(), aiPanel.ActiveChatPath, aiPanel.Running, archived, showArchived);
+            UpdateWork();
         }
 
         void SelectProject(string folder)
         {
             settings.AiProject = folder ?? "";
             settings.Save();
-            if (aiPanel != null) aiPanel.Project = settings.AiProject;
+            foreach (AiPanel p in panels) p.Project = settings.AiProject;
             RefreshSidebar();
         }
 
         void OpenFromSidebar(string path)
         {
             if (aiPanel == null) return;
+            AiPanel holder = PanelWith(path);
+            if (holder != null && holder != aiPanel)
+            {
+                if (aiPanel.Running && (aiPanel.IsTemporary || aiPanel.ActiveChatPath == null))
+                {
+                    AiPanel target = holder;
+                    aiPanel.StopFirst("open the other chat", delegate { BringFront(target); RefreshSidebar(); });
+                    return;
+                }
+                BringFront(holder);
+                RefreshSidebar();
+                return;
+            }
             if (aiPanel.IsArchived(path))
             {
                 aiPanel.OpenArchived(path, delegate { showArchived = false; });
@@ -1169,28 +1168,256 @@ namespace MinGent
 
         void DeleteChat(string path)
         {
+            AiPanel holder = PanelWith(path);
+            if (holder != null && holder != aiPanel)
+            {
+                if (aiPanel.Running && (aiPanel.IsTemporary || aiPanel.ActiveChatPath == null))
+                {
+                    AiPanel target = holder;
+                    aiPanel.StopFirst("open the chat you want to delete", delegate { BringFront(target); aiPanel.ConfirmAndDelete(path); RefreshSidebar(); });
+                    return;
+                }
+                BringFront(holder);
+            }
             aiPanel.ConfirmAndDelete(path);
             RefreshSidebar();
         }
 
         void RenameChat(string path)
         {
-            string old = aiPanel.ChatTitleOf(path);
+            AiPanel owner = PanelWith(path) ?? aiPanel;
+            string old = owner.ChatTitleOf(path);
             string t = TextPrompt.Ask(this, theme, "Rename chat", "Chat name", old);
             if (t == null || t.Length == 0 || t == old) return;
-            aiPanel.RenameChat(path, t);
+            owner.RenameChat(path, t);
             RefreshSidebar();
+        }
+
+        readonly List<AiPanel> panels = new List<AiPanel>();
+        readonly Dictionary<AiPanel, PanelHost> hosts = new Dictionary<AiPanel, PanelHost>();
+        public const int MaxWorking = 5;
+        Form parking;
+        readonly HashSet<AiPanel> asked = new HashSet<AiPanel>();
+
+        BrowserPane NewPane()
+        {
+            BrowserPane b = new BrowserPane();
+            b.Visible = false;
+            b.AppShortcut = BrowserShortcut;
+            b.ConsoleHeight = settings.BrowserConsoleHeight > 0 ? UI.S(settings.BrowserConsoleHeight) : 0;
+            b.ConsoleHeightChanged += delegate (int h) { settings.BrowserConsoleHeight = (int)Math.Round(h / UI.Scale); };
+            b.ShowRequested += delegate { if (b == browser) ShowBrowser(true, false); else Park(b); };
+            b.CloseRequested += delegate { if (b == browser) ShowBrowser(false, false); else b.Visible = false; };
+            return b;
+        }
+
+        AiPanel MakePanel(BrowserPane pane)
+        {
+            PanelHost h = new PanelHost(this);
+            h.Pane = pane;
+            AiPanel p = new AiPanel(settings, h);
+            h.Panel = p;
+            hosts[p] = h;
+            panels.Add(p);
+            p.NotesClicked += delegate { if (p == aiPanel) ShowNotes(!shell.NotesOn, true); };
+            p.BrowserClicked += delegate { if (p == aiPanel) ShowBrowser(!shell.BrowserOn, true); };
+            p.ChatsChanged += delegate { RefreshSidebar(); };
+            p.Project = settings.AiProject;
+            p.StateChanged += delegate { PanelState(p); };
+            p.RenameRequested += delegate { if (p.ActiveChatPath != null) RenameChat(p.ActiveChatPath); };
+            p.DeleteRequested += delegate { if (p.ActiveChatPath != null) DeleteChat(p.ActiveChatPath); };
+            p.ContextToggled += delegate { if (p == aiPanel) UpdateAiChip(); };
+            p.CloseClicked += delegate { if (p == aiPanel) ShowAgent(false, true); };
+            p.NotesChatChanged += delegate { if (p == aiPanel) SyncNotesChat(); };
+            p.HandOff = delegate { return HandOff(p); };
+            return p;
+        }
+
+        public BrowserPane PaneFor(PanelHost h)
+        {
+            if (h.Pane == null)
+            {
+                h.Pane = NewPane();
+                if (theme != null) h.Pane.SetTheme(theme);
+                shell.Controls.Add(h.Pane);
+            }
+            return h.Pane;
+        }
+
+        AiPanel PanelWith(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return null;
+            foreach (AiPanel p in panels) if (string.Equals(p.ActiveChatPath, path, StringComparison.OrdinalIgnoreCase)) return p;
+            return null;
+        }
+
+        bool AnyRunning()
+        {
+            foreach (AiPanel p in panels) if (p.Running) return true;
+            return false;
+        }
+
+        void StopAllThen(Action go)
+        {
+            List<AiPanel> busy = new List<AiPanel>();
+            foreach (AiPanel p in panels) if (p.Running) busy.Add(p);
+            if (busy.Count == 0) { go(); return; }
+            int left = busy.Count;
+            foreach (AiPanel p in busy) p.StopThen(delegate { if (--left == 0) go(); });
+        }
+
+        AiPanel HandOff(AiPanel from)
+        {
+            if (from != aiPanel || IsDisposed) return null;
+            if (from.IsTemporary || from.ActiveChatPath == null) { from.HandOffNote = "A temporary chat can't keep working in the background, since it isn't in your chat list."; return null; }
+            int working = 0;
+            foreach (AiPanel p in panels) if (p.Running) working++;
+            if (working >= MaxWorking) { from.HandOffNote = MaxWorking + " chats are working already, the most at once."; return null; }
+            from.SaveChat();
+            AiPanel.Fresh = true;
+            AiPanel fresh;
+            try { fresh = MakePanel(null); }
+            finally { AiPanel.Fresh = false; }
+            from.ShareModels(fresh);
+            fresh.InFront = false;
+            fresh.Visible = false;
+            if (theme != null) fresh.SetTheme(theme);
+            fresh.SetEditorFont(editor.Font);
+            shell.Controls.Add(fresh);
+            BringFront(fresh);
+            return fresh;
+        }
+
+        void BringFront(AiPanel p)
+        {
+            if (p == aiPanel || !hosts.ContainsKey(p)) return;
+            AiPanel old = aiPanel;
+            PanelHost nh = hosts[p];
+            old.InFront = false;
+            p.InFront = true;
+            aiPanel = p;
+            bool agentOn = shell.AgentOn;
+            shell.Center = p;
+            p.Visible = agentOn;
+            old.Visible = false;
+            BrowserPane was = browser;
+            BrowserPane now = PaneFor(nh);
+            bool show = shell.BrowserOn;
+            if (was != now)
+            {
+                bool parked = now.Parent == parking && now.Visible;
+                browser = now;
+                if (was != null)
+                {
+                    if (old.Running && was.Visible) Park(was);
+                    else was.Visible = false;
+                }
+                if (now.Parent != shell) { now.Visible = false; now.Parent = shell; }
+                shell.Browser = now;
+                if (parked) show = true;
+                now.Visible = show;
+                shell.BrowserOn = show;
+                settings.BrowserVisible = show;
+                now.ParentMoved();
+            }
+            shell.PerformLayout();
+            p.SetPanes(shell.NotesOn, shell.BrowserOn);
+            p.SetContextLabel(null);
+            asked.Remove(p);
+            sidebar.SetActive(p.ActiveChatPath, p.Running);
+            SyncNotesChat();
+            UpdateAiChip();
+            UpdateTitle();
+            UpdateWork();
+            if (agentOn) p.FocusInput();
+            if (!old.Running)
+            {
+                old.MoveDraftTo(p);
+                BeginInvoke(new Action(delegate { Retire(old); }));
+            }
+        }
+
+        void Park(BrowserPane b)
+        {
+            if (b == browser || b.IsDisposed) return;
+            if (parking == null || parking.IsDisposed)
+            {
+                parking = new ParkingForm();
+                parking.Show();
+            }
+            if (b.Parent != parking)
+            {
+                b.Visible = false;
+                b.Parent = parking;
+                b.SetBounds(0, 0, parking.ClientSize.Width, parking.ClientSize.Height);
+            }
+            b.Visible = true;
+            b.ParentMoved();
+        }
+
+        void PanelState(AiPanel p)
+        {
+            if (p == aiPanel)
+            {
+                sidebar.SetActive(p.ActiveChatPath, p.Running);
+                UpdateTitle();
+            }
+            UpdateWork();
+            if (p == aiPanel) return;
+            if (p.WaitsForUser)
+            {
+                if (asked.Add(p) && Form.ActiveForm != this) AiPanel.FlashTaskbar(this);
+            }
+            else asked.Remove(p);
+            if (!p.Running) BeginInvoke(new Action(delegate { if (!p.Running && p != aiPanel) { if (Form.ActiveForm != this) AiPanel.FlashTaskbar(this); Retire(p); } }));
+        }
+
+        void UpdateWork()
+        {
+            List<string> busy = new List<string>(), waits = new List<string>();
+            foreach (AiPanel p in panels)
+            {
+                if (p == aiPanel || !p.Running || p.ActiveChatPath == null) continue;
+                busy.Add(p.ActiveChatPath);
+                if (p.WaitsForUser) waits.Add(p.ActiveChatPath);
+            }
+            sidebar.SetWork(busy, waits);
+        }
+
+        void Retire(AiPanel p)
+        {
+            if (p == aiPanel || p.Running || !hosts.ContainsKey(p)) return;
+            PanelHost h = hosts[p];
+            try { p.SaveChat(); } catch { }
+            try { p.Shutdown(); } catch { }
+            panels.Remove(p);
+            hosts.Remove(p);
+            asked.Remove(p);
+            shell.Controls.Remove(p);
+            try { p.Dispose(); } catch { }
+            if (h.Pane != null && h.Pane != browser)
+            {
+                try { h.Pane.Shutdown(); } catch { }
+                if (h.Pane.Parent != null) h.Pane.Parent.Controls.Remove(h.Pane);
+                try { h.Pane.Dispose(); } catch { }
+            }
+            UpdateWork();
+        }
+
+        void RetireBackground()
+        {
+            foreach (AiPanel p in panels.ToArray()) if (p != aiPanel) Retire(p);
         }
 
         bool WipeBrowserData(IWin32Window owner, Action<bool> done)
         {
             if (browser == null || browser.Wiping) return false;
-            bool busy = aiPanel != null && aiPanel.Running;
+            bool busy = AnyRunning();
             string text = "Wipe the built-in browser's data?\n\nYou'll be signed out of every site in MinGent's browser, and its history, cache, cookies and site data are erased from this PC. Your other browsers are not affected." +
                           (busy ? "\n\nThe agent is working right now; it will be stopped first." : "");
             if (!Alert.Confirm(owner, theme, text, Program.AppName, busy ? "Stop and wipe" : "Wipe", true)) return false;
-            Action go = delegate { if (!browser.IsDisposed) browser.WipeAll(done); };
-            if (busy) aiPanel.StopThen(go); else go();
+            Action go = delegate { RetireBackground(); if (!browser.IsDisposed) browser.WipeAll(done); };
+            if (busy) StopAllThen(go); else go();
             return true;
         }
 
@@ -1242,13 +1469,13 @@ namespace MinGent
             wait.Controls.Add(l);
             wait.Show(this);
             Enabled = false;
-            aiPanel.StopThen(delegate
+            StopAllThen(delegate
             {
-                try { aiPanel.Shutdown(); } catch { }
+                foreach (AiPanel p in panels.ToArray()) { try { p.Shutdown(); } catch { } }
                 ModelDownloads.CancelAll();
                 Shell.KillAll();
                 try { Engine.Instance.Stop(); } catch { }
-                if (browser != null) { try { browser.Release(); } catch { } }
+                foreach (PanelHost h in hosts.Values) if (h.Pane != null) { try { h.Pane.Release(); } catch { } }
                 try { FileTypes.RemoveAll(); } catch { }
                 List<string> roots = ModelLibrary.OwnRoots();
                 string outDir = outputs ? Eraser.OutputsFolder() : null;
@@ -1293,7 +1520,7 @@ namespace MinGent
             editor.WordWrap = settings.Wrap;
             ApplyTheme();
             ApplyFont();
-            if (aiPanel != null) aiPanel.SettingsChanged();
+            foreach (AiPanel p in panels) p.SettingsChanged();
             UpdateAiChip();
         }
 
@@ -1813,7 +2040,7 @@ namespace MinGent
                     dlg.DeleteAllChats = delegate
                     {
                         if (!Alert.Confirm(dlg, theme, DeleteAllPrompt(), Program.AppName, "Delete all", true)) return;
-                        aiPanel.StopThen(delegate { aiPanel.DeleteAllChats(); RefreshSidebar(); });
+                        StopAllThen(delegate { RetireBackground(); aiPanel.DeleteAllChats(); RefreshSidebar(); });
                     };
                     dlg.WipeBrowser = WipeBrowserData;
                     dlg.ResetAll = delegate { reset = true; };
@@ -1869,11 +2096,11 @@ namespace MinGent
             settings.Save();
             settings.ApplyPrivacy();
             if (Net.Offline && !wasOffline) ModelDownloads.CancelAll();
-            if (browser != null && Net.Offline != wasOffline) browser.ApplyOffline();
+            if (Net.Offline != wasOffline) foreach (PanelHost h in hosts.Values) if (h.Pane != null) h.Pane.ApplyOffline();
             ModelLibrary.Apply(settings);
             EngineUpdates.CheckSoon();
             if (settings.ThemeName != oldTheme || settings.AccentName != oldAccent) ApplyTheme();
-            if (aiPanel != null) aiPanel.SettingsChanged();
+            foreach (AiPanel p in panels) p.SettingsChanged();
             UpdateAiChip();
             if (!ApplyQuickEntry() && settings.QuickKey != oldQuick)
             {
@@ -1897,7 +2124,7 @@ namespace MinGent
                 {
                     settings.AiModel = modelRef;
                     settings.Save();
-                    if (aiPanel != null) aiPanel.SettingsChanged();
+                    foreach (AiPanel p in panels) p.SettingsChanged();
                 };
                 library.FormClosed += delegate { library = null; if (aiPanel != null) aiPanel.RefreshConnection(true); };
                 library.Show(this);
@@ -3280,7 +3507,7 @@ namespace MinGent
             {
                 closing = false;
                 sessionTimer.Start();
-                if (aiPanel != null) aiPanel.Resume();
+                foreach (AiPanel p in panels) p.Resume();
                 return;
             }
             if (m.Msg == Native.WM_SETTINGCHANGE)
@@ -3492,7 +3719,8 @@ namespace MinGent
             settings.Maximized = WindowState == FormWindowState.Maximized;
             Rectangle rb = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
             if (rb.Width > 0 && rb.Height > 0) settings.Bounds = rb;
-            if (aiPanel != null) { aiPanel.Shutdown(); aiPanel.SaveChat(); }
+            foreach (AiPanel p in panels.ToArray()) if (p != aiPanel) { try { p.Shutdown(); p.SaveChat(); } catch { } }
+            if (aiPanel != null) { try { aiPanel.Shutdown(); aiPanel.SaveChat(); } catch { } }
             settings.NotesVisible = shell.NotesOn;
             settings.AgentVisible = shell.AgentOn;
             settings.SidebarCollapsed = shell.LeftCollapsed;
@@ -3510,7 +3738,7 @@ namespace MinGent
             if (library != null && !library.IsDisposed) { try { library.Hide(); } catch { } }
             Shell.KillAll();
             try { Engine.Instance.Stop(); } catch { }
-            if (browser != null) browser.Shutdown();
+            foreach (PanelHost h in hosts.Values) if (h.Pane != null) { try { h.Pane.Shutdown(); } catch { } }
             try { ModelCatalog.UnloadOurLmStudioModels(3000); } catch { }
             if (ipc != null) { try { ipc.DestroyHandle(); } catch { } ipc = null; }
             closedForGood = true;
@@ -3521,5 +3749,68 @@ namespace MinGent
                 if (err != null) MessageBox.Show("MinGent could not start the update: " + err + "\n\nNothing was changed.", Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
+    }
+
+    class ParkingForm : Form
+    {
+        public ParkingForm()
+        {
+            FormBorderStyle = FormBorderStyle.None;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.Manual;
+            Location = new Point(-32000, -32000);
+            ClientSize = new Size(UI.S(1100), UI.S(820));
+            Text = "MinGent";
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                cp.ExStyle |= 0x80 | 0x08000000;
+                return cp;
+            }
+        }
+
+        protected override bool ShowWithoutActivation { get { return true; } }
+    }
+
+    class PanelHost : IAssistantHost, IEditorBridge
+    {
+        readonly MainForm main;
+        public AiPanel Panel;
+        public BrowserPane Pane;
+        const string Away = "Notes show another chat right now, so MinGent did not change them. Work with the file on disk instead (read_file, edit_file, write_file).";
+
+        public PanelHost(MainForm m) { main = m; }
+
+        bool Front { get { return Panel == null || Panel.InFront; } }
+
+        public IEditorBridge Editor { get { return this; } }
+        public BrowserPane Browser { get { return main.PaneFor(this); } }
+        public string ActiveContext(out string label) { if (Front) return main.ActiveContext(out label); label = null; return null; }
+        public string WorkspaceFolder(out bool isDefault) { return main.WorkspaceFolder(out isDefault); }
+        public void RunStarted(int runId) { main.RunStarted(runId); }
+        public int RunChangeCount(int runId, RunChangeLog log) { return main.RunChangeCount(runId, log); }
+        public string UndoRun(int runId, RunChangeLog log, out int reverted, out int kept) { return main.UndoRun(runId, log, out reverted, out kept); }
+        public void ShowSettings() { main.ShowSettings(); }
+        public void ShowSettings(string page) { main.ShowSettings(page); }
+        public void ShowModelLibrary() { main.ShowModelLibrary(); }
+        public void ShowBrowser() { if (Front) main.ShowBrowser(); }
+        public void OpenLink(string target) { main.OpenLink(target); }
+        public void RevealAssistant() { if (Front) main.RevealAssistant(); }
+        public void ResetBrowser() { if (Pane != null) Pane.ResetSession(); }
+        public void ClearBrowserHistory() { if (Pane != null) Pane.ClearHistory(); else main.ClearBrowserHistory(); }
+        public List<string> UnsavedNotes(string chatKey) { return main.UnsavedNotes(chatKey); }
+
+        public List<TabInfo> Tabs(bool withText) { return Front ? main.Tabs(withText) : new List<TabInfo>(); }
+        public TabInfo FindTab(string nameOrPath, bool withText) { return Front ? main.FindTab(nameOrPath, withText) : null; }
+        public string SetTabText(string key, long expectedVersion, string newText, bool save, int runId) { return Front ? main.SetTabText(key, expectedVersion, newText, save, runId) : Away; }
+        public string OpenFile(string fullPath, int line) { return Front ? main.OpenFile(fullPath, line) : "Notes show another chat right now, so the file was not opened there. It is at " + fullPath + "."; }
+        public string NewTab(string title, string text, int runId) { return Front ? main.NewTab(title, text, runId) : Away; }
+        public void FileChangedOnDisk(string fullPath) { main.FileChangedOnDisk(fullPath); }
+        public string CloseNotes(bool userAsked) { return Front ? main.CloseNotes(userAsked) : "Notes show another chat right now, so they stay as they are."; }
+        public string OpenNotes() { return Front ? main.OpenNotes() : "Notes show another chat right now, so they were not opened."; }
     }
 }

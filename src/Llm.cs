@@ -104,7 +104,7 @@ namespace MinGent
         public string RawProvider;
         public List<object> RawBlocks;
         public string Compact;
-        public bool Hidden;
+        public bool Hidden, SentBack;
         public bool Snapshot;
         public bool NoThinking;
         public bool PlanApproved;

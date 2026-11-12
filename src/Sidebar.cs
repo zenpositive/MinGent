@@ -180,9 +180,25 @@ namespace MinGent
         void SetRunning(bool on)
         {
             running = on;
-            if (on && !spinTimer.Enabled) spinTimer.Start();
-            else if (!on && spinTimer.Enabled) spinTimer.Stop();
+            bool spin = on || working.Count > 0;
+            if (spin && !spinTimer.Enabled) spinTimer.Start();
+            else if (!spin && spinTimer.Enabled) spinTimer.Stop();
         }
+
+        readonly HashSet<string> working = new HashSet<string>(StringComparer.OrdinalIgnoreCase), waiting = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        public void SetWork(ICollection<string> busy, ICollection<string> asks)
+        {
+            working.Clear();
+            waiting.Clear();
+            if (busy != null) foreach (string p in busy) if (!string.IsNullOrEmpty(p)) working.Add(p);
+            if (asks != null) foreach (string p in asks) if (!string.IsNullOrEmpty(p)) waiting.Add(p);
+            SetRunning(running);
+            Invalidate();
+        }
+
+        bool Working(ChatInfo c) { return (IsActive(c) && running) || (c.Path != null && working.Contains(c.Path)); }
+        bool Waiting(ChatInfo c) { return c.Path != null && waiting.Contains(c.Path) && !IsActive(c); }
 
         public void FocusSearch() { if (!collapsed) search.Focus(); }
 
@@ -350,7 +366,7 @@ namespace MinGent
         {
             if (collapsed) return;
             for (int i = 0; i < rows.Count; i++)
-                if (rows[i].Chat != null && IsActive(rows[i].Chat)) { Invalidate(RowRect(i)); return; }
+                if (rows[i].Chat != null && Working(rows[i].Chat)) Invalidate(RowRect(i));
         }
 
         bool IsActive(ChatInfo c) { return activePath != null && string.Equals(c.Path, activePath, StringComparison.OrdinalIgnoreCase); }
@@ -472,7 +488,7 @@ namespace MinGent
                     int right = r.Right - UI.S(10);
                     Rectangle mr = MoreRect(i);
                     if (hot) right = mr.Left - UI.S(2);
-                    else if (active && running) right = r.Right - UI.S(30);
+                    else if (Working(row.Chat) || Waiting(row.Chat)) right = r.Right - UI.S(30);
                     string title = row.Chat.Title.Length > 0 ? row.Chat.Title : "Untitled chat";
                     Rectangle tbox = new Rectangle(r.X + UI.S(10), r.Y, Math.Max(10, right - r.X - UI.S(10)), r.Height);
                     TitleText(g, title, tbox, fg, active ? th.SideSel : hot ? th.SideHover : th.Side);
@@ -486,8 +502,13 @@ namespace MinGent
                         }
                         Glyphs.Draw("more", g, mr, th.HighContrast ? (active ? SystemColors.HighlightText : th.ChromeFore) : moreHot ? th.ChromeFore : th.ChromeDim);
                     }
-                    else if (active && running)
-                        Glyphs.Spinner(g, new Rectangle(r.Right - UI.S(26), r.Y + (r.Height - UI.S(18)) / 2, UI.S(18), UI.S(18)), th.HighContrast ? SystemColors.HighlightText : th.Accent, phase);
+                    else if (Waiting(row.Chat))
+                    {
+                        int d = UI.S(8);
+                        Glyphs.FillRound(g, th.HighContrast ? SystemColors.Highlight : th.Accent, new Rectangle(r.Right - UI.S(17) - d / 2, r.Y + (r.Height - d) / 2, d, d), d / 2);
+                    }
+                    else if (Working(row.Chat))
+                        Glyphs.Spinner(g, new Rectangle(r.Right - UI.S(26), r.Y + (r.Height - UI.S(18)) / 2, UI.S(18), UI.S(18)), th.HighContrast ? (active ? SystemColors.HighlightText : th.Fore) : th.Accent, phase);
                 }
             }
             g.Restore(st);

@@ -67,7 +67,8 @@ namespace MinGent
         string chatTitle = "";
         string chatFolder = "";
         bool titleSet;
-        int runCounter, curTurn, turnCounter;
+        static int runCounter;
+        int curTurn, turnCounter;
         volatile int liveRun = -1;
         CancelToken cancel;
         RunChangeLog runLog;
@@ -173,7 +174,31 @@ namespace MinGent
             pump.Start();
             UpdateEmptyState();
             UpdateModelChip();
-            LoadLastChat();
+            if (!Fresh) LoadLastChat();
+        }
+
+        public static bool Fresh;
+
+        public void ShareModels(AiPanel other)
+        {
+            if (other == null || catalog == null) return;
+            other.catalog = catalog;
+            other.UpdateModelChip();
+        }
+
+        public void MoveDraftTo(AiPanel other)
+        {
+            if (other == null || other == this || other.composer.Text.Trim().Length > 0) return;
+            string t = composer.Text;
+            List<Attachment> atts = composer.TakeAttachments();
+            other.composer.Text = t;
+            foreach (Attachment a in atts) other.composer.Add(a);
+            composer.Text = "";
+        }
+
+        public void StopFirst(string what, Action then)
+        {
+            WhenIdle(what, then);
         }
 
         protected override void Dispose(bool disposing)
@@ -270,6 +295,7 @@ namespace MinGent
 
         void ScheduleTick()
         {
+            if (!InFront) return;
             Form f = FindForm();
             if (f == null || !f.Visible || !f.CanFocus) return;
             try { CheckSchedule(DateTime.Now, Form.ActiveForm == null, QuietMs()); } catch { }
@@ -286,7 +312,8 @@ namespace MinGent
         }
         public string ActiveChatPath { get { return chatFile; } }
 
-        int conversation;
+        static int conversations;
+        int conversation = ++conversations;
         readonly List<string> deletedChats = new List<string>();
         public event EventHandler NotesChatChanged;
         public int Conversation { get { return conversation; } }
@@ -664,17 +691,21 @@ namespace MinGent
             m.ShowItemToolTips = true;
             List<string> list = Projects.Load();
             bool own = chatFolder.Length > 0;
-            if (own && Projects.Find(list, chatFolder) < 0) list.Insert(0, chatFolder);
+            bool loose = own && Projects.Find(list, chatFolder) < 0;
+            if (loose) list.Insert(0, chatFolder);
             List<string> names = Projects.Names(list);
             for (int i = 0; i < list.Count; i++)
             {
                 string f = list[i];
-                ToolStripMenuItem it = Menus.Item(MenuText(names[i]), own && Projects.Same(f, chatFolder), delegate { SetChatFolder(f, true); });
-                it.ToolTipText = f;
+                bool onlyHere = loose && i == 0;
+                ToolStripMenuItem it = Menus.Item(MenuText(names[i]) + (onlyHere ? " (this chat only)" : ""), own && Projects.Same(f, chatFolder), delegate { SetChatFolder(f, true); });
+                it.ToolTipText = f + (onlyHere ? "\nThis chat works here, but the folder is not in your projects." : "");
                 it.Enabled = !running;
                 m.Items.Add(it);
             }
-            ToolStripMenuItem none = Menus.Item("No project", !own, delegate { SetChatFolder("", true); });
+            string fallback = "";
+            if (!own) { bool d; try { fallback = Projects.Name(WorkFolder(out d)); } catch { } }
+            ToolStripMenuItem none = Menus.Item(fallback.Length > 0 ? "No project (" + MenuText(fallback) + ")" : "No project", !own, delegate { SetChatFolder("", true); });
             none.ToolTipText = "Works in the folder of the file open in Notes, or in the default folder";
             none.Enabled = !running;
             m.Items.Add(none);
@@ -685,7 +716,11 @@ namespace MinGent
             if (own && Projects.Find(Projects.Load(), chatFolder) >= 0)
             {
                 string mine = chatFolder;
-                m.Items.Add(Menus.Item("Remove \u201C" + MenuText(Projects.Name(mine)) + "\u201D from this list", false, delegate { ForgetProject(mine); }));
+                m.Items.Add(Menus.Item("Remove \u201C" + MenuText(Projects.Name(mine)) + "\u201D from this list", false, delegate
+                {
+                    ForgetProject(mine);
+                    Notice("Removed " + Projects.Name(mine) + " from your projects. This chat still works in " + ShortPath(mine) + "; pick another folder or No project to change that.", 0);
+                }));
             }
             m.Items.Add(Menus.Item("Open the work folder", false, delegate { OpenWorkFolder(); }));
             m.Closed += delegate { BeginInvoke(new Action(delegate { m.Dispose(); })); };
@@ -778,7 +813,7 @@ namespace MinGent
             string r = settings.AiModel ?? "";
             int c = r.IndexOf(':');
             string p = c > 0 ? r.Substring(0, c) : "";
-            return p == "engine" || p == "lmstudio";
+            return p == "engine" || p == "lmstudio" || (p == "custom" && Http.IsLoopback(settings.CustomUrl ?? ""));
         }
 
         void SetLevel(string lv)
@@ -1876,12 +1911,14 @@ namespace MinGent
             Bridge ui = new Bridge(this, run);
             replyFirst = false;
             session.InboxRead = delegate (List<int> ids) { ui.Post(delegate { OnInboxRead(ids); }); };
+            bool localModel = LocalModelPicked();
             Thread t = new Thread(delegate ()
             {
                 string error = null;
                 AgentError agentError = null;
                 try
                 {
+                    if (!TakeModel(localModel, ct, delegate (string p) { ui.Phase(p); })) return;
                     ModelEntry m;
                     LlmBackend be;
                     string err = PrepareModel(ct, delegate (string p) { ui.Phase(p); }, out m, out be);
@@ -1945,6 +1982,7 @@ namespace MinGent
                 catch (Exception ex) { error = "Something went wrong: " + ex.Message; }
                 finally
                 {
+                    GiveModel();
                     string e2 = error;
                     AgentError ae2 = agentError;
                     ui.Post(delegate { EndRun(run, e2, ae2, msg); });
@@ -1978,6 +2016,7 @@ namespace MinGent
 
         void EndRun(int run, string error, AgentError ae, Msg msg)
         {
+            try { AgentSession.UnstickIfFree(); } catch { }
             if (run != liveRun) return;
             StampTurns();
             running = false;
@@ -2117,7 +2156,7 @@ namespace MinGent
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         static extern bool FlashWindow(IntPtr hwnd, bool invert);
 
-        static void FlashTaskbar(Form f)
+        public static void FlashTaskbar(Form f)
         {
             try { FlashWindow(f.Handle, true); } catch { }
         }
@@ -2896,7 +2935,7 @@ namespace MinGent
             if (!sameChat) chatFolder = ProjectFolder();
             titleSet = false;
             temporary = temp;
-            if (!sameChat) conversation++;
+            if (!sameChat) conversation = ++conversations;
             UpdateTemporaryUi();
             curTurn = turnCounter = 0;
             composer.ClearUsage();
@@ -2918,7 +2957,7 @@ namespace MinGent
         void WhenIdle(string what, Action act)
         {
             if (!running) { act(); return; }
-            DialogResult r = Alert.Choose(FindForm(), th, "The agent is still working in this chat. Stop it and " + what + "?", Program.AppName, MessageBoxIcon.Question,
+            DialogResult r = Alert.Choose(FindForm(), th, "The agent is still working in this chat. Stop it and " + what + "?" + (HandOffNote != null ? "\n\n" + HandOffNote : ""), Program.AppName, MessageBoxIcon.Question,
                 new string[] { "Stop it", "Keep working" }, new DialogResult[] { DialogResult.Yes, DialogResult.No }, 0, 1);
             if (r != DialogResult.Yes) return;
             if (!running) { act(); return; }
@@ -2943,33 +2982,82 @@ namespace MinGent
             }
         }
 
+        public Func<AiPanel> HandOff;
+        public bool InFront = true;
+        public string HandOffNote;
+        public bool IsTemporary { get { return temporary; } }
+        public bool WaitsForUser { get { return running && (chat.PendingPermission() != null || chat.PendingQuestion() != null); } }
+
+        static readonly object modelGate = new object();
+        static AiPanel modelUser;
+        public const string ModelBusy = "Waiting for another chat to finish with the model";
+
+        bool TakeModel(bool local, CancelToken ct, Action<string> phase)
+        {
+            if (!local) return true;
+            bool said = false;
+            lock (modelGate)
+            {
+                while (modelUser != null && modelUser != this)
+                {
+                    if (ct.IsCancelled) return false;
+                    if (!said) { said = true; phase(ModelBusy); }
+                    Monitor.Wait(modelGate, 250);
+                }
+                modelUser = this;
+            }
+            return !ct.IsCancelled;
+        }
+
+        void GiveModel()
+        {
+            lock (modelGate)
+            {
+                if (modelUser != this) return;
+                modelUser = null;
+                Monitor.PulseAll(modelGate);
+            }
+        }
+
+        void WhenFree(string what, Action<AiPanel> act)
+        {
+            if (!running) { act(this); return; }
+            HandOffNote = null;
+            AiPanel other = HandOff != null ? HandOff() : null;
+            if (other != null) { act(other); return; }
+            WhenIdle(what, delegate { act(this); });
+            HandOffNote = null;
+        }
+
         public void NewChat()
         {
-            WhenIdle("start a new chat", delegate
-            {
-                bool had = chatFile != null || chat.Items.Count > 0;
-                SaveChat();
-                ClearView(false, false);
-                if (had) host.ResetBrowser();
-                Changed();
-                composer.FocusInput();
-            });
+            WhenFree("start a new chat", delegate (AiPanel p) { p.StartFresh(); });
+        }
+
+        void StartFresh()
+        {
+            bool had = chatFile != null || chat.Items.Count > 0;
+            SaveChat();
+            ClearView(false, false);
+            if (had) host.ResetBrowser();
+            Changed();
+            composer.FocusInput();
         }
 
         public void OpenChat(string path)
         {
             if (string.Equals(path, chatFile, StringComparison.OrdinalIgnoreCase)) { composer.FocusInput(); return; }
-            WhenIdle("open the other chat", delegate { Open(path); });
+            WhenFree("open the other chat", delegate (AiPanel p) { p.Open(path); });
         }
 
         public void OpenArchived(string path, Action restored)
         {
-            WhenIdle("open the other chat", delegate
+            WhenFree("open the other chat", delegate (AiPanel p)
             {
-                string back = RestoreChat(path);
-                if (back == null) { Changed(); return; }
+                string back = p.RestoreChat(path);
+                if (back == null) { p.Changed(); return; }
                 if (restored != null) restored();
-                Open(back);
+                p.Open(back);
             });
         }
 
@@ -3255,6 +3343,7 @@ namespace MinGent
                 if (m.Turn != 0) o["tn"] = m.Turn;
                 if (m.Compact != null) o["c"] = m.Compact;
                 if (m.Hidden) o["h"] = true;
+                if (m.SentBack) o["sb"] = true;
                 if (m.ToolCallId != null) { o["id"] = m.ToolCallId; o["n"] = m.ToolName ?? ""; o["e"] = m.ToolError; }
                 if (m.ToolCalls != null && m.ToolCalls.Count > 0)
                 {
@@ -3286,8 +3375,7 @@ namespace MinGent
                 bool deletedElsewhere = !exists && chatStamp != DateTime.MinValue;
                 if (json == savedJson && (exists || deletedElsewhere))
                 {
-                    settings.AiLastChat = exists ? Path.GetFileName(chatFile) : "";
-                    settings.Save();
+                    if (InFront) { settings.AiLastChat = exists ? Path.GetFileName(chatFile) : ""; settings.Save(); }
                     return;
                 }
                 if (deletedElsewhere || ChangedElsewhere())
@@ -3304,7 +3392,7 @@ namespace MinGent
                 savedJson = json;
                 try { chatStamp = File.GetLastWriteTimeUtc(chatFile); } catch { chatStamp = DateTime.MinValue; }
                 titleCache.Remove(chatFile);
-                settings.AiLastChat = Path.GetFileName(chatFile);
+                if (InFront) settings.AiLastChat = Path.GetFileName(chatFile);
                 settings.Save();
                 Prune();
             }
@@ -3413,6 +3501,7 @@ namespace MinGent
                     m.Turn = Json.Int(o, "tn");
                     m.Compact = Json.Str(o, "c");
                     m.Hidden = Json.Bool(o, "h");
+                    m.SentBack = m.Hidden && Json.Bool(o, "sb");
                     if (Json.Get(o, "id") != null) { m.ToolCallId = Json.Str(o, "id"); m.ToolName = Json.Str(o, "n"); m.ToolError = Json.Bool(o, "e"); }
                     List<object> calls = Json.List(o, "calls");
                     if (calls != null)
@@ -3453,7 +3542,7 @@ namespace MinGent
             chat.ScrollToEnd();
             chat.Changed(chat.Items.Count > 0 ? chat.Items[chat.Items.Count - 1] : new ChatItem());
             PerformLayout();
-            conversation++;
+            conversation = ++conversations;
             NotesChanged();
         }
 
@@ -3860,7 +3949,7 @@ namespace MinGent
                     savedJson = null;
                     chatTitle = "";
                 }
-                conversation++;
+                conversation = ++conversations;
                 NotesChanged();
                 UpdateTemporaryUi();
                 UpdateEmptyState();
@@ -3951,19 +4040,21 @@ namespace MinGent
                 composer.FocusInput();
                 return;
             }
-            WhenIdle("start a temporary chat", delegate
-            {
-                SaveChat();
-                ClearView(true, false);
-                host.ResetBrowser();
-                temporary = true;
-                UpdateTemporaryUi();
-                UpdateEmptyState();
-                PerformLayout();
-                Invalidate();
-                Changed();
-                composer.FocusInput();
-            });
+            WhenFree("start a temporary chat", delegate (AiPanel p) { if (p == this) p.BeginTemporary(); else p.StartTemporary(); });
+        }
+
+        void BeginTemporary()
+        {
+            SaveChat();
+            ClearView(true, false);
+            host.ResetBrowser();
+            temporary = true;
+            UpdateTemporaryUi();
+            UpdateEmptyState();
+            PerformLayout();
+            Invalidate();
+            Changed();
+            composer.FocusInput();
         }
 
         void ShowContextMenu()
@@ -4013,12 +4104,14 @@ namespace MinGent
             CancelToken ct = cancel;
             AgentSession sess = session;
             Bridge ui = new Bridge(this, run);
+            bool localModel = LocalModelPicked();
             Thread t = new Thread(delegate ()
             {
                 string error = null;
                 bool did = false;
                 try
                 {
+                    if (!TakeModel(localModel, ct, delegate (string ph) { ui.Phase(ph); })) return;
                     ModelEntry m;
                     LlmBackend be;
                     string err = PrepareModel(ct, delegate (string ph) { ui.Phase(ph); }, out m, out be);
@@ -4038,6 +4131,7 @@ namespace MinGent
                 catch (Exception ex) { error = "Something went wrong: " + ex.Message; }
                 finally
                 {
+                    GiveModel();
                     string e2 = error;
                     bool d2 = did;
                     ui.Post(delegate { EndCompact(run, e2, d2); });

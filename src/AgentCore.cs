@@ -518,6 +518,18 @@ namespace MinGent
             return FileName;
         }
 
+        public static bool Is(string full, string workspace)
+        {
+            if (string.IsNullOrEmpty(full) || string.IsNullOrEmpty(workspace)) return false;
+            try
+            {
+                string dir = Path.GetDirectoryName(Path.GetFullPath(full)), name = Path.GetFileName(full);
+                return string.Equals(dir.TrimEnd('\\', '/'), Path.GetFullPath(workspace).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)
+                    && (name.Equals(FileName, StringComparison.OrdinalIgnoreCase) || name.Equals(LegacyName, StringComparison.OrdinalIgnoreCase));
+            }
+            catch { return false; }
+        }
+
         public static string Read(string workspace)
         {
             if (string.IsNullOrEmpty(workspace)) return null;
@@ -858,8 +870,20 @@ namespace MinGent
                 k.Kind = "write";
                 k.Title = what + " in your skills";
                 k.Detail = full;
+                k.Key = "skill:" + full;
                 k.Reason = "This chat has read web content, and the agent follows your skills in later chats, so changing one needs your OK.";
                 if (!Approve(k)) return "The user did not allow changing the skill file " + full + ". Do not try another way; ask the user if you need it.";
+                return null;
+            }
+            if (ps.WebGuard && ps.Tainted && inside && ProjectNotes.Is(full, Cfg.Workspace))
+            {
+                PermissionAsk k = new PermissionAsk();
+                k.Kind = "write";
+                k.Title = what + " in the project notes";
+                k.Detail = full;
+                k.Key = "notes:" + full;
+                k.Reason = "This chat has read web content, and the agent reads " + System.IO.Path.GetFileName(full) + " at the start of every request in this folder, so changing it needs your OK.";
+                if (!Approve(k)) return "The user did not allow changing " + full + ". Do not try another way; ask the user if you need it.";
                 return null;
             }
             if (inside) return null;
@@ -1613,6 +1637,7 @@ namespace MinGent
         {
             if (!IsHelper) lock (Perms.AskLock) Perms.DeniedKeys.Clear();
             if (!IsHelper) RepairHistory(History);
+            if (!IsHelper && !FinalTurn) RetireSentBack();
             if (!IsHelper && !FinalTurn) { PlanApproved = userMsg.PlanApproved; CaptchaTries = 0; CaptchaActed = false; CaptchaSubmitted = false; GoogleHanded = false; StopAsked = StopWords.Says(userMsg.Compact ?? userMsg.Text); ReviewDeclined = StopWords.SkipsReview(userMsg.Compact ?? userMsg.Text); }
             History.Add(userMsg);
             if (!IsHelper) RunMessage = userMsg;
@@ -1875,6 +1900,7 @@ namespace MinGent
                         if (!IsHelper && coach.Told != null) ui.Notice(coach.Told, AfterDraft);
                         Msg cn = new Msg("user", coachNote);
                         cn.Hidden = true;
+                        cn.SentBack = true;
                         History.Add(cn);
                         continue;
                     }
@@ -1888,6 +1914,7 @@ namespace MinGent
                         {
                             Msg rv = new Msg("user", review);
                             rv.Hidden = true;
+                            rv.SentBack = true;
                             History.Add(rv);
                             continue;
                         }
@@ -1999,7 +2026,7 @@ namespace MinGent
                                 tc.Call = call;
                                 tc.Browser = !IsHelper && HelperHoldsBrowser ? null : br;
                                 ui.ToolStart(call, tool.Label(call.Args));
-                                try { outcome = tool.Run(tc, call.Args); }
+                                try { outcome = RunTool(tool, tc, call.Args, ui, ct); }
                                 catch (Exception ex) { outcome = ToolOutcome.Fail(call.Name + " crashed: " + ex.Message); }
                                 tc.Browser = br;
                                 ran = true;
@@ -2278,14 +2305,15 @@ namespace MinGent
             {
                 Msg first = list[0];
                 StringBuilder b = new StringBuilder();
-                b.Append(SummaryInTask ? "[Summary of the earlier conversation and of your first steps on the request below]\n" : "[Summary of the earlier conversation]\n").Append(Summary).Append('\n');
+                bool inTask = StillInTask();
+                b.Append(inTask ? "[Summary of the earlier conversation and of your first steps on the request below]\n" : "[Summary of the earlier conversation]\n").Append(Summary).Append('\n');
                 if (EarlierWords.Count > 0)
                 {
                     b.Append("\n[What the user wrote before, word for word, oldest first]\n");
                     foreach (string w in EarlierWords) b.Append("- ").Append(w).Append('\n');
                 }
                 if (Archive.Count > 0 && !IsHelper) b.Append("(The summarized part is kept: when you need an exact detail from it, search it with recall.)\n");
-                b.Append(SummaryInTask ? "[End of summary. The user's request follows word for word, then your latest steps on it.]\n\n" : "[End of summary]\n\n");
+                b.Append(inTask ? "[End of summary. The user's request follows word for word, then your latest steps on it.]\n\n" : "[End of summary]\n\n");
                 list[0] = CloneWith(first, b.ToString() + first.Text);
             }
             if (provChanged)
@@ -2504,6 +2532,58 @@ namespace MinGent
             int n = 0;
             foreach (Msg m in History) if (m.Role == "user" && !m.Hidden) n++;
             return n;
+        }
+
+        static readonly object inputGate = new object();
+        static readonly HashSet<string> InputTools = new HashSet<string>(StringComparer.Ordinal) { "app_click", "app_drag", "app_hover", "app_key", "app_scroll", "app_type" };
+        public const string InputBusy = "Waiting for another chat to finish with the mouse and keyboard";
+
+        public static void UnstickIfFree()
+        {
+            if (!Monitor.TryEnter(inputGate)) return;
+            try { AppControl.UnstickAfterOwnInput(); }
+            finally { Monitor.Exit(inputGate); }
+        }
+
+        static ToolOutcome RunTool(AgentTool tool, ToolContext tc, Dictionary<string, object> args, IAgentUi ui, CancelToken ct)
+        {
+            if (!InputTools.Contains(tool.Name)) return tool.Run(tc, args);
+            bool said = false;
+            while (!Monitor.TryEnter(inputGate, 250))
+            {
+                if (ct != null && ct.IsCancelled) return ToolOutcome.Fail("Not run: the user stopped the assistant.");
+                if (!said) { said = true; ui.Phase(InputBusy); }
+            }
+            try
+            {
+                if (said) ui.Phase("");
+                return tool.Run(tc, args);
+            }
+            finally { Monitor.Exit(inputGate); }
+        }
+
+        public bool RetireSentBack()
+        {
+            int first = int.MaxValue;
+            for (int i = History.Count - 1; i >= 1; i--)
+            {
+                Msg note = History[i], said = History[i - 1];
+                if (!note.SentBack || said.Role != "assistant" || (said.ToolCalls != null && said.ToolCalls.Count > 0)) continue;
+                bool answered = false;
+                for (int j = i + 1; j < History.Count; j++)
+                {
+                    Msg x = History[j];
+                    if (x.Role == "user" && !x.Hidden) break;
+                    if (x.Role == "assistant" && (x.ToolCalls == null || x.ToolCalls.Count == 0) && (x.Text ?? "").Trim().Length > 0) { answered = true; break; }
+                }
+                if (!answered) continue;
+                History.RemoveRange(i - 1, 2);
+                first = i - 1;
+                i--;
+            }
+            if (first == int.MaxValue) return false;
+            MarkThinkingInvalid(first);
+            return true;
         }
 
         public bool Compact(AgentConfig cfg, IAgentUi ui, CancelToken ct, string systemPrompt)
@@ -2905,6 +2985,14 @@ namespace MinGent
             ui.Notice(manual ? "Compacted: the earlier part of this chat is now a short summary the agent keeps in mind, with your own messages kept word for word."
                 : inTask ? "Summarized the earlier steps of this task to stay within the model's context window. Your messages and the latest steps are kept as they are."
                 : "Summarized the earlier part of this conversation to stay within the model's context window. Your messages are kept word for word.", 0);
+            return true;
+        }
+
+        bool StillInTask()
+        {
+            if (!SummaryInTask) return false;
+            int users = 0;
+            foreach (Msg m in History) if (m.Role == "user" && !m.Hidden && ++users > 1) return false;
             return true;
         }
 

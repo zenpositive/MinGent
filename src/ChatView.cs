@@ -2173,7 +2173,9 @@ namespace MinGent
             int max = Math.Max(0, contentH - ClientSize.Height);
             if (scrollY >= max - UI.S(60)) return;
             int s = UI.S(32);
-            jumpRect = new Rectangle(ContentX + (ContentW - s) / 2, ClientSize.Height - s - UI.S(10), s, s);
+            int right = ContentX + ContentW + UI.S(16), room = ClientSize.Width - UI.S(14) - right;
+            int x = room >= s ? right + Math.Min(room - s, UI.S(8)) : ContentX + ContentW - s;
+            jumpRect = new Rectangle(x, ClientSize.Height - s - UI.S(10), s, s);
             Glyphs.FillRound(g, jumpHover ? th.ButtonHover : th.Back, jumpRect, s / 2);
             Glyphs.DrawRound(g, th.InputBorder, new Rectangle(jumpRect.X, jumpRect.Y, jumpRect.Width - 1, jumpRect.Height - 1), s / 2);
             Glyphs.Draw("arrowdown", g, jumpRect, th.Fore);
