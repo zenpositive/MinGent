@@ -1,6 +1,27 @@
 MinGent - what changed
 ======================
 
+Version 1.1.5 beta
+- The status line says what the agent is doing, in plain words, all the
+  time. The agent writes a few words for each step ("Checking how the
+  parser reads dates"), and MinGent adds the step that runs ("Reading
+  parser.py") or the checklist item. No more bare "Thinking" or "Working".
+  The window's title says the same.
+- No more conclusions among the steps: when MinGent sends the agent back
+  (to test its changes, finish its checklist, or after a review), the
+  answer it wrote before is gone once the new one is there.
+- The independent review checks that the finished work works and does what
+  you asked, instead of starting the task over.
+- The agent works on your latest message. Earlier requests in the chat are
+  context and are not started over, unless you bring them back.
+- Long tasks keep going: when one task fills the model's context, its first
+  steps are summarized and your request and the latest steps are kept as
+  they are. Before, only earlier messages could be summarized.
+- After a summary your own earlier messages are kept word for word, as many
+  as fit, and the checklist carries over.
+- The agent can search the summarized part of a chat when it needs an exact
+  detail, such as an error message.
+
 Version 1.1.4 beta
 - The status line says what the agent is doing ("Thinking", "Reading
   parser.py", "Writing the answer") and no longer shows the words of its

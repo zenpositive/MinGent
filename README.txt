@@ -22,7 +22,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.1.4 beta: it works, and it still has rough edges. Report
+This is version 1.1.5 beta: it works, and it still has rough edges. Report
 problems at https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -89,7 +89,7 @@ sign-ins. MinGent has none of that.
   Full auto asks nothing. The check reads the command; it can't see what a
   script does once it runs.
 To check a download, compare its SHA-256 with the one on the release page.
-In PowerShell: Get-FileHash .\MinGent-1.1.4-beta.zip
+In PowerShell: Get-FileHash .\MinGent-1.1.5-beta.zip
 
 
 YOUR OWN ICON
@@ -139,9 +139,12 @@ CHATS
   and show it in the browser", "find the newest version of X and update
   package.json". Shift+Enter starts a new line.
 - While it works, one line under your message shows its face and what it is
-  doing right now ("Reading parser.py", "Waiting for your OK"), with the
-  step of the plan it is on next to it. While the model thinks, the line
-  says "Thinking"; the thought itself is inside the steps.
+  doing right now, in plain words. The agent writes a few words for each
+  step ("Checking how the parser reads dates"), and next to them MinGent
+  shows the step that runs ("Reading parser.py", "Running dotnet test") or
+  the item of the checklist it is on. It never just says "Thinking" or
+  "Working"; the thought itself is inside the steps. The window's title
+  says the same.
   Text shows in the chat only once it will stay there. Short notes the
   agent writes on the way stay inside the steps, and so does an answer that
   MinGent is about to send back for testing or for a review, so nothing
@@ -235,10 +238,15 @@ CHATS
 - The ring under the message box shows how full the model's context window is
   (amber at 70%, red at 90%). Long chats are summarized automatically when
   they get close to the limit; click the ring and "Compact now", or type
-  /compact, to do it sooner. Your latest message is always kept as it is.
-  The summary is written from the whole chat; your messages, your answers to
-  the agent's questions, the plan you approved and what helpers found come
-  first when it doesn't all fit.
+  /compact, to do it sooner. Your latest message is always kept as it is, and
+  your earlier messages are kept word for word next to the summary, as many
+  as fit. When one long task fills the context, its first steps are
+  summarized and the latest ones kept, so the agent can go on. The summary
+  is written from the whole chat; your messages, your answers to the agent's
+  questions, the plan you approved and what helpers found come first when it
+  doesn't all fit, and the checklist carries over. The summarized part stays
+  with the chat, and the agent can search it when it needs an exact detail,
+  such as an error message.
   The 200 most recent chats are kept; archived chats are kept until you delete
   them.
 - Commands: type / in the message box and a list of them pops up - /compact,
@@ -459,7 +467,9 @@ Helpers
   and writes a new answer about the whole task, so you never have to open
   the steps to understand the answer. The same goes when MinGent sends the
   agent back to work, for example to test its changes: the chat shows one
-  answer, the last one. A small change that the agent made without running
+  answer, the last one, and the answer it replaced doesn't stay among the
+  steps. The reviewer checks that the finished work works and does what you
+  asked; it doesn't do the task again. A small change that the agent made without running
   anything is reviewed by reading only, so the reviewer asks you for
   nothing. For bigger work it reads first and re-runs only the checks that
   matter. It leaves a page that is open for you in the browser as it is.
@@ -487,7 +497,7 @@ Tools
 - Each tool's description takes room in the model's context, which matters
   with a small local model. Settings > Agent > Tools switches whole groups on
   or off and shows what each one costs: web search (about 150 tokens), the
-  browser (about 2,550), desktop programs (about 2,350) and helpers (about
+  browser (about 2,500), desktop programs (about 2,350) and helpers (about
   350). Files, commands, sound files, planning and scheduling are always on
   (about 3,500). The browser and desktop-program tools also switch off by
   themselves when the model's context is under 16K and 24K tokens.
