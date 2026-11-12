@@ -186,14 +186,98 @@ namespace MinGent
             other.UpdateModelChip();
         }
 
-        public void MoveDraftTo(AiPanel other)
+        sealed class Draft
         {
-            if (other == null || other == this || other.composer.Text.Trim().Length > 0) return;
-            string t = composer.Text;
-            List<Attachment> atts = composer.TakeAttachments();
-            other.composer.Text = t;
-            foreach (Attachment a in atts) other.composer.Add(a);
+            public string Text;
+            public List<Attachment> Files;
+        }
+
+        static readonly Dictionary<string, Draft> drafts = new Dictionary<string, Draft>(StringComparer.OrdinalIgnoreCase);
+
+        sealed class Undoable
+        {
+            public int Run;
+            public RunChangeLog Log;
+        }
+
+        static readonly Dictionary<string, Undoable> undoables = new Dictionary<string, Undoable>();
+        static readonly List<string> undoOrder = new List<string>();
+        const int UndoKept = 40;
+
+        static string KeepUndo(int run, RunChangeLog log)
+        {
+            string key = Guid.NewGuid().ToString("N");
+            Undoable u = new Undoable();
+            u.Run = run;
+            u.Log = log;
+            lock (undoables)
+            {
+                undoables[key] = u;
+                undoOrder.Add(key);
+                while (undoOrder.Count > UndoKept) { undoables.Remove(undoOrder[0]); undoOrder.RemoveAt(0); }
+            }
+            return key;
+        }
+
+        static void DropUndo(string key)
+        {
+            if (key == null) return;
+            lock (undoables) { undoables.Remove(key); undoOrder.Remove(key); }
+        }
+
+        void MakeUndoable(ChatItem foot, int run, RunChangeLog log)
+        {
+            foot.RunId = run;
+            foot.Changes = log;
+            foot.ActionLabel = "Undo";
+            ChatItem self = foot;
+            foot.Action = delegate
+            {
+                if (running) { Notice("Stop the current task before undoing.", 1); return; }
+                int reverted, kept;
+                string summary = host.UndoRun(run, log, out reverted, out kept);
+                self.Undone = true;
+                self.UndoneText = kept == 0 ? null : reverted > 0 ? "Partly undone (" + kept + " kept)" : "Nothing undone (" + kept + " kept)";
+                DropUndo(self.UndoKey);
+                chat.Changed(self);
+                if (!string.IsNullOrEmpty(summary)) Notice(summary, 0);
+            };
+        }
+
+        void ReviveUndo(ChatItem foot, string key)
+        {
+            Undoable u;
+            if (key == null || foot.Undone) return;
+            lock (undoables) if (!undoables.TryGetValue(key, out u)) return;
+            foot.UndoKey = key;
+            MakeUndoable(foot, u.Run, u.Log);
+        }
+
+        string DraftKey { get { return temporary ? null : chatFile ?? ""; } }
+
+        public void StashDraft()
+        {
+            string key = DraftKey;
+            List<Attachment> files = composer.TakeAttachments();
+            string text = composer.Text;
             composer.Text = "";
+            if (key == null) return;
+            if (text.Trim().Length == 0 && files.Count == 0) return;
+            Draft d = new Draft();
+            d.Text = text;
+            d.Files = files;
+            drafts[key] = d;
+        }
+
+        void RestoreDraft()
+        {
+            string key = DraftKey;
+            Draft d;
+            if (key == null || !drafts.TryGetValue(key, out d)) return;
+            drafts.Remove(key);
+            composer.Text = d.Text;
+            foreach (Attachment a in d.Files) composer.Add(a);
+            composer.MoveCaretToEnd();
         }
 
         public void StopFirst(string what, Action then)
@@ -261,6 +345,7 @@ namespace MinGent
             scheduled = null;
             if (!Visible) host.RevealAssistant();
             bool had = chatFile != null || chat.Items.Count > 0;
+            StashDraft();
             SaveChat();
             ClearView(false, false);
             BrowserPane pane = host.Browser;
@@ -2095,22 +2180,9 @@ namespace MinGent
             {
                 ChatItem foot = new ChatItem();
                 foot.Kind = ChatKind.Footer;
-                foot.RunId = run;
                 foot.Text = changes == 1 ? "1 file changed" : changes + " files changed";
-                foot.ActionLabel = "Undo";
-                foot.Changes = runLog;
-                RunChangeLog log = runLog;
-                ChatItem self = foot;
-                foot.Action = delegate
-                {
-                    if (running) { Notice("Stop the current task before undoing.", 1); return; }
-                    int reverted, kept;
-                    string summary = host.UndoRun(run, log, out reverted, out kept);
-                    self.Undone = true;
-                    self.UndoneText = kept == 0 ? null : reverted > 0 ? "Partly undone (" + kept + " kept)" : "Nothing undone (" + kept + " kept)";
-                    chat.Changed(self);
-                    if (!string.IsNullOrEmpty(summary)) Notice(summary, 0);
-                };
+                foot.UndoKey = KeepUndo(run, runLog);
+                MakeUndoable(foot, run, runLog);
                 chat.Add(foot);
             }
             if (!failed && !stopped && queued.Count == 0 && composer.Plan && !planAsked) OfferPlan();
@@ -3037,8 +3109,10 @@ namespace MinGent
         void StartFresh()
         {
             bool had = chatFile != null || chat.Items.Count > 0;
+            StashDraft();
             SaveChat();
             ClearView(false, false);
+            RestoreDraft();
             if (had) host.ResetBrowser();
             Changed();
             composer.FocusInput();
@@ -3065,7 +3139,9 @@ namespace MinGent
         {
             SaveChat();
             if (!File.Exists(path)) { Changed(); return; }
+            StashDraft();
             LoadChat(path);
+            RestoreDraft();
             settings.AiLastChat = Path.GetFileName(path);
             settings.Save();
             host.ResetBrowser();
@@ -3319,7 +3395,7 @@ namespace MinGent
                 if (it.Kind == ChatKind.Notice) o["lv"] = it.Level;
                 if (it.Draft && (it.Kind == ChatKind.Notice || it.Kind == ChatKind.Assistant)) o["df"] = true;
                 if (it.Whole && it.Kind == ChatKind.Assistant) o["wh"] = true;
-                if (it.Kind == ChatKind.Footer) { o["u"] = true; if (it.Undone) o["ud"] = true; if (!string.IsNullOrEmpty(it.UndoneText)) o["ut"] = it.UndoneText; }
+                if (it.Kind == ChatKind.Footer) { o["u"] = true; if (it.Undone) o["ud"] = true; if (!string.IsNullOrEmpty(it.UndoneText)) o["ut"] = it.UndoneText; if (!it.Undone && it.UndoKey != null) o["uk"] = it.UndoKey; }
                 items.Add(o);
             }
             root["items"] = items;
@@ -3487,7 +3563,7 @@ namespace MinGent
                     if (it.Kind == ChatKind.Notice) it.Level = Json.Int(o, "lv");
                     if (it.Kind == ChatKind.Notice || it.Kind == ChatKind.Assistant) it.Draft = Json.Bool(o, "df");
                     if (it.Kind == ChatKind.Assistant) it.Whole = Json.Bool(o, "wh");
-                    if (it.Kind == ChatKind.Footer) { it.Undone = Json.Bool(o, "ud"); it.UndoneText = Json.Str(o, "ut"); it.Action = null; }
+                    if (it.Kind == ChatKind.Footer) { it.Undone = Json.Bool(o, "ud"); it.UndoneText = Json.Str(o, "ut"); it.Action = null; ReviveUndo(it, Json.Str(o, "uk")); }
                     if (it.Kind == ChatKind.Error) continue;
                     loaded.Add(it);
                 }
@@ -3683,6 +3759,7 @@ namespace MinGent
                 int r, k;
                 try { host.UndoRun(f.RunId, f.Changes, out r, out k); } catch { r = 0; k = 0; }
                 f.Undone = true;
+                DropUndo(f.UndoKey);
                 reverted += r;
                 kept += k;
             }
@@ -4045,6 +4122,7 @@ namespace MinGent
 
         void BeginTemporary()
         {
+            if (chatFile != null || chat.Items.Count > 0) StashDraft();
             SaveChat();
             ClearView(true, false);
             host.ResetBrowser();

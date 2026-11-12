@@ -32,7 +32,7 @@ namespace MinGent
         public int RunId, InboxId;
         public RunChangeLog Changes;
         public bool Undone;
-        public string UndoneText;
+        public string UndoneText, UndoKey;
         public string ActionLabel;
         public Action Action;
         public List<Attachment> Attachments;

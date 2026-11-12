@@ -635,9 +635,10 @@ namespace MinGent
         public string TaintSource = "";
         public readonly HashSet<string> AllowedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         public readonly HashSet<string> DeniedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        public readonly HashSet<string> TaskKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         public readonly object AskLock = new object();
 
-        public void Reset() { Tainted = false; TaintSource = ""; AllowedKeys.Clear(); DeniedKeys.Clear(); }
+        public void Reset() { Tainted = false; TaintSource = ""; AllowedKeys.Clear(); DeniedKeys.Clear(); TaskKeys.Clear(); }
         public bool Auto { get { return Mode == "auto" || Mode == "full"; } }
         public bool Full { get { return Mode == "full"; } }
         volatile string[] autoAllows = new string[0];
@@ -817,10 +818,11 @@ namespace MinGent
             lock (ps.AskLock)
             {
                 if (ask.Key.Length > 0 && ps.DeniedKeys.Contains(ask.Key)) return false;
-                if (ask.Key.Length > 0 && ps.AllowedKeys.Contains(ask.Key)) return true;
+                if (ask.Key.Length > 0 && (ps.AllowedKeys.Contains(ask.Key) || ps.TaskKeys.Contains(ask.Key))) return true;
                 if (Ct.IsCancelled) return false;
                 PermissionDecision d = Ui.Ask(ask, Ct);
                 if (d == PermissionDecision.AllowAlways && ask.Key.Length > 0) ps.AllowedKeys.Add(ask.Key);
+                if (d == PermissionDecision.Allow && ask.AllowRemember && ask.Kind == "browser" && ask.Key.StartsWith("site:", StringComparison.Ordinal)) ps.TaskKeys.Add(ask.Key);
                 if (d == PermissionDecision.Deny && ask.Key.Length > 0 && !Ct.IsCancelled) ps.DeniedKeys.Add(ask.Key);
                 return d != PermissionDecision.Deny;
             }
@@ -1173,11 +1175,21 @@ namespace MinGent
                 Mark();
                 string step = Step(name, head);
                 if (step == lastStep && name == LastTool && (DateTime.UtcNow - LastToolNote).TotalMilliseconds < 400) return;
-                string text = chars > 400 ? (step ?? "Writing the next step") + " (" + (chars / 1000.0).ToString("0.#", CultureInfo.InvariantCulture) + "k chars)" : step;
+                string text = chars > 400 ? (step ?? Unnamed(name)) + " (" + (chars / 1000.0).ToString("0.#", CultureInfo.InvariantCulture) + "k chars)" : step;
                 LastTool = name;
                 LastToolNote = DateTime.UtcNow;
                 lastStep = step;
                 if (text != null) Ui.Phase(text);
+            }
+
+            static string Unnamed(string name)
+            {
+                switch (name ?? "")
+                {
+                    case "write_file": return "Writing a file";
+                    case "edit_file": return "Editing a file";
+                    default: return "Writing the next step";
+                }
             }
 
             static readonly Regex Field = new Regex(@"""(\w+)""\s*:\s*(""(?:[^""\\]|\\.)*""|-?\d+(?:\.\d+)?\b|true\b|false\b)", RegexOptions.CultureInvariant);
@@ -1635,7 +1647,7 @@ namespace MinGent
 
         void Steps(Msg userMsg, AgentConfig cfg, List<AgentTool> tools, IAgentUi ui, IEditorBridge ed, IBrowserBridge br, CancelToken ct, RunChangeLog changes, string systemPrompt)
         {
-            if (!IsHelper) lock (Perms.AskLock) Perms.DeniedKeys.Clear();
+            if (!IsHelper) lock (Perms.AskLock) { Perms.DeniedKeys.Clear(); if (!FinalTurn) Perms.TaskKeys.Clear(); }
             if (!IsHelper) RepairHistory(History);
             if (!IsHelper && !FinalTurn) RetireSentBack();
             if (!IsHelper && !FinalTurn) { PlanApproved = userMsg.PlanApproved; CaptchaTries = 0; CaptchaActed = false; CaptchaSubmitted = false; GoogleHanded = false; StopAsked = StopWords.Says(userMsg.Compact ?? userMsg.Text); ReviewDeclined = StopWords.SkipsReview(userMsg.Compact ?? userMsg.Text); }

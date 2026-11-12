@@ -1330,11 +1330,7 @@ namespace MinGent
             UpdateTitle();
             UpdateWork();
             if (agentOn) p.FocusInput();
-            if (!old.Running)
-            {
-                old.MoveDraftTo(p);
-                BeginInvoke(new Action(delegate { Retire(old); }));
-            }
+            if (!old.Running) BeginInvoke(new Action(delegate { Retire(old); }));
         }
 
         void Park(BrowserPane b)
@@ -1388,6 +1384,7 @@ namespace MinGent
         {
             if (p == aiPanel || p.Running || !hosts.ContainsKey(p)) return;
             PanelHost h = hosts[p];
+            try { p.StashDraft(); } catch { }
             try { p.SaveChat(); } catch { }
             try { p.Shutdown(); } catch { }
             panels.Remove(p);
