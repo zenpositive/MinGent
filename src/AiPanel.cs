@@ -279,12 +279,9 @@ namespace MinGent
         {
             get
             {
-                if (!running) return "";
-                if (chat.PendingPermission() != null) return "Waiting for your OK";
-                if (chat.PendingQuestion() != null) return "Waiting for your answer";
-                string task = curActivity != null ? (curActivity.CurrentTask ?? "").Trim() : "";
-                if (task.Length == 0) return "Working";
-                return task.Length > 60 ? task.Substring(0, 59).TrimEnd() + "\u2026" : task;
+                if (!running || curActivity == null) return "";
+                string line = chat.StatusLine(curActivity);
+                return line.Length > 60 ? line.Substring(0, 59).TrimEnd() + "\u2026" : line;
             }
         }
         public string ActiveChatPath { get { return chatFile; } }
@@ -861,6 +858,7 @@ namespace MinGent
                 ChatItem x = chat.Items[i];
                 if (x.Kind == ChatKind.User && !x.MidRun) break;
                 if (x.Kind != ChatKind.Assistant || x.Text.Trim().Length == 0) continue;
+                if (x.Whole && StatusWords.StatusOnly(x.Text)) continue;
                 if (!x.Draft) return;
                 if (WorkAfter(i) > i)
                 {
@@ -1850,11 +1848,15 @@ namespace MinGent
             curActivity.Started = DateTime.UtcNow;
             curActivity.Running = true;
             curActivity.Stopped = false;
-            curActivity.Phase = "Starting";
+            curActivity.Phase = "Reading your message";
+            curActivity.Note = null;
+            curActivity.LastDoing = null;
+            curActivity.DoingSeq = curActivity.TaskSeq = 0;
+            stepTools = 0;
             chat.Changed(curActivity);
             composer.Running = true;
             UpdateQueueNotes();
-            SetPhase("Starting");
+            SetPhase("Reading your message");
             PerformLayout();
             host.RunStarted(run);
             if (StateChanged != null) StateChanged(this, EventArgs.Empty);
@@ -2283,14 +2285,18 @@ namespace MinGent
             string now = t == null ? "" : t.Content;
             if (curActivity.CurrentTask == now) return;
             curActivity.CurrentTask = now;
+            curActivity.TaskSeq = ++statusSeq;
             chat.InvalidateItem(curActivity);
             if (StateChanged != null) StateChanged(this, EventArgs.Empty);
         }
+
+        int statusSeq, stepTools;
 
         void SetPhase(string text)
         {
             if (!running || curActivity == null) return;
             if (curActivity.Phase == text) return;
+            if (curAssistant != null && curAssistant.Streaming && text.Length > 0 && text != "Thinking" && !ChatView.Substantial(curAssistant.Text)) curActivity.Note = StatusWords.Note(curAssistant.Text);
             curActivity.Phase = text;
             chat.InvalidateItem(curActivity);
             if (StateChanged != null) StateChanged(this, EventArgs.Empty);
@@ -2367,6 +2373,7 @@ namespace MinGent
             if (curThinking != null && string.IsNullOrEmpty(curThinking.Text) && !string.IsNullOrEmpty(m.Reasoning)) { curThinking.Text = m.Reasoning; chat.Changed(curThinking); }
             string text = m.Text ?? "";
             bool whole = m.ToolCalls == null || m.ToolCalls.Count == 0;
+            if (curActivity != null && running) curActivity.Note = whole || ChatView.Substantial(text) ? null : StatusWords.Note(text);
             if (curAssistant != null && curAssistant.Streaming)
             {
                 curAssistant.Streaming = false;
@@ -2496,6 +2503,22 @@ namespace MinGent
                 FinishStreaming();
                 curAssistant = null;
                 replyFirst = false;
+                stepTools++;
+                if (curActivity != null && running)
+                {
+                    if (c.Name == "ask_user" || c.Name == PlanMode.Tool)
+                    {
+                        curActivity.LastDoing = ChatView.AfterAnswer;
+                        curActivity.Note = null;
+                        curActivity.DoingSeq = ++statusSeq;
+                    }
+                    else if (c.Name != "todo_write")
+                    {
+                        curActivity.LastDoing = StatusWords.Doing(label);
+                        curActivity.DoingSeq = ++statusSeq;
+                    }
+                    curActivity.Phase = "";
+                }
             }
             ChatItem it = new ChatItem();
             it.Kind = ChatKind.Tool;
@@ -2525,6 +2548,12 @@ namespace MinGent
 
         void OnToolEnd(ToolCall c, ToolOutcome o)
         {
+            if (c.Under == null && stepTools > 0 && --stepTools == 0 && curActivity != null && running && curActivity.Note != null)
+            {
+                curActivity.LastDoing = curActivity.Note;
+                curActivity.Note = null;
+                curActivity.DoingSeq = ++statusSeq;
+            }
             if (o.Background) return;
             ChatItem it;
             if (!toolItems.TryGetValue(c.Id + "#" + c.Name, out it))
@@ -3201,11 +3230,15 @@ namespace MinGent
                 if (it.Kind == ChatKind.User && it.MidRun) o["mid"] = true;
                 if (it.Kind == ChatKind.Notice) o["lv"] = it.Level;
                 if (it.Draft && (it.Kind == ChatKind.Notice || it.Kind == ChatKind.Assistant)) o["df"] = true;
+                if (it.Whole && it.Kind == ChatKind.Assistant) o["wh"] = true;
                 if (it.Kind == ChatKind.Footer) { o["u"] = true; if (it.Undone) o["ud"] = true; if (!string.IsNullOrEmpty(it.UndoneText)) o["ut"] = it.UndoneText; }
                 items.Add(o);
             }
             root["items"] = items;
             if (session.Perms.Tainted) root["tainted"] = true;
+            if (session.SummaryInTask) root["summaryTask"] = true;
+            if (session.EarlierWords.Count > 0) root["words"] = new List<object>(session.EarlierWords.ToArray());
+            if (session.Archive.Count > 0) root["archive"] = new List<object>(session.Archive.ToArray());
             lock (session.Remembered) if (session.Remembered.Count > 0) root["mem"] = new List<object>(session.Remembered.ToArray());
             List<object> hist = new List<object>();
             Msg[] snapshot = null;
@@ -3332,6 +3365,14 @@ namespace MinGent
             chat.Clear();
             string summary = Json.Str(root, "summary");
             session.Summary = string.IsNullOrEmpty(summary) ? null : summary;
+            session.SummaryInTask = session.Summary != null && Json.Bool(root, "summaryTask");
+            session.TaskRequest = null;
+            session.EarlierWords = new List<string>();
+            List<object> words = session.Summary != null ? Json.List(root, "words") : null;
+            if (words != null) foreach (object w in words) if (w is string && ((string)w).Length > 0) session.EarlierWords.Add((string)w);
+            session.Archive = new List<string>();
+            List<object> kept = session.Summary != null ? Json.List(root, "archive") : null;
+            if (kept != null) foreach (object w in kept) if (w is string && ((string)w).Length > 0) session.Archive.Add((string)w);
             List<object> items = Json.List(root, "items");
             List<ChatItem> loaded = new List<ChatItem>();
             ChatItem card = null;
@@ -3357,6 +3398,7 @@ namespace MinGent
                     if (it.Kind == ChatKind.User) { it.ContextLabel = Json.Str(o, "c"); it.MidRun = Json.Bool(o, "mid"); it.Turn = Json.Int(o, "tn"); it.Attachments = Attachments.FromJson(Json.Get(o, "at")); }
                     if (it.Kind == ChatKind.Notice) it.Level = Json.Int(o, "lv");
                     if (it.Kind == ChatKind.Notice || it.Kind == ChatKind.Assistant) it.Draft = Json.Bool(o, "df");
+                    if (it.Kind == ChatKind.Assistant) it.Whole = Json.Bool(o, "wh");
                     if (it.Kind == ChatKind.Footer) { it.Undone = Json.Bool(o, "ud"); it.UndoneText = Json.Str(o, "ut"); it.Action = null; }
                     if (it.Kind == ChatKind.Error) continue;
                     loaded.Add(it);
@@ -3389,6 +3431,7 @@ namespace MinGent
                     session.History.Add(m);
                 }
             AgentSession.RepairHistory(session.History);
+            if (session.SummaryInTask && session.History.Count > 0 && session.History[0].Role == "user") session.TaskRequest = session.History[0];
             turnCounter = MapTurns(loaded, session.History);
             curTurn = turnCounter;
             session.RestoreTaint();
@@ -3679,6 +3722,7 @@ namespace MinGent
                     if (m.ToolCalls != null) foreach (ToolCall c in m.ToolCalls) if (c.Name == "todo_write") todos = true;
                 session.History.RemoveRange(cut, session.History.Count - cut);
             }
+            session.HistoryCut(turn, false);
             AfterHistoryEdit(todos);
             if (undone != null) Notice(undone, 0);
             StartRun(text, atts, ctxText, label, null);
@@ -3732,6 +3776,7 @@ namespace MinGent
                 if (m.Turn == turn && m.ToolCalls != null) foreach (ToolCall c in m.ToolCalls) if (c.Name == "todo_write") todos = true;
             RemoveItems(i, end);
             session.History.RemoveAll(delegate (Msg m) { return m.Turn == turn; });
+            session.HistoryCut(turn, true);
             AfterHistoryEdit(todos);
             SaveChat();
             Changed();

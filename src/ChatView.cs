@@ -41,7 +41,8 @@ namespace MinGent
         public string ContextLabel;
         public bool Queued, MidRun, Running, Stopped, SpeedGuess, Draft, Surfaced, Whole;
         public double Speed, FirstToken;
-        public string Phase = "", CurrentTask = "";
+        public string Phase = "", CurrentTask = "", Note, LastDoing;
+        public int DoingSeq, TaskSeq;
         public ChatItem Group, Under, LastKid;
         public int Kids;
         public bool Hidden;
@@ -637,6 +638,7 @@ namespace MinGent
             {
                 ChatItem it = Items[i];
                 if (it.Under != null) { it.Group = act; it.Hidden = !act.Expanded; continue; }
+                if (Replaced(i, e)) { it.Hidden = true; continue; }
                 bool said = it.Kind == ChatKind.Assistant && !it.Draft && it.Text.Trim().Length > 0;
                 if (said && !it.Surfaced && (Substantial(it.Text) || Asks(i, e))) it.Surfaced = true;
                 if (said && Answer(i, e) && (it.Surfaced || !act.Running)) continue;
@@ -649,6 +651,15 @@ namespace MinGent
                 act.Members.Add(it);
             }
             return act;
+        }
+
+        bool Replaced(int i, int e)
+        {
+            ChatItem it = Items[i];
+            if (it.Kind != ChatKind.Assistant || !it.Draft || !it.Whole || it.Streaming) return false;
+            for (int j = i + 1; j < e; j++)
+                if (Items[j].Kind == ChatKind.Assistant && Items[j].Under == null && Items[j].Whole && Items[j].Text.Trim().Length > 0 && !StatusWords.StatusOnly(Items[j].Text)) return true;
+            return false;
         }
 
         public static string SpeedText(ChatItem it)
@@ -1400,34 +1411,69 @@ namespace MinGent
 
         int FaceMood(ChatItem a, out string step)
         {
-            ChatItem tool;
-            return FaceMood(a, out step, out tool);
+            string dim;
+            return FaceMood(a, out step, out dim);
         }
 
-        int FaceMood(ChatItem a, out string step, out ChatItem tool)
+        public string StatusLine(ChatItem a)
         {
-            tool = null;
+            string step;
+            FaceMood(a, out step);
+            return step;
+        }
+
+        public const string FirstStep = "Thinking about your message", AfterAnswer = "Thinking about your answer";
+
+        static string FirstWord(string t)
+        {
+            int sp = t.IndexOf(' ');
+            return sp > 0 ? t.Substring(0, sp) : t;
+        }
+
+        int FaceMood(ChatItem a, out string step, out string dim)
+        {
+            dim = null;
             if (PendingPermission() != null) { step = "Waiting for your OK"; return Glyphs.FaceWaiting; }
             ChatItem pq = PendingQuestion();
             if (pq != null) { step = pq.Question != null && pq.Question.Wait ? "Waiting for you in the browser" : "Waiting for your answer"; return Glyphs.FaceWaiting; }
-            ChatItem running = null, last = null;
+            ChatItem running = null;
             if (a.Members != null)
                 foreach (ChatItem m in a.Members)
-                {
-                    last = m;
                     if (m.Kind == ChatKind.Tool && m.Status == 0) running = m;
-                }
-            if (running != null) { step = running.Label; tool = running; return Glyphs.FaceWorking; }
-            for (int i = Items.Count - 1; i >= 0; i--)
+            string phase = a.Phase.Length > 0 && a.Phase != "Thinking" ? a.Phase : null;
+            string detail = null, sub = null;
+            int mood = Glyphs.FaceThinking;
+            if (running != null)
             {
-                ChatItem x = Items[i];
-                if (x.Kind == ChatKind.Assistant && x.Streaming && (x.Surfaced || (x.Draft && Substantial(x.Text)))) { step = "Writing the answer"; return Glyphs.FaceWorking; }
-                if (x == a) break;
+                mood = Glyphs.FaceWorking;
+                if (phase != null) detail = phase;
+                else
+                {
+                    detail = StatusWords.Doing(running.Label);
+                    if (running.Icon == "branch" && running.LastKid != null) sub = StatusWords.Doing(running.LastKid.Label);
+                }
+                if (detail.StartsWith("Waiting for you")) mood = Glyphs.FaceWaiting;
             }
-            if (last != null && last.Streaming && last.Kind == ChatKind.Thinking) { step = "Thinking"; return Glyphs.FaceThinking; }
-            step = a.Phase.Length > 0 ? a.Phase : "Working";
-            int mood = step.StartsWith("Thinking") || step.StartsWith("Reading") ? Glyphs.FaceThinking : Glyphs.FaceWorking;
-            if (step == "Thinking") step = "Working";
+            else
+            {
+                for (int i = Items.Count - 1; i >= 0; i--)
+                {
+                    ChatItem x = Items[i];
+                    if (x.Kind == ChatKind.Assistant && x.Streaming && (x.Surfaced || (x.Draft && Substantial(x.Text)))) { step = "Writing the answer"; return Glyphs.FaceWorking; }
+                    if (x == a) break;
+                }
+                if (phase != null)
+                {
+                    detail = phase;
+                    mood = phase.StartsWith("Reading") ? Glyphs.FaceThinking : Glyphs.FaceWorking;
+                }
+            }
+            string task = (a.CurrentTask ?? "").Trim().Length > 0 ? StatusWords.Doing(a.CurrentTask) : null;
+            string recent = a.LastDoing != null && (task == null || a.DoingSeq > a.TaskSeq) ? a.LastDoing : task;
+            string lead = a.Note ?? detail;
+            step = lead ?? recent ?? FirstStep;
+            foreach (string d in new string[] { a.Note != null ? detail : sub, sub, lead != null ? recent : null, task })
+                if (d != null && d != step && (d != task || FirstWord(d) != FirstWord(step))) { dim = d; break; }
             return mood;
         }
 
@@ -1583,20 +1629,18 @@ namespace MinGent
             bool expandable = it.Members != null && it.Members.Count > 0;
             if (hot && expandable) Glyphs.Hover(g, th, th.TabHover, new Rectangle(x - UI.S(8), y, w + UI.S(16), it.H), UI.S(8));
             int tx = x + UI.S(28);
-            string label, time = "";
+            string label, time = "", task = "";
             Color lc, dc = th.ChromeDim;
-            ChatItem tool = null;
-            bool plain = false;
             if (it.Running)
             {
-                string step;
-                int mood = FaceMood(it, out step, out tool);
+                string step, dim;
+                int mood = FaceMood(it, out step, out dim);
                 bool blink = phase % 46 < 2;
                 Rectangle fr = new Rectangle(x - UI.S(2), y + (rowH - UI.S(22)) / 2, UI.S(22), UI.S(22));
                 Glyphs.Face(g, fr, th, mood, phase, blink);
                 faceRect = fr;
                 label = step;
-                plain = mood != Glyphs.FaceWaiting && tool == null && step == "Working";
+                task = dim ?? "";
                 double secs = it.Seconds + (DateTime.UtcNow - it.Started).TotalSeconds;
                 if (secs >= 1) time = Secs(secs);
                 lc = th.Fore;
@@ -1606,13 +1650,6 @@ namespace MinGent
                 Glyphs.Draw(it.Expanded ? "down" : "right", g, new Rectangle(x + UI.S(2), y, UI.S(16), rowH), hot ? th.Fore : th.ChromeDim);
                 label = SummaryHead(it, out time);
                 lc = hot ? th.Fore : th.ChromeDim;
-            }
-            string task = it.Running ? (it.CurrentTask ?? "").Trim() : "";
-            if (tool != null && tool.Icon == "branch" && tool.LastKid != null) task = tool.LastKid.Label.Trim();
-            else if (plain && task.Length > 0)
-            {
-                label = task;
-                task = "";
             }
             const TextFormatFlags one = TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine;
             int avail = Math.Max(UI.S(40), x + w - tx - UI.S(24));

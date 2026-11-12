@@ -2071,7 +2071,7 @@ namespace MinGent
             if (a == null || a.Cancelled || ct.IsCancelled) return Web.CheckAnswer.Stopped;
             if (a.Choice == 1) return Web.CheckAnswer.Skipped;
             if (a.Choice < 0 && !a.Auto) return Web.CheckAnswer.Wrote;
-            ctx.Ui.Phase("Searching the web");
+            ctx.Ui.Phase("");
             return Web.CheckAnswer.Cleared;
         }
 
@@ -3614,7 +3614,7 @@ namespace MinGent
                 o.HostBlocked = true;
                 return o;
             }
-            ctx.Ui.Phase("Reading the page");
+            ctx.Ui.Phase("");
             string text;
             string err = br.Read(ct, out text);
             if (err != null || text == null)
@@ -4532,7 +4532,7 @@ namespace MinGent
             {
                 return "Read the console of the page open in the browser (errors, warnings and logs), or run JavaScript in the page like in the developer tools, to look into it and debug it: " +
                        "variables, app state, storage, element details, or calling the page's own functions to test them. The value of the last expression comes back, and await works. " +
-                       "Use it only when the task needs it: for something the other browser tools can't show, or when it takes clearly fewer steps than they do. What the page says, read with browser_read. " +
+                       "Keep it efficient: check several things in one call, and return only the values you need. What the page says, read with browser_read. " +
                        "Never use it to click, type, press keys, scroll, submit forms, navigate or open windows: the other browser tools do that, and MinGent refuses such code. " +
                        "On a website, code runs as the signed-in user; if the user asks you to run some there, tell them that.";
             }
@@ -5131,6 +5131,69 @@ namespace MinGent
                 return SHFileOperation(ref op) == 0 && !File.Exists(path) && !Directory.Exists(path);
             }
             catch { return false; }
+        }
+    }
+
+    class RecallTool : AgentTool
+    {
+        public const string ToolName = "recall";
+        public override string Name { get { return ToolName; } }
+        public override string Description { get { return "Search the earlier part of this conversation that MinGent summarized to save room. Use it when you need an exact detail the summary leaves out, such as an error message, a value, a command, or what a file or page said. Give a few distinctive words to look for."; } }
+        public override Dictionary<string, object> Schema { get { return Obj("query", P("string", "Words to look for, such as \"connection refused\" or \"cart.js\""), true); } }
+        public override string Label(Dictionary<string, object> a) { return "Look back in the chat for \u201C" + (S(a, "query") ?? "").Trim() + "\u201D"; }
+
+        public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
+        {
+            string q = (S(a, "query") ?? "").Trim();
+            if (q.Length == 0) return ToolOutcome.Fail("give query: the words to look for");
+            List<string> archive = ctx.Session.Archive;
+            if (archive.Count == 0) return ToolOutcome.Ok("Nothing of this conversation has been summarized, so everything is still in front of you.", "nothing summarized");
+            bool untrusted;
+            string found = Find(archive, q, 6000, out untrusted);
+            if (found == null) return ToolOutcome.Ok("Nothing in the summarized part matches \"" + q + "\". Try other words, or check the files or run the step again.", "no match");
+            ToolOutcome o = ToolOutcome.Ok("From the summarized part of this conversation, best matches first:\n\n" + found, "found it");
+            o.Untrusted = untrusted;
+            return o;
+        }
+
+        public static string Find(List<string> archive, string query, int room, out bool untrusted)
+        {
+            untrusted = false;
+            string phrase = query.Trim().ToLowerInvariant();
+            List<string> words = new List<string>();
+            foreach (string w in phrase.Split(new char[] { ' ', ',', ';', '"', '\'' }, StringSplitOptions.RemoveEmptyEntries)) if (w.Length >= 2 && !words.Contains(w)) words.Add(w);
+            if (words.Count == 0) words.Add(phrase);
+            List<KeyValuePair<int, int>> hits = new List<KeyValuePair<int, int>>();
+            for (int i = 0; i < archive.Count; i++)
+            {
+                string low = archive[i].ToLowerInvariant();
+                int score = low.Contains(phrase) ? 1000 : 0;
+                foreach (string w in words) if (low.Contains(w)) score += 10;
+                if (score > 0) hits.Add(new KeyValuePair<int, int>(i, score));
+            }
+            if (hits.Count == 0) return null;
+            int best = 0;
+            foreach (KeyValuePair<int, int> h in hits) best = Math.Max(best, h.Value);
+            hits.RemoveAll(delegate (KeyValuePair<int, int> h) { return h.Value < Math.Min(best, 10 * words.Count); });
+            hits.Sort(delegate (KeyValuePair<int, int> x, KeyValuePair<int, int> y) { return x.Value != y.Value ? y.Value.CompareTo(x.Value) : y.Key.CompareTo(x.Key); });
+            StringBuilder sb = new StringBuilder();
+            foreach (KeyValuePair<int, int> h in hits)
+            {
+                string e = archive[h.Key];
+                int colon = e.IndexOf(": ", StringComparison.Ordinal);
+                string who = colon > 0 && colon < 80 ? e.Substring(0, colon) : "";
+                string body = colon > 0 && colon < 80 ? e.Substring(colon + 2) : e;
+                string low = body.ToLowerInvariant();
+                int at = low.IndexOf(phrase, StringComparison.Ordinal);
+                if (at < 0) foreach (string w in words) { at = low.IndexOf(w, StringComparison.Ordinal); if (at >= 0) break; }
+                int from = Math.Max(0, at - 300), to = Math.Min(body.Length, Math.Max(at, 0) + 600);
+                string part = (from > 0 ? "..." : "") + body.Substring(from, to - from) + (to < body.Length ? "..." : "");
+                if (sb.Length > 0 && sb.Length + part.Length + who.Length > room) break;
+                sb.Append("--- ").Append(who.Length > 0 ? who : "Earlier").Append(":\n").Append(part.Trim()).Append("\n\n");
+                if (who.EndsWith(AgentSession.Untrusted, StringComparison.Ordinal)) untrusted = true;
+                if (sb.Length >= room) break;
+            }
+            return sb.ToString().TrimEnd();
         }
     }
 }

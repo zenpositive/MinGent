@@ -175,12 +175,19 @@ namespace MinGent
     {
         void OnText(string delta);
         void OnReasoning(string delta);
-        void OnToolProgress(string name, int argChars);
+        void OnToolProgress(string name, int argChars, string head);
         void OnPromptProgress(int processed, int total, int cached);
     }
 
     static class Quirks
     {
+        public const int HeadChars = 400;
+        public static string Head(StringBuilder sb)
+        {
+            if (sb == null) return "";
+            return sb.Length <= HeadChars ? sb.ToString() : sb.ToString(0, HeadChars);
+        }
+
         static readonly Dictionary<string, object> map = new Dictionary<string, object>();
         public static bool Has(string key) { lock (map) return map.ContainsKey(key); }
         public static void Flag(string key, bool on) { lock (map) { if (on) map[key] = true; else map.Remove(key); } }
@@ -1024,7 +1031,7 @@ namespace MinGent
                         object args = Json.Get(tc, "function", "arguments");
                         if (args is string) acc.Args[idx].Append((string)args);
                         else if (args != null) acc.Args[idx].Append(Json.Write(args));
-                        if (sink != null) sink.OnToolProgress(c.Name, acc.Args[idx].Length);
+                        if (sink != null) sink.OnToolProgress(c.Name, acc.Args[idx].Length, Quirks.Head(acc.Args[idx]));
                     }
             }
             string fin = Json.Str(choice, "finish_reason");
@@ -1293,7 +1300,7 @@ namespace MinGent
                                 }
                                 if (b.Type != "text" && b.Type != "thinking" && b.Type != "redacted_thinking" && b.Type != "tool_use") b.Raw = cb;
                                 blocks[idx] = b;
-                                if (b.Type == "tool_use" && sink != null) sink.OnToolProgress(b.Name ?? "", 0);
+                                if (b.Type == "tool_use" && sink != null) sink.OnToolProgress(b.Name ?? "", 0, "");
                                 break;
                             }
                         case "content_block_delta":
@@ -1306,7 +1313,7 @@ namespace MinGent
                                 if (dt == "text_delta") { string s = Json.Str(d, "text") ?? ""; b.Text.Append(s); if (sink != null && s.Length > 0) sink.OnText(s); }
                                 else if (dt == "thinking_delta") { string s = Json.Str(d, "thinking") ?? ""; b.Text.Append(s); if (sink != null && s.Length > 0) sink.OnReasoning(s); }
                                 else if (dt == "signature_delta") b.Signature = (b.Signature ?? "") + (Json.Str(d, "signature") ?? "");
-                                else if (dt == "input_json_delta") { b.Json2.Append(Json.Str(d, "partial_json") ?? ""); if (sink != null) sink.OnToolProgress(b.Name ?? "", b.Json2.Length); }
+                                else if (dt == "input_json_delta") { b.Json2.Append(Json.Str(d, "partial_json") ?? ""); if (sink != null) sink.OnToolProgress(b.Name ?? "", b.Json2.Length, Quirks.Head(b.Json2)); }
                                 break;
                             }
                         case "message_delta":
@@ -1539,6 +1546,7 @@ namespace MinGent
             bool ended = false;
             Dictionary<string, string> callNames = new Dictionary<string, string>();
             Dictionary<string, int> argLens = new Dictionary<string, int>();
+            Dictionary<string, StringBuilder> argHeads = new Dictionary<string, StringBuilder>();
             LlmResult r = PostStream(BaseUrl.TrimEnd('/') + "/responses", h, body, TimeoutMs, ct,
                 delegate (string ev, string data, LlmResult res)
                 {
@@ -1562,7 +1570,7 @@ namespace MinGent
                                 {
                                     string iid = Json.Str(o, "item", "id") ?? "";
                                     callNames[iid] = Json.Str(o, "item", "name") ?? "";
-                                    if (sink != null) sink.OnToolProgress(callNames[iid], 0);
+                                    if (sink != null) sink.OnToolProgress(callNames[iid], 0, "");
                                 }
                                 break;
                             }
@@ -1571,11 +1579,15 @@ namespace MinGent
                                 string iid = Json.Str(o, "item_id") ?? "";
                                 int n;
                                 argLens.TryGetValue(iid, out n);
-                                n += (Json.Str(o, "delta") ?? "").Length;
+                                string piece = Json.Str(o, "delta") ?? "";
+                                n += piece.Length;
                                 argLens[iid] = n;
+                                StringBuilder hb;
+                                if (!argHeads.TryGetValue(iid, out hb)) { hb = new StringBuilder(); argHeads[iid] = hb; }
+                                if (hb.Length < Quirks.HeadChars) hb.Append(piece);
                                 string nm;
                                 callNames.TryGetValue(iid, out nm);
-                                if (sink != null) sink.OnToolProgress(nm ?? "", n);
+                                if (sink != null) sink.OnToolProgress(nm ?? "", n, Quirks.Head(hb));
                                 break;
                             }
                         case "response.completed":

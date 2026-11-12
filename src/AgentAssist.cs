@@ -2017,7 +2017,7 @@ namespace MinGent
     class RunCoach
     {
         public int Nudges;
-        int announce, todo, verify, refusal, summary;
+        int announce, todo, verify, refusal, summary, status;
         public bool AnyTool, Denied, FilesChanged, Reviewed, Listed;
         public string LastFamily = "";
         readonly List<string> unverified = new List<string>();
@@ -2334,6 +2334,13 @@ namespace MinGent
                 Nudges++;
                 Told = "The agent said what it would do next but stopped, so MinGent asked it to carry on.";
                 return "[MinGent] Your message says you are about to do something, but you ended your turn without calling a tool. If you meant to continue, make the tool call now. If you are finished, give your final answer. " + Standalone;
+            }
+            if (!question && !WaitingOnUser && status < 2 && StatusWords.StatusOnly(t))
+            {
+                status++;
+                Nudges++;
+                Told = "The agent wrote what it was doing but stopped, so MinGent asked it to carry on.";
+                return "[MinGent] Your message only says what you are doing, and you ended your turn without calling a tool. If you meant to continue, make the tool call now. If you are finished, give your final answer. " + Standalone;
             }
             if (!question && !WaitingOnUser && todo == 0 && todos != null)
             {

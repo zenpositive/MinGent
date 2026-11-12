@@ -680,7 +680,8 @@ namespace MinGent
                 if (request.Length > 3000) request = request.Substring(0, 3000) + "...";
             }
             StringBuilder sb = new StringBuilder();
-            sb.Append("The user asked another assistant:\n\"\"\"\n").Append(request.Length > 0 ? request : "(not available)").Append("\n\"\"\"\n\n");
+            sb.Append("Check another assistant's finished work: that it works, does what the user asked and has no bugs. The work is done: don't do the task yourself, don't redo or rebuild it, and don't write your own version of it.\n\n");
+            sb.Append("For context, the user asked that assistant:\n\"\"\"\n").Append(request.Length > 0 ? request : "(not available)").Append("\n\"\"\"\n\n");
             List<string> more = main.SaidSince(asked != null ? Math.Max(-1, main.History.IndexOf(asked)) : -1);
             if (more.Count > 0)
             {
@@ -696,7 +697,7 @@ namespace MinGent
             bool well;
             string ran = CommandsRun(main, out well);
             if (ran.Length > 0) sb.Append("Commands it ran (and how they ended):\n").Append(ran).Append('\n');
-            sb.Append("Review this work independently. Start from the changes above and read only the code you need to judge them. ");
+            sb.Append("Review this work independently, as a check of what is there. Start from the changes above and read only the code you need to judge them. ");
             if (changed < 150 && ran.Length == 0) sb.Append("This is a small change, so judge it by reading: don't run commands or code for it. ");
             else if (changed < 150 && well) sb.Append("This is a small change and the checks above ended well, so judge it by reading: don't run commands or code for it, unless what you read gives you a concrete reason to doubt one of those results. ");
             else sb.Append(ran.Length > 0 ? "Re-run the checks above that matter, and test further only where you suspect a real problem. " : "Run the program, its tests or its build if you can. ").Append("Read before you run: each command or piece of code may need the user's OK. ");
@@ -776,7 +777,8 @@ namespace MinGent
             sb.Append("# Your job\n");
             if (kind == "review")
             {
-                sb.Append("You check work that someone else did, independently. Read the relevant files and the code they use, and try the work the way its user would: run the program, its tests or its build with run_command").Append(browser ? ", and open web pages in the built-in browser" : "").Append(". ");
+                sb.Append("You check work that someone else did, independently: that it works, does what was asked and has no bugs. The work is already done: your job is to check it, not to do it again. Don't start the task over, write your own version, or create new projects or files, also not with run_command. ");
+                sb.Append("Read the changes and the code they use, and try the work the way its user would: run the program, its tests or its build with run_command").Append(browser ? ", and open web pages in the built-in browser" : "").Append(". ");
                 sb.Append("Look for real problems: bugs, crashes, wrong results, missing parts of what was asked, broken edge cases, security issues. Confirm a problem by reading the code or running it before you report it. ");
                 sb.Append("Don't change any files. Don't report style preferences.\n");
                 sb.Append("- Keep it focused: about 25 tool calls is plenty. When everything you checked holds up, report \"Looks good\" and stop; an honest short report beats invented problems.\n");
