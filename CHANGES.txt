@@ -1,6 +1,20 @@
 MinGent - what changed
 ======================
 
+Version 1.1.7 beta
+- Each chat keeps its own unsent message. Text you type in one chat no
+  longer follows you into the next chat you open, where Enter would have
+  sent it to the wrong chat. A new chat starts empty, or with what you
+  typed in the last new chat.
+- Undo for the agent's file changes stays after you switch chats, also
+  for a chat that finished in the background. It lasts until MinGent
+  closes.
+- Allowing the browser on a site once covers the rest of that task, as the
+  question says. Before, the agent asked again for the same site on its
+  next step.
+- While the agent writes a file before its name comes in, the status line
+  says "Writing a file" instead of "Writing the next step".
+
 Version 1.1.6 beta
 - Several chats at once: open another chat or start a new one while the
   agent works, and the first chat keeps working in the background, up to

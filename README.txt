@@ -22,7 +22,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.1.6 beta: it works, and it still has rough edges. Report
+This is version 1.1.7 beta: it works, and it still has rough edges. Report
 problems at https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -89,7 +89,7 @@ sign-ins. MinGent has none of that.
   Full auto asks nothing. The check reads the command; it can't see what a
   script does once it runs.
 To check a download, compare its SHA-256 with the one on the release page.
-In PowerShell: Get-FileHash .\MinGent-1.1.6-beta.zip
+In PowerShell: Get-FileHash .\MinGent-1.1.7-beta.zip
 
 
 YOUR OWN ICON
@@ -674,7 +674,8 @@ ASK, AUTO OR FULL AUTO
   arrow next to it has all three levels.
   Ask (switch off): it asks before running a command, before using the
   internet, and before changing files outside the workspace. Each request is
-  a card in the chat with Allow / Allow for this chat / Deny.
+  a card in the chat with Allow / Allow for this chat / Deny. Allow on a
+  site in the browser covers the rest of that task.
   Auto (switch on): it works on its own and asks only before risky things
   (see below).
   Full auto (red): it asks nothing at all. It warns you the first time and
@@ -757,7 +758,8 @@ Undo
   contents, brings back the files and folders it deleted, and moves files it
   created to the Recycle Bin. Changes made by commands it ran (a build, a
   script, Remove-Item) cannot be undone. Edits to open Notes tabs are also
-  normal undo steps (Ctrl+Z).
+  normal undo steps (Ctrl+Z). Undo stays when you switch chats, until
+  MinGent closes.
 - The agent is told to delete with its own delete tool, which moves files to
   the Recycle Bin. Undo brings them back too, except files over 32 MB and
   folders over 2,000 files or 64 MB, which come back from the Recycle Bin.
