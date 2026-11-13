@@ -1482,9 +1482,15 @@ namespace MinGent
             catch { }
         }
 
+        public void AgentRunEnded()
+        {
+            if (drawerOpen && !drawerUser) ShowConsole(false, false);
+        }
+
         public void ResetSession()
         {
             ClosePopups();
+            AgentRunEnded();
             ShowNotice(null);
             allowedFolder = null;
             pageNote = null;
@@ -3126,6 +3132,15 @@ namespace MinGent
             }
         }
 
+        static bool PickerField(string type)
+        {
+            switch (type ?? "")
+            {
+                case "date": case "time": case "datetime-local": case "month": case "week": case "color": case "range": return true;
+                default: return false;
+            }
+        }
+
         public string TypeText(string refId, string text, bool submit, bool clear, CancelToken ct, out string summary)
         {
             summary = null;
@@ -3176,6 +3191,25 @@ namespace MinGent
                         if (se == "disabled") return "the option \"" + Clip(Json.Str(v, "text"), 60) + "\" of " + r + " is disabled";
                         if (se == "stale") return r + " is no longer on the page. Call browser_read to get fresh refs.";
                         return AfterAction(start, before, ct, "Selected \"" + (Json.Str(v, "text") ?? text) + "\" in " + r + ".", out summary);
+                    }
+                    string ftype = Json.Str(info, "type") ?? "";
+                    if (Json.Str(info, "tag") == "INPUT" && PickerField(ftype) && !string.IsNullOrEmpty(text))
+                    {
+                        err = Js("(" + BrowserScripts.SetField + ")(" + Json.Quote(r) + "," + Json.Quote(text) + ")", ct, out v);
+                        if (err != null) return err;
+                        string fe = Json.Str(v, "err");
+                        if (fe == "stale") return r + " is no longer on the page. Call browser_read to get fresh refs.";
+                        if (fe == "format") return "\"" + Clip(text, 40) + "\" doesn't fit " + r + ", a " + ftype + " field: give it as " + Json.Str(v, "want") + ".";
+                        if (fe == null)
+                        {
+                            if (submit)
+                            {
+                                ct.Sleep(60);
+                                err = Key("Enter", ct);
+                                if (err != null) return err;
+                            }
+                            return AfterAction(start, before, ct, "Set " + r + " to " + (Json.Str(v, "value") ?? text) + (submit ? " and pressed Enter." : "."), out summary);
+                        }
                     }
                     if (!Json.Bool(info, "editable"))
                     {

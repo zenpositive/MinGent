@@ -647,7 +647,7 @@ namespace MinGent
         {
             changed = 0;
             if (changes == null) return null;
-            List<string> paths = changes.Paths();
+            List<string> paths = changes.NetPaths();
             StringBuilder list = new StringBuilder(), diffs = new StringBuilder();
             int codeFiles = 0;
             foreach (string p in paths)

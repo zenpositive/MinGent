@@ -1224,6 +1224,7 @@ namespace MinGent
             p.ChatsChanged += delegate { RefreshSidebar(); };
             p.Project = settings.AiProject;
             p.StateChanged += delegate { PanelState(p); };
+            p.TitleNoteChanged += delegate { if (p == aiPanel) UpdateTitle(); };
             p.RenameRequested += delegate { if (p.ActiveChatPath != null) RenameChat(p.ActiveChatPath); };
             p.DeleteRequested += delegate { if (p.ActiveChatPath != null) DeleteChat(p.ActiveChatPath); };
             p.ContextToggled += delegate { if (p == aiPanel) UpdateAiChip(); };
@@ -1814,6 +1815,8 @@ namespace MinGent
             catch { return true; }
         }
 
+        public void RunEnded() { if (browser != null) browser.AgentRunEnded(); }
+
         public void RunStarted(int runId)
         {
             runTabs[runId] = new RunTabs();
@@ -1843,7 +1846,7 @@ namespace MinGent
                 foreach (Document d in rt.Groups.Keys) if (docs.Contains(d)) files.Add(d.Path != null ? FullOrNull(d.Path) ?? d.Path : DocKey(d));
             if (log != null)
             {
-                foreach (string f in log.Paths()) files.Add(f);
+                foreach (string f in log.NetPaths()) files.Add(f);
             }
             return files.Count;
         }
@@ -3789,6 +3792,7 @@ namespace MinGent
         public string ActiveContext(out string label) { if (Front) return main.ActiveContext(out label); label = null; return null; }
         public string WorkspaceFolder(out bool isDefault) { return main.WorkspaceFolder(out isDefault); }
         public void RunStarted(int runId) { main.RunStarted(runId); }
+        public void RunEnded() { if (Pane != null) Pane.AgentRunEnded(); }
         public int RunChangeCount(int runId, RunChangeLog log) { return main.RunChangeCount(runId, log); }
         public string UndoRun(int runId, RunChangeLog log, out int reverted, out int kept) { return main.UndoRun(runId, log, out reverted, out kept); }
         public void ShowSettings() { main.ShowSettings(); }

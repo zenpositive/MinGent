@@ -733,13 +733,18 @@ namespace MinGent
             }
         }
 
-        public bool Recorded(string full) { lock (gate) return Originals.ContainsKey(full) || Created.Contains(full); }
+        public bool Recorded(string full) { lock (gate) return Originals.ContainsKey(full) || WasMade(full); }
 
         public bool KeptOriginal(string full) { lock (gate) return Originals.ContainsKey(full); }
 
         public void Forget(string full) { lock (gate) Originals.Remove(full); }
 
         public void Made(string full) { lock (gate) if (!Created.Contains(full)) Created.Add(full); }
+        public bool WasMade(string full)
+        {
+            lock (gate) foreach (string c in Created) if (string.Equals(c, full, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
 
         public void MadeDir(string dir) { lock (gate) if (!CreatedDirs.Contains(dir)) CreatedDirs.Add(dir); }
 
@@ -751,6 +756,13 @@ namespace MinGent
                 foreach (string f in Created) if (!l.Contains(f)) l.Add(f);
                 return l;
             }
+        }
+
+        public List<string> NetPaths()
+        {
+            List<string> l = Paths();
+            lock (gate) l.RemoveAll(delegate (string f) { return !Originals.ContainsKey(f) && !File.Exists(f) && !Directory.Exists(f); });
+            return l;
         }
 
         public byte[] Original(string full)
@@ -891,6 +903,8 @@ namespace MinGent
             if (inside) return null;
             bool guard = ps.Auto && ps.WebGuard && ps.Tainted;
             if (ps.Auto && !guard) return null;
+            string sameFolder = "folder:" + (dir ?? full);
+            if (!guard) lock (ps.AskLock) if (ps.TaskKeys.Contains(sameFolder)) return null;
             PermissionAsk a = new PermissionAsk();
             a.Kind = "write";
             a.Title = what + " outside the work folder";
@@ -898,6 +912,7 @@ namespace MinGent
             a.Key = "write:" + (dir ?? full);
             a.Reason = guard ? "This chat has read web content, so writing outside the work folder needs your OK (prompt-injection guard)." : "Writing outside " + Cfg.Workspace + ".";
             if (!Approve(a)) return "The user did not allow writing to " + full + ". Do not try another way; ask the user if you need it.";
+            if (!guard) lock (ps.AskLock) ps.TaskKeys.Add(sameFolder);
             return null;
         }
 
@@ -997,6 +1012,49 @@ namespace MinGent
 
     class AgentSession
     {
+        Dictionary<string, string> refNames = new Dictionary<string, string>();
+        static readonly Regex RefToken = new Regex(@"\[(e\d+) ([a-z-]+)(?: ""([^""]*)"")?", RegexOptions.CultureInvariant);
+        static readonly Regex RefInLabel = new Regex(@"\be\d+\b", RegexOptions.CultureInvariant);
+
+        public void KeepRefNames(AgentTool tool, ToolOutcome o)
+        {
+            if (!(tool is BrowserTool) || o == null || !o.Snapshot || string.IsNullOrEmpty(o.Text)) return;
+            Dictionary<string, string> d = new Dictionary<string, string>();
+            foreach (Match m in RefToken.Matches(o.Text)) d[m.Groups[1].Value] = Thing(m.Groups[2].Value, m.Groups[3].Success ? m.Groups[3].Value : "");
+            refNames = d;
+        }
+
+        static string Thing(string role, string name)
+        {
+            string noun;
+            switch (role)
+            {
+                case "button": case "link": case "checkbox": case "tab": case "switch": case "slider": case "option": noun = role; break;
+                case "radio": noun = "option"; break;
+                case "menuitem": case "menuitemcheckbox": case "menuitemradio": noun = "menu item"; break;
+                case "select": case "combobox": noun = "list"; break;
+                case "textbox": case "searchbox": case "spinbutton": noun = "box"; break;
+                case "treeitem": noun = "item"; break;
+                case "file-picker": noun = "file picker"; break;
+                default: noun = role.EndsWith("-field", StringComparison.Ordinal) ? "field" : ""; break;
+            }
+            name = (name ?? "").Trim();
+            if (name.Length > 40) name = name.Substring(0, 37).TrimEnd() + "...";
+            if (name.Length == 0) return noun.Length > 0 ? "a " + noun : "an element";
+            return noun.Length > 0 ? "the \"" + name + "\" " + noun : "\"" + name + "\"";
+        }
+
+        public string Named(AgentTool tool, string label)
+        {
+            if (!(tool is BrowserTool) || string.IsNullOrEmpty(label)) return label;
+            Dictionary<string, string> d = refNames;
+            return RefInLabel.Replace(label, delegate (Match m)
+            {
+                string n;
+                return d.TryGetValue(m.Value, out n) ? n : "an element";
+            });
+        }
+
         public List<Msg> History = new List<Msg>();
         public List<TodoItem> Todos = new List<TodoItem>();
         public readonly PermissionState Perms;
@@ -1119,8 +1177,17 @@ namespace MinGent
             double gen, first;
             bool guess;
 
+            long input, cached;
+            bool cacheSeen;
+
             public void Add(LlmResult r, DateTime firstAt, DateTime asked, DateTime ended, double charsPerToken)
             {
+                if (r.InputTokens > 0 && r.CachedTokens >= 0)
+                {
+                    input += r.InputTokens;
+                    cached += Math.Min(r.CachedTokens, r.InputTokens);
+                    cacheSeen = true;
+                }
                 if (firstAt == DateTime.MinValue) return;
                 double g = (ended - firstAt).TotalSeconds;
                 int n = r.OutputTokens;
@@ -1142,7 +1209,9 @@ namespace MinGent
 
             public void Stamp(Msg m)
             {
-                if (m == null || calls == 0 || gen <= 0) return;
+                if (m == null) return;
+                m.Cached = cacheSeen && input > 0 ? (int)Math.Round(100.0 * cached / input) : -1;
+                if (calls == 0 || gen <= 0) return;
                 m.Speed = tokens / gen;
                 m.FirstToken = first / calls;
                 m.SpeedGuess = guess;
@@ -1169,6 +1238,7 @@ namespace MinGent
                 Ui.Phase(pct >= 100 ? "Thinking" : "Reading the conversation (" + pct + "%)");
             }
             public Dictionary<string, AgentTool> Tools;
+            public AgentSession Owner;
             string lastStep;
             public void OnToolProgress(string name, int chars, string head)
             {
@@ -1206,7 +1276,7 @@ namespace MinGent
                 }
                 if (got.Count == 0) return null;
                 string label;
-                try { label = tool.Label(got); } catch { return null; }
+                try { label = tool.Label(got); if (Owner != null) label = Owner.Named(tool, label); } catch { return null; }
                 string doing = StatusWords.Doing(label);
                 return doing.Trim().IndexOf(' ') > 0 ? doing : null;
             }
@@ -1748,6 +1818,7 @@ namespace MinGent
                 Sink sink = new Sink();
                 sink.Ui = ui;
                 sink.Tools = byName;
+                sink.Owner = this;
                 DateTime asked = DateTime.UtcNow;
                 LlmResult r = cfg.Backend.Stream(req, sink, ct);
                 if (r.Error == null && !r.Cancelled) pace.Add(r, sink.First, asked, DateTime.UtcNow, CharsPerToken);
@@ -1982,7 +2053,7 @@ namespace MinGent
                                     outcome = ToolOutcome.Fail("Not run: the user stopped the assistant.");
                                     outcome.Summary = "stopped";
                                 }
-                                if ((outcome.Untrusted || side.UntrustedFor(call.Args)) && !Perms.Tainted) { Perms.Tainted = true; Perms.TaintSource = side.Label(call.Args); }
+                                if ((outcome.Untrusted || side.UntrustedFor(call.Args)) && !Perms.Tainted) { Perms.Tainted = true; Perms.TaintSource = Named(side, side.Label(call.Args)); }
                             }
                         }
                         else if (!byName.TryGetValue(call.Name, out tool))
@@ -2037,7 +2108,7 @@ namespace MinGent
                             {
                                 tc.Call = call;
                                 tc.Browser = !IsHelper && HelperHoldsBrowser ? null : br;
-                                ui.ToolStart(call, tool.Label(call.Args));
+                                ui.ToolStart(call, Named(tool, tool.Label(call.Args)));
                                 try { outcome = RunTool(tool, tc, call.Args, ui, ct); }
                                 catch (Exception ex) { outcome = ToolOutcome.Fail(call.Name + " crashed: " + ex.Message); }
                                 tc.Browser = br;
@@ -2049,12 +2120,13 @@ namespace MinGent
                                 }
                                 if (outcome.Untrusted || tool.UntrustedFor(call.Args))
                                 {
-                                    if (!Perms.Tainted) { Perms.Tainted = true; Perms.TaintSource = tool.Label(call.Args); }
+                                    if (!Perms.Tainted) { Perms.Tainted = true; Perms.TaintSource = Named(tool, tool.Label(call.Args)); }
                                 }
                             }
                         }
                         if (call.AutoRefused) outcome.AddNote("Nobody was asked: Full auto never does this, so MinGent turned it down by itself. Tell the user that plainly; don't say they declined.");
                         coach.AfterTool(call.Name, call.Args, outcome);
+                        if (ran) outcome.AddNote(coach.StaleChecklist(Todos));
                         if (!Bookkeeping(call, outcome, shown)) busy = true;
                         if (ran && sig != null) outcome.AddNote(guard.After(sig, call.Name, call.Args, outcome, worldBefore));
                         if (ran && canPlan && Perms.Planning && call.Name != PlanMode.Tool && call.Name != "ask_user" && call.Name != "todo_write")
@@ -2063,6 +2135,8 @@ namespace MinGent
                             if (planCalls == 25 || planCalls == 35) outcome.AddNote("You have made " + planCalls + " research calls in plan mode. Unless something important is still unknown, stop researching and call present_plan with your plan now.");
                             else if (planCalls >= 45) planWrap = true;
                         }
+                        AgentTool ranTool;
+                        if (byName.TryGetValue(call.Name, out ranTool) && outcome.Summary != null) outcome.Summary = Named(ranTool, outcome.Summary);
                         ui.ToolEnd(call, outcome);
                         ended = true;
                         string text = (outcome.Text ?? "").Replace(InboxIntro, "\n\n(MinGent)" + InboxIntro.Substring(11));
@@ -2071,6 +2145,7 @@ namespace MinGent
                         text = WithNotes(text, outcome.Note);
                         Msg result = Msg.ToolResult(call, text, outcome.Error, cfg.Vision ? outcome.Images : null);
                         if (outcome.Snapshot) result.Snapshot = true;
+                        if (ranTool != null) KeepRefNames(ranTool, outcome);
                         History.Add(result);
                         added = true;
                     }
@@ -2170,7 +2245,7 @@ namespace MinGent
                 AgentTool tool = byName[call.Name];
                 ToolContext own = tc.CopyFor(call);
                 own.Browser = !IsHelper && HelperHoldsBrowser ? null : br;
-                ui.ToolStart(call, tool.Label(call.Args));
+                ui.ToolStart(call, Named(tool, tool.Label(call.Args)));
                 Thread t = new Thread(delegate ()
                 {
                     ToolOutcome o;
@@ -2209,7 +2284,7 @@ namespace MinGent
             {
                 ToolCall call = c;
                 ToolContext own = tc.CopyFor(call);
-                ui.ToolStart(call, tool.Label(call.Args));
+                ui.ToolStart(call, Named(tool, tool.Label(call.Args)));
                 Thread t = new Thread(delegate ()
                 {
                     ToolOutcome o;
@@ -3465,6 +3540,8 @@ namespace MinGent
         static readonly string[] Doubled = { "cut", "dig", "drag", "forget", "get", "grab", "map", "plan", "put", "re-run", "rerun", "run", "scan", "set", "skim", "stop", "trim", "wrap" };
         static readonly Dictionary<string, string> Ing = Build();
         static readonly HashSet<string> Gerunds = new HashSet<string>(Ing.Values, StringComparer.OrdinalIgnoreCase);
+        static readonly Regex IngWord = new Regex(@"^[A-Za-z]{3,}ing$", RegexOptions.CultureInvariant);
+        static readonly HashSet<string> NotIng = new HashSet<string>(new string[] { "nothing", "something", "everything", "anything", "string", "during", "morning", "evening", "ceiling", "bring", "spring", "swing", "sting", "thing", "wing", "king", "ring", "sing", "padding", "heading", "pricing", "spacing" }, StringComparer.OrdinalIgnoreCase);
         static readonly Regex Lead = new Regex(
             @"^(?:(?:now|next|first|then|okay|ok|alright|so)\b,?\s+)?(?:(?:let me|let's|i'll|i will|i'm going to|i am going to|i'm now going to|i need to|going to|time to|i'm|i am)\s+)?(?:(?:now|first|quickly|also|just)\s+)?",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -3541,7 +3618,25 @@ namespace MinGent
         public static string Note(string text)
         {
             string n = NoteLine(text);
-            return n == null ? null : Doing(n);
+            if (n == null) return null;
+            string[] parts = Regex.Split(n, @"(?<=[.!?;])\s+");
+            for (int pass = 0; pass < 2; pass++)
+                foreach (string part in parts)
+                {
+                    string t = part.Trim().TrimEnd('.', '!', '?', ';', ',', ' ');
+                    string rest = t.Substring(Lead.Match(t).Length);
+                    if (rest.Length == 0) continue;
+                    int sp = rest.IndexOf(' ');
+                    string first = sp > 0 ? rest.Substring(0, sp) : rest;
+                    if (pass == 0)
+                    {
+                        if (IsGerund(first) || IngWord.IsMatch(first) && !NotIng.Contains(first)) return Cap(rest);
+                        continue;
+                    }
+                    string v = Verb(rest);
+                    if (v != null) return v;
+                }
+            return Lead.Match(n).Length > 0 && parts.Length == 1 ? Doing(n) : null;
         }
 
         static readonly Regex Outcome = new Regex(@"\b(done|pass|passes|passed|fail|fails|failed|works|ready|complete|completed|finished|fixed|success|successful|succeeded|error|errors|ok|okay|fine|nothing)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);

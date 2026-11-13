@@ -2170,9 +2170,22 @@ namespace MinGent
             if (refusals >= 3 && WrapReason == null) WrapReason = "several calls were not run because they would only have repeated earlier results or requests";
         }
 
+        int sinceTodo;
+
+        public string StaleChecklist(List<TodoItem> todos)
+        {
+            if (todos == null || todos.Count == 0 || Helper) return null;
+            int open = 0;
+            foreach (TodoItem t in todos) if (t.Status != "completed") open++;
+            if (open == 0 || ++sinceTodo < 10) return null;
+            sinceTodo = 0;
+            return "Your checklist was last updated 10 steps ago and still shows " + open + " of " + todos.Count + " items open; the user sees it beside the chat. If some are done, mark them with todo_write now.";
+        }
+
         public void AfterTool(string name, Dictionary<string, object> args, ToolOutcome o)
         {
             AnyTool = true;
+            if (name == "todo_write") sinceTodo = 0;
             if (name == "todo_write" && o != null && !o.Error) Listed = true;
             if (name.StartsWith("app_", StringComparison.Ordinal)) LastFamily = "app";
             else if (name.StartsWith("browser_", StringComparison.Ordinal) || name == "watch_video") LastFamily = "browser";

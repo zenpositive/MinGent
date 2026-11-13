@@ -18,6 +18,7 @@ namespace MinGent
         string ActiveContext(out string label);
         string WorkspaceFolder(out bool isDefault);
         void RunStarted(int runId);
+        void RunEnded();
         int RunChangeCount(int runId, RunChangeLog log);
         string UndoRun(int runId, RunChangeLog log, out int reverted, out int kept);
         void ShowSettings();
@@ -2107,6 +2108,7 @@ namespace MinGent
             running = false;
             liveRun = -1;
             AppHighlight.Hide();
+            try { host.RunEnded(); } catch { }
             composer.Running = false;
             FinishStreaming();
             KeepAnAnswer();
@@ -2381,8 +2383,14 @@ namespace MinGent
                 }
                 catch (Exception ex) { try { Notice("Display error: " + ex.Message, 1); } catch { } }
             }
+            string note = TitleNote;
+            if (note != shownTitle && TitleNoteChanged != null) TitleNoteChanged(this, EventArgs.Empty);
+            shownTitle = note;
             CheckInbox();
         }
+
+        string shownTitle = "";
+        public event EventHandler TitleNoteChanged;
 
         void OnModelReady(ModelEntry m)
         {
@@ -2492,6 +2500,7 @@ namespace MinGent
                 curAssistant.Text = text;
                 curAssistant.Speed = m.Speed;
                 curAssistant.FirstToken = m.FirstToken;
+                curAssistant.Cached = m.Cached;
                 curAssistant.SpeedGuess = m.SpeedGuess;
                 if (text.Trim().Length == 0) chat.Items.Remove(curAssistant);
                 chat.Changed(curAssistant);
@@ -2503,6 +2512,7 @@ namespace MinGent
                 a.Text = text;
                 a.Speed = m.Speed;
                 a.FirstToken = m.FirstToken;
+                a.Cached = m.Cached;
                 a.SpeedGuess = m.SpeedGuess;
                 a.Draft = holdText && !replyFirst;
                 a.Whole = whole;
@@ -3384,7 +3394,7 @@ namespace MinGent
                 Dictionary<string, object> o = Json.O("k", (int)it.Kind, "t", Clip(it.Text, 200000));
                 if (it.Kind == ChatKind.Tool) { o["l"] = it.Label; o["s"] = it.Summary; o["d"] = Clip(it.Detail, it.Under != null ? 8000 : 20000); o["st"] = it.Status; o["i"] = it.Icon; if (it.Report.Length > 0) o["rp"] = Clip(it.Report, 20000); if (it.Under != null) o["up"] = true; }
                 if (it.Kind == ChatKind.Thinking) o["sec"] = it.Seconds;
-                if (it.Kind == ChatKind.Assistant && it.Speed > 0) { o["sp"] = Math.Round(it.Speed, 1); if (it.FirstToken > 0) o["ft"] = Math.Round(it.FirstToken, 2); if (it.SpeedGuess) o["spg"] = true; }
+                if (it.Kind == ChatKind.Assistant && it.Speed > 0) { o["sp"] = Math.Round(it.Speed, 1); if (it.FirstToken > 0) o["ft"] = Math.Round(it.FirstToken, 2); if (it.SpeedGuess) o["spg"] = true; if (it.Cached >= 0) o["ci"] = it.Cached; }
                 if (it.Kind == ChatKind.Activity) { o["sec"] = it.Seconds + (it.Running ? Math.Max(0, (DateTime.UtcNow - it.Started).TotalSeconds) : 0); if (it.Stopped) o["stp"] = true; if (!string.IsNullOrEmpty(it.Label)) o["l"] = it.Label; }
                 if (it.Kind == ChatKind.Permission) { o["l"] = it.Ask.Title; o["dec"] = it.Decision; if (!string.IsNullOrEmpty(it.Ask.Summary)) o["sm"] = it.Ask.Summary; }
                 if (it.Kind == ChatKind.Question) { o["l"] = it.Question != null ? it.Question.Title : ""; o["dec"] = it.Decision; if (it.Question != null && it.Question.Wait) o["w"] = true; }
@@ -3555,7 +3565,7 @@ namespace MinGent
                         else if (it.Icon == "branch") card = it;
                     }
                     if (it.Kind == ChatKind.Thinking) it.Seconds = Json.Num(o, "sec");
-                    if (it.Kind == ChatKind.Assistant) { it.Speed = Json.Num(o, "sp"); it.FirstToken = Json.Num(o, "ft"); it.SpeedGuess = Json.Bool(o, "spg"); }
+                    if (it.Kind == ChatKind.Assistant) { it.Speed = Json.Num(o, "sp"); it.FirstToken = Json.Num(o, "ft"); it.SpeedGuess = Json.Bool(o, "spg"); it.Cached = Json.Get(o, "ci") != null ? Json.Int(o, "ci") : -1; }
                     if (it.Kind == ChatKind.Activity) { it.Seconds = Json.Num(o, "sec"); it.Stopped = Json.Bool(o, "stp"); it.Label = Json.Str(o, "l") ?? ""; }
                     if (it.Kind == ChatKind.Permission) { it.Ask = new PermissionAsk(); it.Ask.Title = Json.Str(o, "l") ?? ""; it.Ask.Summary = PermissionAsk.PlainSummary(Json.Str(o, "sm"), 160); it.Decision = Json.Int(o, "dec"); if (it.Decision < 0) continue; }
                     if (it.Kind == ChatKind.Question) { it.Question = new UserQuestion(); it.Question.Title = Json.Str(o, "l") ?? ""; it.Question.Wait = Json.Bool(o, "w"); it.Decision = Json.Int(o, "dec"); if (it.Decision < 0) continue; }

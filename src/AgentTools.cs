@@ -720,7 +720,10 @@ namespace MinGent
                 try { if (new FileInfo(full).Length > MaxUndoFile) tooMany = true; } catch { tooMany = true; }
             }
             bool inside = AgentPaths.IsInside(full, ctx.Workspace) && !Same(full, ctx.Workspace) && (!through || AgentPaths.IsInside(realPath, AgentPaths.Real(ctx.Workspace)));
-            if (!inside)
+            bool nothingInside = isDir && !link && !tooMany && files.Count == 0;
+            bool ownNew = !link && !tooMany && files.Count > 0 && ctx.Changes != null;
+            if (ownNew) foreach (string f in files) if (!ctx.Changes.WasMade(f)) { ownNew = false; break; }
+            if (!inside && !nothingInside && !ownNew)
             {
                 PermissionAsk ask = new PermissionAsk();
                 ask.Kind = "write";
@@ -3524,7 +3527,8 @@ namespace MinGent
                 a.High = risky;
                 a.AllowRemember = false;
                 a.Title = "Download " + name;
-                a.Detail = url;
+                bool made = (url ?? "").StartsWith("blob:", StringComparison.OrdinalIgnoreCase) || (url ?? "").StartsWith("data:", StringComparison.OrdinalIgnoreCase);
+                a.Detail = made ? "Made by the page itself, not downloaded from the internet" : url;
                 a.Reason = "The page wants to save " + name + " (" + BrowserPane.FormatBytes(bytes) + ") into the work folder's downloads folder." +
                            (risky ? " Files like this can run programs or hold files that do." : "");
                 ok = ctx.Approve(a);
@@ -4411,7 +4415,11 @@ namespace MinGent
             ask.Title = "Give " + shown + " to " + (site.Length > 0 ? site : "the page");
             ask.Detail = string.Join("\n", files.ToArray());
             ask.Reason = "The agent wants to put " + (files.Count == 1 ? "this file" : "these files") + " into the page's file field. The site gets " + (files.Count == 1 ? "the whole file" : "the whole files") + " when the form is sent, and some sites take " + (files.Count == 1 ? "it" : "them") + " right away.";
-            if (!ctx.Approve(ask)) { ToolOutcome d1 = ToolOutcome.Fail("The user did not allow giving " + shown + " to the page."); d1.Denied = true; return d1; }
+            string here = ctx.Browser.CurrentUrl ?? "";
+            bool localPage = here.StartsWith("file:", StringComparison.OrdinalIgnoreCase) || Net.IsLocal(here);
+            bool ownFiles = ctx.Changes != null;
+            if (ownFiles) foreach (string f in files) if (!ctx.Changes.WasMade(f)) ownFiles = false;
+            if (!(localPage && ownFiles) && !ctx.Approve(ask)) { ToolOutcome d1 = ToolOutcome.Fail("The user did not allow giving " + shown + " to the page."); d1.Denied = true; return d1; }
             if (BrowserPane.PlaceName(ctx.Browser.CurrentUrl) != site) return ToolOutcome.Fail("Not done: the browser moved to another site while the user was asked, so nothing was given. Look at the page again with browser_read.");
             string summary;
             string err2 = ctx.Browser.Upload((S(a, "ref") ?? "").Trim(), (int)D(a, "field", 0), files, ctx.Ct, out summary);
@@ -4598,12 +4606,19 @@ namespace MinGent
                 r.Summary = "Not run";
                 return r;
             }
-            if (!ctx.Approve(Ask(ctx, url, code, S(a, "description")))) { ToolOutcome d = ToolOutcome.Fail("The user did not allow running this code."); d.Denied = true; return d; }
+            if (!OwnPage(ctx, url) && !ctx.Approve(Ask(ctx, url, code, S(a, "description")))) { ToolOutcome d = ToolOutcome.Fail("The user did not allow running this code."); d.Denied = true; return d; }
             string result;
             string e2 = ctx.Browser.ConsoleRun(code, url, ctx.Ct, out result);
             ToolOutcome o = Result(e2, result, "Ran code in the console", true);
             o.Detail = code + "\n\n" + (e2 ?? result ?? "");
             return o;
+        }
+
+        static bool OwnPage(ToolContext ctx, string url)
+        {
+            Uri u;
+            if (ctx.Changes == null || !Uri.TryCreate(url ?? "", UriKind.Absolute, out u) || !u.IsFile) return false;
+            try { return ctx.Changes.Recorded(Path.GetFullPath(u.LocalPath)); } catch { return false; }
         }
 
         static string CaptchaRefusal(ToolContext ctx, string code)

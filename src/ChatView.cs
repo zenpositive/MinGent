@@ -41,6 +41,7 @@ namespace MinGent
         public string ContextLabel;
         public bool Queued, MidRun, Running, Stopped, SpeedGuess, Draft, Surfaced, Whole;
         public double Speed, FirstToken;
+        public int Cached = -1;
         public string Phase = "", CurrentTask = "", Note, LastDoing;
         public int DoingSeq, TaskSeq;
         public ChatItem Group, Under, LastKid;
@@ -667,6 +668,7 @@ namespace MinGent
             string rate = it.Speed < 10 ? it.Speed.ToString("0.0", CultureInfo.InvariantCulture) : Math.Round(it.Speed).ToString("0", CultureInfo.InvariantCulture);
             string s = (it.SpeedGuess ? "about " : "") + rate + " tokens/s";
             if (it.FirstToken >= 0.05) s += "  \u00B7  first token in " + (it.FirstToken < 10 ? it.FirstToken.ToString("0.0", CultureInfo.InvariantCulture) : Math.Round(it.FirstToken).ToString("0", CultureInfo.InvariantCulture)) + " s";
+            if (it.Cached >= 0) s += "  \u00B7  " + it.Cached.ToString(CultureInfo.InvariantCulture) + "% of input cached";
             return s;
         }
 

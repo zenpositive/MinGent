@@ -100,6 +100,7 @@ namespace MinGent
         public bool ToolError;
         public string Reasoning;
         public double Speed, FirstToken;
+        public int Cached = -1;
         public bool SpeedGuess;
         public string RawProvider;
         public List<object> RawBlocks;
@@ -158,6 +159,7 @@ namespace MinGent
         public int Status;
         public bool ConnectFailed, Unauthorized, Retryable, ContextOverflow, Cancelled, Interrupted, SawEnd, EngineGone, ParseFailure;
         public int InputTokens, OutputTokens, HiddenReasoningTokens;
+        public int CachedTokens = -1;
         public bool Truncated { get { return Stop == "length"; } }
 
         public Msg ToMessage()
@@ -612,6 +614,7 @@ namespace MinGent
                     retry = true;
                 }
                 if (usage && (low.Contains("stream_options") || low.Contains("include_usage"))) { Quirks.Flag("chat|nousage|" + BaseUrl, true); retry = true; }
+                if (OpenRouter && ClaudeModel && !Quirks.Has(NoCacheKey) && low.Contains("cache")) { Quirks.Flag(NoCacheKey, true); retry = true; }
                 if (!retry && !triedNoTools && req.Tools.Count > 0 && (low.Contains("tool") || low.Contains("function")) && !low.Contains("context"))
                 {
                     triedNoTools = true;
@@ -624,6 +627,10 @@ namespace MinGent
         }
 
         string ObjArgsKey { get { return "chat|objargs|" + Key; } }
+
+        string NoCacheKey { get { return "chat|nocache|" + Key; } }
+
+        bool ClaudeModel { get { string m = Model ?? ""; return m.StartsWith("anthropic/", StringComparison.OrdinalIgnoreCase) || m.IndexOf("claude", StringComparison.OrdinalIgnoreCase) >= 0; } }
 
         static bool BadArgs(string a) { return !(Json.TryParse(string.IsNullOrEmpty(a) ? "{}" : a) is Dictionary<string, object>); }
 
@@ -804,6 +811,7 @@ namespace MinGent
             {
                 if (effort != null) body["reasoning"] = Json.O("effort", effort);
             }
+            if (OpenRouter && reasoningBack && ClaudeModel && !Quirks.Has(NoCacheKey)) body["cache_control"] = Json.O("type", "ephemeral");
             else if (Gemini && effort != null && effort != "none" && req.ShowThinking && reasoningBack)
             {
                 Dictionary<string, object> cfg = new Dictionary<string, object>();
@@ -1042,6 +1050,16 @@ namespace MinGent
         {
             int pt = Json.Int(o, "usage", "prompt_tokens"), ct = Json.Int(o, "usage", "completion_tokens");
             if (pt > 0) { r.InputTokens = pt; r.OutputTokens = ct; r.HiddenReasoningTokens = Json.Int(o, "usage", "completion_tokens_details", "reasoning_tokens"); }
+            if (pt > 0) r.CachedTokens = CachedOf(o, "usage", "prompt_tokens_details", "cached_tokens") ?? CachedOf(o, "usage", "prompt_cache_hit_tokens") ?? -1;
+        }
+
+        public static int? CachedOf(object o, params object[] path)
+        {
+            object v = Json.Get(o, path);
+            if (v is double) return (int)Math.Max(0, (double)v);
+            if (v is long) return (int)Math.Max(0, (long)v);
+            if (v is int) return Math.Max(0, (int)v);
+            return null;
         }
 
         static string ErrorOf(object o)
@@ -1281,6 +1299,7 @@ namespace MinGent
                     {
                         case "message_start":
                             res.InputTokens = Json.Int(o, "message", "usage", "input_tokens") + Json.Int(o, "message", "usage", "cache_read_input_tokens") + Json.Int(o, "message", "usage", "cache_creation_input_tokens");
+                            res.CachedTokens = OpenAiChatBackend.CachedOf(o, "message", "usage", "cache_read_input_tokens") ?? (res.InputTokens > 0 ? 0 : -1);
                             break;
                         case "content_block_start":
                             {
@@ -1596,6 +1615,7 @@ namespace MinGent
                             res.InputTokens = Json.Int(o, "response", "usage", "input_tokens");
                             res.OutputTokens = Json.Int(o, "response", "usage", "output_tokens");
                             res.HiddenReasoningTokens = Json.Int(o, "response", "usage", "output_tokens_details", "reasoning_tokens");
+                            res.CachedTokens = res.InputTokens > 0 ? OpenAiChatBackend.CachedOf(o, "response", "usage", "input_tokens_details", "cached_tokens") ?? -1 : -1;
                             res.Stop = "__end__";
                             break;
                         case "response.incomplete":
@@ -1605,6 +1625,7 @@ namespace MinGent
                             res.InputTokens = Json.Int(o, "response", "usage", "input_tokens");
                             res.OutputTokens = Json.Int(o, "response", "usage", "output_tokens");
                             res.HiddenReasoningTokens = Json.Int(o, "response", "usage", "output_tokens_details", "reasoning_tokens");
+                            res.CachedTokens = res.InputTokens > 0 ? OpenAiChatBackend.CachedOf(o, "response", "usage", "input_tokens_details", "cached_tokens") ?? -1 : -1;
                             res.Stop = "__end__";
                             break;
                         case "response.failed":
