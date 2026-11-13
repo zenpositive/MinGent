@@ -22,7 +22,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.1.7 beta: it works, and it still has rough edges. Report
+This is version 1.1.8 beta: it works, and it still has rough edges. Report
 problems at https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -89,7 +89,7 @@ sign-ins. MinGent has none of that.
   Full auto asks nothing. The check reads the command; it can't see what a
   script does once it runs.
 To check a download, compare its SHA-256 with the one on the release page.
-In PowerShell: Get-FileHash .\MinGent-1.1.7-beta.zip
+In PowerShell: Get-FileHash .\MinGent-1.1.8-beta.zip
 
 
 YOUR OWN ICON
@@ -447,6 +447,8 @@ Made for local models
   searches with unrelated pages).
 - Its memory of the conversation is kept in the shape the model's cache
   expects, so long sessions don't reprocess the whole chat at every step.
+  The line under an answer shows how much of the input came from the
+  cache, when the provider reports it.
 - It recovers from the ways local servers fail: a reply that runs out of room
   while still thinking is asked again with more room or told to think more
   briefly, a reply the server could not parse is retried, a tool call cut off
@@ -675,7 +677,11 @@ ASK, AUTO OR FULL AUTO
   Ask (switch off): it asks before running a command, before using the
   internet, and before changing files outside the workspace. Each request is
   a card in the chat with Allow / Allow for this chat / Deny. Allow on a
-  site in the browser covers the rest of that task.
+  site in the browser covers the rest of that task, and so does Allow on
+  writing into a folder outside the workspace (that folder, not the ones
+  inside it). Files the agent made in the same task, and pages it made or
+  changed in that task, need no question to delete, to give to a page on
+  this PC or to run console code in.
   Auto (switch on): it works on its own and asks only before risky things
   (see below).
   Full auto (red): it asks nothing at all. It warns you the first time and

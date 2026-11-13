@@ -1,6 +1,35 @@
 MinGent - what changed
 ======================
 
+Version 1.1.8 beta
+- Claude models through OpenRouter use prompt caching now. Before, every
+  step of a long chat paid full price for the whole conversation. The line
+  under each answer shows how much of the input came from the cache.
+- Fewer repeated questions in Ask mode. Allowing a write in a folder
+  outside the work folder covers that folder for the rest of the task, not
+  only the one file. Files the agent made in the same task can be deleted
+  or given to a page on this PC without a question, and so can code in the
+  console of a page it made or changed in that task. Empty folders go to
+  the Recycle Bin without a question.
+- Page text with words like "Buy" or "Pay", such as a card named "Buy
+  milk", no longer gets the payment warning. Real controls like "Pay now",
+  "Buy for $9.99" or "Proceed to checkout" still do.
+- The agent can fill date, time, color and slider fields in the browser.
+  Typing into a date field did nothing before.
+- Steps name what the agent clicked or typed into, like Click the "Add"
+  button, instead of an internal number like e4.
+- The window title follows what the agent is doing, also during the
+  independent review.
+- The status line shows the step the agent is on, not a finding from its
+  last note: "Page loads. Adding test cards" shows "Adding test cards".
+- A browser console the agent opened for itself closes when the task ends.
+- "Files changed" counts only files that are still changed at the end.
+  Test files the agent made and removed again no longer count.
+- A download a page makes itself, like an export, says so in the question
+  instead of showing an internal blob: address.
+- When the agent's checklist hasn't moved for 10 steps, MinGent reminds it,
+  so the checklist beside the chat keeps up with the work.
+
 Version 1.1.7 beta
 - Each chat keeps its own unsent message. Text you type in one chat no
   longer follows you into the next chat you open, where Enter would have
