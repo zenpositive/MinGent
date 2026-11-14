@@ -25,7 +25,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.1.9 beta: it works, and it still has rough edges. Report
+This is version 1.1.10 beta: it works, and it still has rough edges. Report
 problems at https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -371,11 +371,18 @@ models..." for the full list.
   and last updated, a short description from its model card, its longest
   context, its license, and for every size how much memory it needs.
   Several models can download at once, and downloads keep going when you
-  close the library; they show at the top of "On this PC". They resume if
-  interrupted and are checked against the SHA-256 checksum Hugging Face
-  lists for the file, when it lists one; a file that does not match is
-  deleted. Settings > Models > Model folder picks where new models are
-  saved.
+  close the library; they show at the top of "On this PC". Pause one to let
+  another finish first, then Resume it; Cancel deletes what it downloaded.
+  Downloads also resume if interrupted, and are checked against the SHA-256
+  checksum Hugging Face lists for the file, when it lists one; a file that
+  does not match is deleted. Settings > Models > Model folder picks where
+  new models are saved.
+  Some repositories hold more than the model's sizes: a small draft model
+  for speculative decoding, or the model without its MTP layers or with
+  extra languages. MinGent leaves draft models out, lists the model's own
+  sizes first, and names the other files by how they differ ("Q8_0 · noMTP").
+  "Best for this PC" and the memory estimates use only the model's own
+  sizes.
 - Context length: "Auto" (the default) measures the free graphics memory when
   the model loads and picks the longest context that fits, up to the most the
   model supports. Hover the ring under the message box to see how much of it a

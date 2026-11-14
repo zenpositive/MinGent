@@ -1,6 +1,18 @@
 MinGent - what changed
 ======================
 
+Version 1.1.10 beta
+- Model library: some repositories hold more than the model's sizes, like a
+  small draft model for speculative decoding with "Q8_0" in its name. It
+  showed up as one more "Q8_0" of the model, at a fraction of the real
+  size, and could even be the "Best for this PC" pick. Draft models are now
+  left out, the model's own sizes come first, and other files are named by
+  how they differ ("Q8_0 · noMTP"). The pick and the memory estimates use
+  only the model's own sizes.
+- Model downloads can be paused and resumed, so one can finish before
+  another. Cancel now deletes what was downloaded instead of leaving a
+  hidden partial file, and offline mode pauses downloads.
+
 Version 1.1.9 beta
 - MinGent is portable. Everything it keeps, from chats, settings and saved
   keys to the browser's data, downloaded models and the files the agent
