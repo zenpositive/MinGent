@@ -69,7 +69,7 @@ namespace MinGent
             "KeyAnthropic", "KeyOpenAi", "KeyGemini", "KeyOpenRouter", "KeyCustom", "KeyLmStudio", "CustomUrl", "CustomModel",
             "ModelsFolder", "ModelsOldFolders", "AiModel", "AiLastLmModel", "AiLastChat",
             "Bounds", "Maximized", "NotesVisible", "AgentVisible", "SidebarCollapsed", "NotesWidth", "BrowserWidth", "BrowserVisible", "BrowserConsoleHeight",
-            "AiAutoExplained", "AiPlanExplained", "AiFullExplained", "AiInstructions", "AiMemory", "Offline" };
+            "AiAutoExplained", "AiPlanExplained", "AiFullExplained", "AiInstructions", "AiMemory", "Offline", "OneDriveNoted" };
 
         public void ResetPreferences()
         {
@@ -165,8 +165,9 @@ namespace MinGent
                         case "aiSendContext": s.AiSendContext = v != "0"; break;
                         case "aiEffort": if (v.Length < 20) s.AiEffort = v; break;
                         case "aiInstructions": s.AiInstructions = Unesc(v); break;
-                        case "aiWorkspace": s.AiWorkspace = v; break;
-                        case "aiProject": s.AiProject = v; break;
+                        case "aiWorkspace": s.AiWorkspace = Program.FromStored(v); break;
+                        case "aiProject": s.AiProject = Program.FromStored(v); break;
+                        case "oneDriveNoted": s.OneDriveNoted = v == "1"; break;
                         case "quickKey": s.QuickKey = QuickEntry.Clean(v); break;
                         case "aiLastChat": if (v.IndexOfAny(Path.GetInvalidFileNameChars()) < 0) s.AiLastChat = v; break;
                         case "chatFontSize":
@@ -186,8 +187,8 @@ namespace MinGent
                         case "engineKv": if (v == "f16" || v == "q8_0" || v == "q4_0") s.EngineKv = v; break;
                         case "engineUpdates": s.OfferEngineUpdates = v == "1"; break;
                         case "browserVisible": s.BrowserVisible = v == "1"; break;
-                        case "modelsFolder": s.ModelsFolder = v; break;
-                        case "modelsOld": s.ModelsOldFolders = v; break;
+                        case "modelsFolder": s.ModelsFolder = Program.FromStored(v); break;
+                        case "modelsOld": s.ModelsOldFolders = StoredList(v, false); break;
                         case "offline": s.Offline = v == "1"; break;
                         case "netLog": s.KeepNetLog = v == "1"; break;
                         case "errorLog": s.KeepErrorLog = v == "1"; break;
@@ -272,8 +273,9 @@ namespace MinGent
                 w("aiSendContext", AiSendContext ? "1" : "0");
                 w("aiEffort", AiEffort);
                 w("aiInstructions", Esc(AiInstructions));
-                w("aiWorkspace", AiWorkspace);
-                w("aiProject", AiProject);
+                w("aiWorkspace", Program.ToStored(AiWorkspace));
+                w("aiProject", Program.ToStored(AiProject));
+                if (OneDriveNoted) w("oneDriveNoted", "1");
                 w("quickKey", QuickKey);
                 w("aiLastChat", AiLastChat);
                 w("chatFontSize", ChatFontSize.ToString(CultureInfo.InvariantCulture));
@@ -291,8 +293,8 @@ namespace MinGent
                 w("engineKv", EngineKv);
                 w("engineUpdates", OfferEngineUpdates ? "1" : "0");
                 w("browserVisible", BrowserVisible ? "1" : "0");
-                if (ModelsFolder.Length > 0) w("modelsFolder", ModelsFolder);
-                if (ModelsOldFolders.Length > 0) w("modelsOld", ModelsOldFolders);
+                if (ModelsFolder.Length > 0) w("modelsFolder", Program.ToStored(ModelsFolder));
+                if (ModelsOldFolders.Length > 0) w("modelsOld", StoredList(ModelsOldFolders, true));
                 w("offline", Offline ? "1" : "0");
                 w("netLog", KeepNetLog ? "1" : "0");
                 w("errorLog", KeepErrorLog ? "1" : "0");
@@ -323,13 +325,30 @@ namespace MinGent
             get
             {
                 if (!string.IsNullOrEmpty(AiWorkspace)) return AiWorkspace;
-                string docs = "";
-                try { docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments); } catch { }
-                if (string.IsNullOrEmpty(docs)) docs = Path.GetTempPath();
-                string fresh = Path.Combine(docs, "MinGent Files"), old = Path.Combine(docs, "JustPad Files");
-                try { if (!Directory.Exists(fresh) && Directory.Exists(old)) return old; } catch { }
-                return fresh;
+                return Program.FilesDir ?? Path.Combine(Path.GetTempPath(), "MinGent Files");
             }
+        }
+
+        public bool OneDriveNoted;
+
+        public List<string> DropLockedKeys()
+        {
+            List<string> names = new List<string>();
+            if (Secret.Locked(KeyAnthropic)) { names.Add("Anthropic"); KeyAnthropic = ""; }
+            if (Secret.Locked(KeyOpenAi)) { names.Add("OpenAI"); KeyOpenAi = ""; }
+            if (Secret.Locked(KeyGemini)) { names.Add("Gemini"); KeyGemini = ""; }
+            if (Secret.Locked(KeyOpenRouter)) { names.Add("OpenRouter"); KeyOpenRouter = ""; }
+            if (Secret.Locked(KeyCustom)) { names.Add("your custom server"); KeyCustom = ""; }
+            if (Secret.Locked(KeyLmStudio)) { names.Add("LM Studio"); KeyLmStudio = ""; }
+            return names;
+        }
+
+        static string StoredList(string list, bool store)
+        {
+            List<string> l = new List<string>();
+            foreach (string o in (list ?? "").Split('|'))
+                if (o.Trim().Length > 0) l.Add(store ? Program.ToStored(o.Trim()) : Program.FromStored(o.Trim()));
+            return string.Join("|", l.ToArray());
         }
     }
 
@@ -1532,7 +1551,8 @@ namespace MinGent
             string text = (result.Left.Count == 0 ? "Everything MinGent stored on this PC is erased." : "Almost everything is erased. A few files were still in use; they are overwritten and deleted right after MinGent closes.") +
                           (kept.Count > 0 ? "\n\nThe engine and models you kept are in " + EraseDialog.Places(kept) + "." : "") +
                           (links.Length > 0 ? "\n\nThese were links to other folders. MinGent removed the links and left what they point to alone:" + links : "") +
-                          "\n\nTo remove MinGent itself, delete the folder it runs from:\n" + Application.StartupPath +
+                          (Eraser.KeepsProgram(Program.AppDir) ? "\n\nMinGent runs from a git checkout, so its program files stay in " + Program.AppDir + "." :
+                           "\n\nWhen MinGent closes, it removes itself from " + Program.AppDir + "." + (kept.Count > 0 || Directory.Exists(Program.FilesDir ?? "") ? " The folder stays with what you kept." : "")) +
                           "\n\nWindows keeps a few traces of any program you run, such as recent files in its Open and Save dialogs. MinGent can't remove those.";
             Alert.Show(this, theme, text, Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Information);
             Eraser.AfterExit(result);
@@ -1800,11 +1820,21 @@ namespace MinGent
                 {
                     try { folder = Path.GetDirectoryName(Path.GetFullPath(d.Path)); } catch { folder = null; }
                 }
-                if (folder != null && !BroadFolder(folder) && AgentPaths.WriteBlocked(Path.Combine(folder, "x.txt")) == null) { def = false; return folder; }
+                if (folder != null && !BroadFolder(folder) && !AgentPaths.InProgram(folder) && AgentPaths.WriteBlocked(Path.Combine(folder, "x.txt")) == null) { def = false; return folder; }
                 return settings.DefaultWorkspace;
             });
             isDefault = def;
             return ws;
+        }
+
+        static bool OneDriveFolder()
+        {
+            foreach (string v in new string[] { "OneDrive", "OneDriveConsumer", "OneDriveCommercial" })
+            {
+                string d = Environment.GetEnvironmentVariable(v);
+                if (!string.IsNullOrEmpty(d) && Program.Inside(Program.AppDir, d)) return true;
+            }
+            return false;
         }
 
         static bool BroadFolder(string folder)
@@ -2935,7 +2965,7 @@ namespace MinGent
             bool exists = false;
             try { exists = File.Exists(SessionPath); if (exists) lines = ReadLinesRetry(SessionPath); }
             catch { lines = null; }
-            if (exists && (lines == null || lines.Length == 0 || !(lines[0].StartsWith("MinGent session") || lines[0].StartsWith("JustPad session"))))
+            if (exists && (lines == null || lines.Length == 0 || !lines[0].StartsWith("MinGent session")))
             {
                 try { File.Copy(SessionPath, SessionPath + ".broken", true); } catch { }
                 lines = null;
@@ -3005,6 +3035,7 @@ namespace MinGent
                     continue;
                 }
                 if (f[0] != "tab" || f.Length < 13) continue;
+                f[1] = Program.FromStored(f[1]);
                 if (group == null)
                 {
                     group = new NotesGroup();
@@ -3359,7 +3390,7 @@ namespace MinGent
                     {
                         if (stored.Add(d)) StoreBackup(d, force, now, utf8, keep);
                         else if (d.BackupFile != null) keep.Add(d.BackupFile);
-                        sb.Append("tab\t").Append(d.Path ?? "")
+                        sb.Append("tab\t").Append(Program.ToStored(d.Path) ?? "")
                           .Append('\t').Append(d.BackupFile ?? "")
                           .Append('\t').Append(d.Modified ? "1" : "0")
                           .Append('\t').Append(d.Caret.Line)
@@ -3481,6 +3512,24 @@ namespace MinGent
                         else
                             Alert.Show(this, theme, "MinGent " + ReleaseVersion.Display(update[1]) + " was not installed: " + update[2] + ".", Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     }));
+            }
+            List<string> locked = primary ? settings.DropLockedKeys() : new List<string>();
+            if (locked.Count > 0)
+            {
+                settings.Save();
+                BeginInvoke(new Action(delegate
+                {
+                    Alert.Show(this, theme, "Your saved API keys for " + AiPanel.NoteNames(locked) + " can't be opened on this PC or Windows account, because Windows locks saved keys to the account that saved them. Add them again in Settings > Models.", Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }));
+            }
+            if (primary && OneDriveFolder() && !settings.OneDriveNoted)
+            {
+                settings.OneDriveNoted = true;
+                settings.Save();
+                BeginInvoke(new Action(delegate
+                {
+                    Alert.Show(this, theme, "MinGent's folder is in OneDrive:\n" + Program.AppDir + "\n\nMinGent keeps its chats, browser data and downloaded models in this folder, so OneDrive will sync them all the time, and models are several gigabytes each. To avoid that, close MinGent and move its folder somewhere OneDrive doesn't sync, such as " + Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "MinGent") + ". Keeping it here works too.", Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }));
             }
             if (Program.Elevated && primary)
                 BeginInvoke(new Action(delegate

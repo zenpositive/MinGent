@@ -97,6 +97,7 @@ namespace MinGent
             string broad = null;
             try { broad = Sandbox.Personal(f); } catch { broad = "it can't be checked"; }
             if (broad != null) return "The agent changes files in its work folder without asking each time, so MinGent doesn't take this folder: " + broad + (broad.StartsWith("it is a folder where programs", StringComparison.Ordinal) ? ". Choose another folder." : ". Choose a folder inside it.");
+            if (AgentPaths.InProgram(f)) return "That folder holds MinGent itself, so it can't be a work folder. Its Files folder can.";
             if (AgentPaths.WriteBlocked(Path.Combine(f, "x.txt")) != null) return "The agent is not allowed to write in that folder, so it can't be a work folder.";
             return null;
         }
@@ -111,7 +112,7 @@ namespace MinGent
                 if (items == null) return list;
                 foreach (object o in items)
                 {
-                    string f = Clean(o as string);
+                    string f = Clean(Program.FromStored(o as string));
                     if (f != null && Find(list, f) < 0 && list.Count < Most) list.Add(f);
                 }
             }
@@ -125,7 +126,7 @@ namespace MinGent
             {
                 if (Program.Erased) return false;
                 List<object> items = new List<object>();
-                foreach (string f in list) items.Add(f);
+                foreach (string f in list) items.Add(Program.ToStored(f));
                 Directory.CreateDirectory(Program.DataDir);
                 string tmp = FilePath + ".tmp";
                 File.WriteAllText(tmp, Json.Write(Json.O("folders", items)), new UTF8Encoding(false));

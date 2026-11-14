@@ -12,17 +12,17 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("MinGent - an AI agent for Windows with its own notepad and browser")]
 [assembly: AssemblyProduct("MinGent")]
 [assembly: AssemblyCopyright("Built locally from source")]
-[assembly: AssemblyVersion("1.1.8.0")]
-[assembly: AssemblyFileVersion("1.1.8.0")]
-[assembly: AssemblyInformationalVersion("1.1.8 beta")]
+[assembly: AssemblyVersion("1.1.9.0")]
+[assembly: AssemblyFileVersion("1.1.9.0")]
+[assembly: AssemblyInformationalVersion("1.1.9 beta")]
 
 namespace MinGent
 {
     static class Program
     {
-        public const string AppName = "MinGent", LegacyName = "JustPad";
+        public const string AppName = "MinGent";
         public static string IpcTitle = "MinGent.IPC.Window.v1";
-        public static string DataDir, SessionDir;
+        public static string AppDir, DataDir, SessionDir;
         public static bool Elevated, Primary = true;
         public static volatile bool Erased, KeepErrorLog;
         public static MainForm MainWindow;
@@ -47,17 +47,23 @@ namespace MinGent
                 return;
             }
             Native.TryDpiAware();
-            string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            DataDir = MoveOldData(Path.Combine(local, LegacyName), Path.Combine(local, AppName));
+            AppDir = Updater.AppDir;
+            DataDir = Path.Combine(AppDir, "Data");
+            string unusable = FolderProblem(AppDir, DataDir);
+            if (unusable != null)
+            {
+                MessageBox.Show(unusable, AppName, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
             Elevated = RunsElevated();
             SessionDir = Elevated ? Path.Combine(DataDir, "admin") : DataDir;
-            if (Elevated) IpcTitle += ".admin";
+            IpcTitle += "." + FolderTag(AppDir) + (Elevated ? ".admin" : "");
 
             bool primary = true;
             Mutex mutex = null;
             try
             {
-                mutex = new Mutex(false, InstanceMutexName(Elevated));
+                mutex = new Mutex(false, InstanceMutexName(AppDir, Elevated));
                 primary = Owns(mutex, 0);
             }
             catch { primary = false; }
@@ -120,32 +126,93 @@ namespace MinGent
             catch { return false; }
         }
 
-        public static string InstanceMutexName(bool elevated)
+        public static string FilesDir { get { return AppDir == null ? null : Path.Combine(AppDir, "Files"); } }
+
+        public static string TempDir { get { return DataDir == null ? null : Path.Combine(DataDir, "Temp"); } }
+
+        public static string InstanceMutexName(string appDir, bool elevated)
         {
-            return "Local\\MinGent.SingleInstance." + Environment.UserName + (elevated ? ".admin" : "");
+            return "Local\\MinGent.SingleInstance." + Environment.UserName + "." + FolderTag(appDir) + (elevated ? ".admin" : "");
         }
 
-        static string MoveOldData(string old, string fresh)
+        public static string FolderTag(string dir)
+        {
+            string key;
+            try { key = Path.GetFullPath(dir ?? "").TrimEnd('\\', '/').ToUpperInvariant(); }
+            catch { key = (dir ?? "").TrimEnd('\\', '/').ToUpperInvariant(); }
+            using (System.Security.Cryptography.SHA256 sha = System.Security.Cryptography.SHA256.Create())
+            {
+                byte[] h = sha.ComputeHash(Encoding.UTF8.GetBytes(key));
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < 6; i++) sb.Append(h[i].ToString("x2"));
+                return sb.ToString();
+            }
+        }
+
+        public static string FolderProblem(string appDir, string dataDir)
+        {
+            string why = null;
+            try { why = Sandbox.Personal(appDir); } catch { why = null; }
+            if (why != null) return "MinGent keeps your chats, settings and work files in the folder it runs from, and it runs from " + appDir + " (" + why + "). Put MinGent in a folder of its own, for example a MinGent folder in Documents, and start it from there.";
+            try
+            {
+                Directory.CreateDirectory(dataDir);
+                string probe = Path.Combine(dataDir, "write-check-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".tmp");
+                File.WriteAllText(probe, "");
+                File.Delete(probe);
+                return null;
+            }
+            catch (Exception ex) { why = ex.Message; }
+            string text = "MinGent can't write to its folder:\n" + appDir + "\n\nIt keeps your chats, settings and work files in this folder, next to MinGent.exe, so it needs a folder it is allowed to change. Move the MinGent folder into your own user folder, for example Documents, and start it from there.";
+            if (ControlledFolderAccess())
+                text += "\n\nControlled folder access in Windows Security is on and may be blocking it. Allow MinGent.exe there (Windows Security > Virus & threat protection > Ransomware protection > Allow an app through Controlled folder access), or move the folder outside your protected folders.";
+            return text + "\n\n(" + why + ")";
+        }
+
+        static bool ControlledFolderAccess()
         {
             try
             {
-                if (Directory.Exists(fresh) || !Directory.Exists(old) || !Eraser.LooksOurs(old)) return fresh;
-                Directory.Move(old, fresh);
-            }
-            catch { return Directory.Exists(fresh) ? fresh : old; }
-            try
-            {
-                string ini = Path.Combine(fresh, "settings.ini");
-                if (File.Exists(ini))
+                using (RegistryKey k = Registry.LocalMachine.OpenSubKey("SOFTWARE\\Microsoft\\Windows Defender\\Windows Defender Exploit Guard\\Controlled Folder Access"))
                 {
-                    string text = File.ReadAllText(ini, Encoding.UTF8);
-                    string moved = System.Text.RegularExpressions.Regex.Replace(text, System.Text.RegularExpressions.Regex.Escape(old.TrimEnd('\\') + "\\"),
-                        (fresh.TrimEnd('\\') + "\\").Replace("$", "$$"), System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                    if (moved != text) File.WriteAllText(ini, moved, new UTF8Encoding(false));
+                    object v = k == null ? null : k.GetValue("EnableControlledFolderAccess");
+                    return v is int && (int)v == 1;
                 }
             }
-            catch { }
-            return fresh;
+            catch { return false; }
+        }
+
+        public static bool Inside(string path, string dir)
+        {
+            if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(dir)) return false;
+            try
+            {
+                string p = Path.GetFullPath(path).TrimEnd('\\', '/'), d = Path.GetFullPath(dir).TrimEnd('\\', '/');
+                return string.Equals(p, d, StringComparison.OrdinalIgnoreCase) || p.StartsWith(d + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
+        }
+
+        public static string ToStored(string path)
+        {
+            if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(AppDir) || !Path.IsPathRooted(path) || !Inside(path, AppDir)) return path;
+            try
+            {
+                string p = Path.GetFullPath(path).TrimEnd('\\', '/'), d = Path.GetFullPath(AppDir).TrimEnd('\\', '/');
+                return p.Length <= d.Length ? "." : p.Substring(d.Length + 1);
+            }
+            catch { return path; }
+        }
+
+        public static string FromStored(string stored)
+        {
+            if (string.IsNullOrEmpty(stored) || string.IsNullOrEmpty(AppDir) || Path.IsPathRooted(stored)) return stored;
+            try
+            {
+                string full = Path.GetFullPath(Path.Combine(AppDir, stored));
+                return Inside(full, AppDir) ? full.TrimEnd('\\', '/') : stored;
+            }
+            catch { return stored; }
         }
 
         static bool Owns(Mutex m, int wait)
@@ -578,7 +645,7 @@ namespace MinGent
             }
         }
 
-        static readonly Names Current = new Names(Program.AppName), Legacy = new Names(Program.LegacyName);
+        static readonly Names Current = new Names(Program.AppName);
         public static readonly string ProgId = Current.ProgId;
         const string Classes = "Software\\Classes\\";
         const string Registered = "Software\\RegisteredApplications";
@@ -602,7 +669,7 @@ namespace MinGent
             catch { return null; }
         }
 
-        public static bool IsRegistered { get { return CurrentCommand(Current) != null; } }
+        public static bool IsRegistered { get { return string.Equals(CurrentCommand(Current), Command, StringComparison.OrdinalIgnoreCase); } }
 
         public static string Register()
         {
@@ -657,8 +724,7 @@ namespace MinGent
 
         public static void RemoveAll()
         {
-            Remove(Current);
-            if (LegacyOurs()) Remove(Legacy);
+            if (IsRegistered) Remove(Current);
             Native.AssociationsChanged();
         }
 
@@ -710,33 +776,20 @@ namespace MinGent
             return err;
         }
 
-        static bool LegacyOurs()
+        static string RegisteredExe(string cmd)
         {
-            string cmd = CurrentCommand(Legacy);
-            if (cmd == null) return false;
+            if (cmd == null) return null;
             System.Text.RegularExpressions.Match m = System.Text.RegularExpressions.Regex.Match(cmd, "^\"([^\"]+)\"");
-            if (!m.Success) return false;
-            try
-            {
-                string exe = m.Groups[1].Value;
-                string file = Path.GetFileName(exe);
-                if (!string.Equals(file, Program.LegacyName + ".exe", StringComparison.OrdinalIgnoreCase) && !string.Equals(file, Program.AppName + ".exe", StringComparison.OrdinalIgnoreCase)) return false;
-                string dir = Path.GetDirectoryName(exe);
-                return File.Exists(Path.Combine(dir, "Build-" + Program.LegacyName + ".bat")) || File.Exists(Path.Combine(dir, "Build-" + Program.AppName + ".bat"));
-            }
-            catch { return false; }
+            return m.Success ? m.Groups[1].Value : null;
         }
 
         public static void UpdateIfMoved()
         {
-            if (LegacyOurs())
-            {
-                Remove(Legacy);
-                Register();
-                return;
-            }
             string cur = CurrentCommand(Current);
             if (cur == null || string.Equals(cur, Command, StringComparison.OrdinalIgnoreCase)) return;
+            string exe = RegisteredExe(cur);
+            try { if (exe != null && File.Exists(exe)) return; }
+            catch { return; }
             Register();
         }
 

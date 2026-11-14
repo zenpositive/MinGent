@@ -363,6 +363,7 @@ namespace MinGent
         public static bool Foreign(string full)
         {
             if (string.IsNullOrEmpty(full)) return false;
+            if (Program.Inside(full, Program.AppDir)) return false;
             try
             {
                 string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -424,13 +425,13 @@ namespace MinGent
         {
             List<string> l = new List<string>();
             if (Program.DataDir != null) l.Add(Program.DataDir.TrimEnd('\\'));
-            try
-            {
-                string legacy = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), Program.LegacyName);
-                if (!l.Exists(delegate (string d) { return string.Equals(d, legacy, StringComparison.OrdinalIgnoreCase); })) l.Add(legacy);
-            }
-            catch { }
             return l;
+        }
+
+        public static bool InProgram(string full)
+        {
+            if (string.IsNullOrEmpty(full) || !Program.Inside(full, Program.AppDir)) return false;
+            return !Program.Inside(full, Program.FilesDir) && !Program.Inside(full, Program.DataDir);
         }
 
         public static string WriteBlocked(string full)
@@ -505,18 +506,8 @@ namespace MinGent
 
     static class ProjectNotes
     {
-        public const string FileName = "MINGENT.md", LegacyName = "JUSTPAD.md";
+        public const string FileName = "MINGENT.md";
         const long MaxBytes = 64 * 1024;
-
-        public static string NameIn(string workspace)
-        {
-            try
-            {
-                if (!string.IsNullOrEmpty(workspace) && !File.Exists(Path.Combine(workspace, FileName)) && File.Exists(Path.Combine(workspace, LegacyName))) return LegacyName;
-            }
-            catch { }
-            return FileName;
-        }
 
         public static bool Is(string full, string workspace)
         {
@@ -525,7 +516,7 @@ namespace MinGent
             {
                 string dir = Path.GetDirectoryName(Path.GetFullPath(full)), name = Path.GetFileName(full);
                 return string.Equals(dir.TrimEnd('\\', '/'), Path.GetFullPath(workspace).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)
-                    && (name.Equals(FileName, StringComparison.OrdinalIgnoreCase) || name.Equals(LegacyName, StringComparison.OrdinalIgnoreCase));
+                    && name.Equals(FileName, StringComparison.OrdinalIgnoreCase);
             }
             catch { return false; }
         }
@@ -535,7 +526,7 @@ namespace MinGent
             if (string.IsNullOrEmpty(workspace)) return null;
             try
             {
-                string p = Path.Combine(workspace, NameIn(workspace));
+                string p = Path.Combine(workspace, FileName);
                 if (File.Exists(p) && new FileInfo(p).Length < MaxBytes) return File.ReadAllText(p);
             }
             catch { }
@@ -873,6 +864,19 @@ namespace MinGent
                 k.Key = "write:" + full;
                 k.Reason = "This is a sensitive location: " + sensitive + ".";
                 if (!Approve(k)) return "The user did not allow changing " + full + " (" + sensitive + "). Do not try another way; ask the user if you need it.";
+                return null;
+            }
+            if (AgentPaths.InProgram(full) || (linked && AgentPaths.InProgram(real)))
+            {
+                PermissionAsk k = new PermissionAsk();
+                k.Kind = "write";
+                k.Category = Guarded(PermissionCategory.Credentials);
+                k.Title = what + " in MinGent's own folder";
+                k.Detail = linked ? full + " (really " + real + ")" : full;
+                k.High = true;
+                k.Key = "write:" + full;
+                k.Reason = "MinGent runs from " + Program.AppDir + ", so a change here can change MinGent itself. Its Files folder is where work goes.";
+                if (!Approve(k)) return "The user did not allow changing " + full + " (it is part of MinGent itself). Do not try another way; ask the user if you need it.";
                 return null;
             }
             string dir = Directory.Exists(full) ? full : System.IO.Path.GetDirectoryName(full);
@@ -1666,7 +1670,7 @@ namespace MinGent
         }
 
         static readonly Regex FakeTag = new Regex(@"[<\uFF1C]\s*/?\s*untrusted[\s_\-]*content", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        static readonly Regex FakeNote = new Regex(@"[\[\uFF3B]\s*(mingent|justpad)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex FakeNote = new Regex(@"[\[\uFF3B]\s*mingent", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
         public static string Defang(string text)
         {
@@ -3445,7 +3449,7 @@ namespace MinGent
 
             if (!string.IsNullOrEmpty(projectNotes))
             {
-                sb.Append("\n# Project notes (").Append(ProjectNotes.NameIn(cfg.Workspace)).Append(" in the workspace)\n");
+                sb.Append("\n# Project notes (").Append(ProjectNotes.FileName).Append(" in the workspace)\n");
                 sb.Append(projectNotes.Length > 6000 ? projectNotes.Substring(0, 6000) + "\n...(truncated)" : projectNotes.Trim()).Append('\n');
             }
             if (!string.IsNullOrEmpty(cfg.Skills))

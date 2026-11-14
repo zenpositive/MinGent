@@ -727,8 +727,9 @@ namespace MinGent
             {
                 PermissionAsk ask = new PermissionAsk();
                 ask.Kind = "write";
-                ask.Category = ctx.Guarded(PermissionCategory.Delete);
-                ask.Title = isDir ? "Delete a folder outside the work folder" : "Delete a file outside the work folder";
+                bool own = AgentPaths.InProgram(full) || (through && AgentPaths.InProgram(realPath));
+                ask.Category = ctx.Guarded(own ? PermissionCategory.Credentials : PermissionCategory.Delete);
+                ask.Title = own ? (isDir ? "Delete a folder of MinGent itself" : "Delete a file of MinGent itself") : isDir ? "Delete a folder outside the work folder" : "Delete a file outside the work folder";
                 ask.High = true;
                 ask.Detail = full + (through ? " (really " + realPath + ")" : "") + (isDir && !link ? (tooMany ? " (a large folder)" : " (" + files.Count + (files.Count == 1 ? " file)" : " files)")) : "");
                 ask.Key = "delete:" + full;
@@ -1653,6 +1654,11 @@ namespace MinGent
             {
                 ask = new PermissionAsk();
                 ask.Reason = "This chat has read web content (" + ps.TaintSource + "), so commands need your OK in case a page tried to slip in instructions.";
+            }
+            else if (Sandboxed && !plainWait && !ps.Full && Sandbox.Unprotected != null)
+            {
+                ask = new PermissionAsk();
+                ask.Reason = Sandbox.Unprotected + ". Commands need your OK.";
             }
             bool quietlyAllowed = danger != null && ask != null && !ps.Full && ps.Auto && !ask.Never && ps.AutoAllows(ask.Category);
             bool low = Sandboxed && !askOut && (danger == null || quietlyAllowed);

@@ -15,43 +15,12 @@ namespace MinGent
         {
             List<string> l = new List<string>();
             if (!string.IsNullOrEmpty(Program.DataDir)) l.Add(Program.DataDir);
-            string legacy = null;
-            try { legacy = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), Program.LegacyName); } catch { }
-            if (legacy != null && !Same(legacy, Program.DataDir) && LooksOurs(legacy)) l.Add(legacy);
-            string low = null;
-            try { low = Sandbox.LowRoot; } catch { }
-            if (!string.IsNullOrEmpty(low) && Directory.Exists(low)) l.Add(low);
             return l;
         }
 
         static bool SandboxFolder(string dir)
         {
             try { return Same(dir, Sandbox.LowRoot); }
-            catch { return false; }
-        }
-
-        public static List<string> TempFolders()
-        {
-            List<string> l = new List<string>();
-            try
-            {
-                string t = Path.GetTempPath();
-                l.Add(Path.Combine(t, Program.AppName));
-                l.Add(Path.Combine(t, Program.LegacyName));
-            }
-            catch { }
-            return l;
-        }
-
-        public static bool LooksOurs(string dir)
-        {
-            try
-            {
-                string ini = Path.Combine(dir, "settings.ini");
-                if (!File.Exists(ini) || new FileInfo(ini).Length > 1024 * 1024) return false;
-                string t = File.ReadAllText(ini);
-                return t.IndexOf("aiPermissions=", StringComparison.Ordinal) >= 0 && t.IndexOf("notesWidth=", StringComparison.Ordinal) >= 0;
-            }
             catch { return false; }
         }
 
@@ -98,18 +67,12 @@ namespace MinGent
 
         public static string OutputsFolder()
         {
-            string docs = "";
-            try { docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments); } catch { }
-            if (string.IsNullOrEmpty(docs)) return null;
-            foreach (string name in new string[] { "MinGent Files", "JustPad Files" })
+            string d = Program.FilesDir;
+            try
             {
-                string d = Path.Combine(docs, name);
-                try
-                {
-                    if (Directory.Exists(d) && (File.GetAttributes(d) & FileAttributes.ReparsePoint) == 0) return d;
-                }
-                catch { }
+                if (d != null && Directory.Exists(d) && (File.GetAttributes(d) & FileAttributes.ReparsePoint) == 0) return d;
             }
+            catch { }
             return null;
         }
 
@@ -196,11 +159,9 @@ namespace MinGent
             {
                 r.Left.Clear();
                 foreach (string d in r.Roots) EraseTree(d, r, 0, true);
-                foreach (string t in TempFolders()) EraseScripts(t, r.Left);
                 if (r.Left.Count == 0) break;
                 Thread.Sleep(1500);
             }
-            r.Roots.AddRange(TempFolders());
             return r;
         }
 
@@ -300,19 +261,6 @@ namespace MinGent
             try { if (di.GetFileSystemInfos().Length == 0) di.Delete(); } catch { }
         }
 
-        static void EraseScripts(string dir, List<string> left)
-        {
-            try
-            {
-                DirectoryInfo di = new DirectoryInfo(dir);
-                if (!di.Exists || (di.Attributes & FileAttributes.ReparsePoint) != 0) return;
-                foreach (FileInfo f in di.GetFiles("cmd-*.ps1"))
-                    if (!SecureFile.Erase(f.FullName)) left.Add(f.FullName);
-                if (di.GetFileSystemInfos().Length == 0) di.Delete();
-            }
-            catch { }
-        }
-
         public static string ModelsLeftIn(List<string> roots)
         {
             foreach (string r in roots) if (ModelBytesIn(r, 0) > 0) return Norm(r);
@@ -321,9 +269,17 @@ namespace MinGent
 
         public const string FinishArg = "--finish-erase";
 
+        public static readonly string[] ProgramFiles = { "Build-MinGent.bat", "README.txt", "CHANGES.txt", "LICENSE", "AGENTS.md", "README.md", "src", "build-temp" };
+
+        public static bool KeepsProgram(string appDir)
+        {
+            try { return Directory.Exists(Path.Combine(appDir, ".git")) || File.Exists(Path.Combine(appDir, ".git")); }
+            catch { return true; }
+        }
+
         public static void AfterExit(EraseResult r)
         {
-            if (r == null || r.Left.Count == 0) return;
+            if (r == null) return;
             try
             {
                 StringBuilder sb = new StringBuilder();
@@ -343,35 +299,24 @@ namespace MinGent
             catch { }
         }
 
-        static List<string> AllowedRoots()
+        static List<string> AllowedRoots(string appDir)
         {
             List<string> l = new List<string>();
-            try
-            {
-                string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                string docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-                string temp = Path.GetTempPath();
-                foreach (string name in new string[] { Program.AppName, Program.LegacyName })
-                {
-                    if (!string.IsNullOrEmpty(local)) l.Add(Norm(Path.Combine(local, name)));
-                    if (!string.IsNullOrEmpty(temp)) l.Add(Norm(Path.Combine(temp, name)));
-                }
-                if (!string.IsNullOrEmpty(docs))
-                {
-                    l.Add(Norm(Path.Combine(docs, "MinGent Files")));
-                    l.Add(Norm(Path.Combine(docs, "JustPad Files")));
-                }
-            }
-            catch { }
-            try { string low = Sandbox.LowRoot; if (!string.IsNullOrEmpty(low)) l.Add(Norm(low)); } catch { }
+            l.Add(Norm(Path.Combine(appDir, "Data")));
+            l.Add(Norm(Path.Combine(appDir, "Files")));
             return l;
         }
 
         public static void Finish(string list)
         {
+            Finish(list, Updater.AppDir);
+        }
+
+        public static void Finish(string list, string appDir)
+        {
             EraseResult r = new EraseResult();
             int pid = 0;
-            List<string> allowed = AllowedRoots();
+            List<string> allowed = AllowedRoots(appDir);
             try
             {
                 if (string.IsNullOrEmpty(list) || !File.Exists(list) || new FileInfo(list).Length > 4 * 1024 * 1024) return;
@@ -387,7 +332,7 @@ namespace MinGent
                     else if (key == "root" && val.Length > 0 && allowed.Exists(delegate (string a) { return Same(val, a); })) r.Roots.Add(val);
                 }
             }
-            catch { }
+            catch { return; }
             try
             {
                 if (pid > 0) using (Process p = Process.GetProcessById(pid)) p.WaitForExit(60000);
@@ -415,7 +360,47 @@ namespace MinGent
             }
             foreach (string root in r.Roots) PruneEmpty(root, 0);
             try { SecureFile.Erase(list); } catch { }
+            if (!KeepsProgram(appDir)) RemoveProgram(appDir);
         }
+
+        static void RemoveProgram(string appDir)
+        {
+            foreach (string name in ProgramFiles)
+            {
+                string path = Path.Combine(appDir, name);
+                try
+                {
+                    if (Directory.Exists(path))
+                    {
+                        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) Directory.Delete(path, false);
+                        else Directory.Delete(path, true);
+                    }
+                    else if (File.Exists(path))
+                    {
+                        File.SetAttributes(path, FileAttributes.Normal);
+                        File.Delete(path);
+                    }
+                }
+                catch { }
+            }
+            try
+            {
+                string exe = Path.Combine(appDir, "MinGent.exe");
+                string script = "try { Wait-Process -Id " + Process.GetCurrentProcess().Id + " -Timeout 60 -ErrorAction SilentlyContinue } catch {}\n" +
+                                "Start-Sleep -Milliseconds 500\n" +
+                                "Remove-Item -LiteralPath " + Quoted(exe) + " -Force -ErrorAction SilentlyContinue\n" +
+                                "if (-not (Get-ChildItem -LiteralPath " + Quoted(appDir) + " -Force -ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath " + Quoted(appDir) + " -Force -ErrorAction SilentlyContinue }\n";
+                ProcessStartInfo psi = new ProcessStartInfo(Native.WindowsExe("WindowsPowerShell\\v1.0\\powershell.exe"),
+                    "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + Convert.ToBase64String(Encoding.Unicode.GetBytes(script)));
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                psi.WorkingDirectory = Path.GetTempPath();
+                Process.Start(psi);
+            }
+            catch { }
+        }
+
+        static string Quoted(string path) { return "'" + path.Replace("'", "''") + "'"; }
 
         static void PruneEmpty(string dir, int depth)
         {
@@ -462,7 +447,7 @@ namespace MinGent
                 if (showOutputs)
                     outputs = c.Add(new SwitchRow(Th, "Erase the agent's saved files too", OutputsNote(outputsDir, outputFiles), true));
                 if (showDownloads)
-                    downloads = c.Add(new SwitchRow(Th, "Delete the engine and models too", ModelCatalog.Size(downloadBytes) + " in " + Places(downloadPlaces) + ". Off: they stay, ready for next time.", false));
+                    downloads = c.Add(new SwitchRow(Th, "Delete the engine and models too", ModelCatalog.Size(downloadBytes) + " in " + Places(downloadPlaces) + ". Off: they stay where they are, for next time.", false));
                 Controls.Add(c);
                 c.Location = new Point(x, y);
                 c.Arrange(w);
@@ -490,7 +475,7 @@ namespace MinGent
         }
 
         public const string Head = "Erase everything MinGent stored on this PC?";
-        public const string Body = "Your chats, memory, saved API keys, the built-in browser's data and sign-ins, logs and backups of your notes tabs are overwritten with random data, then deleted. MinGent then closes and starts like new the next time you open it. This can't be undone.";
+        public const string Body = "Your chats, memory, saved API keys, the built-in browser's data and sign-ins, logs and backups of your notes tabs are overwritten with random data, then deleted. MinGent then closes and removes itself from its folder. This can't be undone.";
         public const string OwnFilesStay = "Files in your own folders stay.";
         public const string SsdNote = "On an SSD, no program can guarantee that old copies are physically gone. Device encryption (BitLocker) keeps any leftovers unreadable.";
 

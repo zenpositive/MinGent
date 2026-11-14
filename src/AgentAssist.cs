@@ -74,7 +74,7 @@ namespace MinGent
             Add("web_fetch", "fetch", "fetch_url", "read_url", "http_get", "get_url", "url_fetch", "browse_url", "read_webpage", "fetch_webpage", "get_webpage", "scrape", "fetch_page", "read_web_page", "get_web_page", "download_page", "scrape_url", "fetch_content", "get_page");
             AddMany(new string[] { "browser_navigate", "web_fetch" }, null, "open_url", "open_link", "open_website");
             Add("todo_write", "todo", "todos", "update_todos", "write_todos", "plan", "update_plan", "set_todos", "task_list", "checklist", "manage_todo_list", "todo_list", "update_todo_list", "update_checklist", "write_plan", "tasks", "todo_update", "set_plan", "make_plan", "create_plan");
-            Add("open_in_editor", "open_in_tab", "show_in_editor", "open_editor", "open_tab", "reveal_file", "show", "open_in_mingent", "open_in_justpad", "display_file");
+            Add("open_in_editor", "open_in_tab", "show_in_editor", "open_editor", "open_tab", "reveal_file", "show", "open_in_mingent", "display_file");
             Add("browser_navigate", "navigate", "goto", "go_to", "browser_open", "browser_goto", "browse", "visit", "browser_navigate_to", "open_page", "open_browser", "navigate_to", "browser_go", "load_url", "visit_url", "go_to_url", "browser_visit", "browser_load");
             AddImplied("browser_navigate", Json.O("url", "back"), "go_back", "browser_back", "back", "navigate_back", "browser_go_back");
             AddImplied("browser_navigate", Json.O("url", "forward"), "go_forward", "browser_forward", "forward", "navigate_forward");

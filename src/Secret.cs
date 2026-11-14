@@ -6,7 +6,7 @@ namespace MinGent
 {
     static class Secret
     {
-        static readonly byte[] Entropy = Encoding.UTF8.GetBytes("JustPad.apikey.v1");
+        static readonly byte[] Entropy = Encoding.UTF8.GetBytes("MinGent.apikey.v1");
         static readonly bool Win = System.IO.Path.DirectorySeparatorChar == '\\';
 
         public static string Protect(string plain)
@@ -22,6 +22,18 @@ namespace MinGent
                 catch { return null; }
             }
             return "B64:" + Convert.ToBase64String(Encoding.UTF8.GetBytes(plain));
+        }
+
+        public static bool Locked(string stored)
+        {
+            if (!Win || string.IsNullOrEmpty(stored) || !stored.StartsWith("DPAPI:")) return false;
+            try
+            {
+                ProtectedData.Unprotect(Convert.FromBase64String(stored.Substring(6)), Entropy, DataProtectionScope.CurrentUser);
+                return false;
+            }
+            catch (CryptographicException) { return true; }
+            catch { return false; }
         }
 
         public static string Unprotect(string stored)

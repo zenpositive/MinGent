@@ -1347,6 +1347,13 @@ namespace MinGent
                                (pending > 0 ? ", plus " + ModelCatalog.Size(pending) + " for the downloads already running" : "") + "). You can pick another folder with Change folder.", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
+                long biggest = v.Projector != null ? v.Projector.Size : 0;
+                foreach (HubFile f in v.Files) biggest = Math.Max(biggest, f.Size);
+                if (biggest >= 4L * 1024 * 1024 * 1024 && string.Equals(di.DriveFormat, "FAT32", StringComparison.OrdinalIgnoreCase))
+                {
+                    Alert.Show(this, Th, di.Name + " uses FAT32, which can't hold a file over 4 GB, and this model has a " + ModelCatalog.Size(biggest) + " file. Pick a folder on another drive with Change folder, or use a drive formatted as exFAT or NTFS.", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
             }
             catch (Exception ex)
             {

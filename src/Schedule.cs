@@ -166,7 +166,7 @@ namespace MinGent
                     t.Id = Json.Str(o, "id") ?? "";
                     t.Name = Json.Str(o, "name") ?? "";
                     t.Prompt = Json.Str(o, "prompt") ?? "";
-                    t.Folder = Json.Str(o, "folder") ?? "";
+                    t.Folder = Program.FromStored(Json.Str(o, "folder")) ?? "";
                     string kind = Json.Str(o, "kind") ?? "";
                     t.Kind = Array.IndexOf(Kinds, kind) >= 0 ? kind : ScheduledTask.Daily;
                     t.Hour = Math.Max(0, Math.Min(23, (int)Json.Num(o, "hour")));
@@ -200,7 +200,7 @@ namespace MinGent
                 List<object> items = new List<object>();
                 foreach (ScheduledTask t in tasks)
                     items.Add(Json.O("id", t.Id, "name", t.Name, "prompt", t.Prompt, "kind", t.Kind, "hour", t.Hour, "minute", t.Minute, "day", t.Day,
-                        "date", Time(t.Date), "created", Time(t.Created), "lastRun", Time(t.LastRun), "on", t.On, "folder", t.Folder ?? ""));
+                        "date", Time(t.Date), "created", Time(t.Created), "lastRun", Time(t.LastRun), "on", t.On, "folder", Program.ToStored(t.Folder) ?? ""));
                 Directory.CreateDirectory(Program.DataDir);
                 string tmp = FilePath + ".tmp";
                 File.WriteAllText(tmp, Json.Write(Json.O("tasks", items)), new UTF8Encoding(false));

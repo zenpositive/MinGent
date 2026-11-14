@@ -3315,7 +3315,7 @@ namespace MinGent
                     System.Text.RegularExpressions.Match mt = System.Text.RegularExpressions.Regex.Match(head, "\"title\":\"((?:[^\"\\\\]|\\\\.)*)\"");
                     if (mt.Success) title = Json.TryParse("\"" + mt.Groups[1].Value + "\"") as string ?? "";
                     System.Text.RegularExpressions.Match mf = System.Text.RegularExpressions.Regex.Match(head, "^\\{\"version\":\\d+,\"title\":\"(?:[^\"\\\\]|\\\\.)*\",\"folder\":\"((?:[^\"\\\\]|\\\\.)*)\"");
-                    if (mf.Success) folder = Json.TryParse("\"" + mf.Groups[1].Value + "\"") as string ?? "";
+                    if (mf.Success) folder = Program.FromStored(Json.TryParse("\"" + mf.Groups[1].Value + "\"") as string ?? "");
                 }
             }
             catch { }
@@ -3384,7 +3384,7 @@ namespace MinGent
 
         string ChatJson()
         {
-            Dictionary<string, object> root = Json.O("version", 2, "title", chatTitle, "folder", chatFolder, "model", settings.AiModel ?? "", "summary", session.Summary ?? "");
+            Dictionary<string, object> root = Json.O("version", 2, "title", chatTitle, "folder", Program.ToStored(chatFolder) ?? "", "model", settings.AiModel ?? "", "summary", session.Summary ?? "");
             if (titleSet) root["titleSet"] = true;
             List<object> items = new List<object>();
             foreach (ChatItem it in chat.Items)
@@ -3620,7 +3620,7 @@ namespace MinGent
             chatFile = path;
             try { chatStamp = File.GetLastWriteTimeUtc(path); } catch { chatStamp = DateTime.MinValue; }
             chatTitle = Json.Str(root, "title") ?? "";
-            chatFolder = Projects.Clean(Json.Str(root, "folder")) ?? "";
+            chatFolder = Projects.Clean(Program.FromStored(Json.Str(root, "folder"))) ?? "";
             UpdateFolderChip();
             titleSet = Json.Bool(root, "titleSet");
             savedJson = null;

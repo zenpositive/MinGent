@@ -158,7 +158,7 @@ namespace MinGent
             }
             else
             {
-                string dir = Path.Combine(Path.GetTempPath(), "MinGent");
+                string dir = ScriptDir;
                 Directory.CreateDirectory(dir);
                 j.ScriptFile = Path.Combine(dir, "cmd-" + Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N").Substring(0, 12) + ".ps1");
                 StringBuilder sb = new StringBuilder();
@@ -330,17 +330,15 @@ namespace MinGent
             catch (Exception) { return false; }
         }
 
+        public static string ScriptDir { get { return Program.TempDir ?? Path.Combine(Path.GetTempPath(), "MinGent"); } }
+
         public static void SweepScripts()
         {
-            foreach (string name in new string[] { "MinGent", "JustPad" })
+            string dir = ScriptDir;
+            if (!Directory.Exists(dir)) return;
+            foreach (string f in Directory.GetFiles(dir, "cmd-*.ps1"))
             {
-                string dir = Path.Combine(Path.GetTempPath(), name);
-                if (!Directory.Exists(dir)) continue;
-                foreach (string f in Directory.GetFiles(dir, "cmd-*.ps1"))
-                {
-                    try { if (Orphan(f) || (DateTime.UtcNow - File.GetLastWriteTimeUtc(f)).TotalHours >= 24) SecureFile.Erase(f); } catch { }
-                }
-                if (name == "JustPad") { try { if (Directory.GetFileSystemEntries(dir).Length == 0) Directory.Delete(dir); } catch { } }
+                try { if (Orphan(f) || (DateTime.UtcNow - File.GetLastWriteTimeUtc(f)).TotalHours >= 24) SecureFile.Erase(f); } catch { }
             }
         }
 
@@ -582,7 +580,7 @@ namespace MinGent
                     category = rule.Category;
                     return rule.Why;
                 }
-            if (TouchesOwnData(flat)) { category = PermissionCategory.Credentials; return "reads or changes MinGent's own settings, chats or browser sign-ins"; }
+            if (TouchesOwnData(flat, string.IsNullOrEmpty(cwd) ? workspace : cwd)) { category = PermissionCategory.Credentials; return "reads or changes MinGent's own settings, chats or browser sign-ins"; }
             if (SecretWatch.Leaks(c) && LooksNetwork(c)) { category = PermissionCategory.Never; return "sends one of your API keys from MinGent's settings over the internet"; }
             string dir = string.IsNullOrEmpty(cwd) ? workspace : cwd;
             string launchCat;
@@ -1047,13 +1045,21 @@ namespace MinGent
             return c.Replace("^", "").Replace("`", "").Replace("\"\"", "").Replace("''", "");
         }
 
-        static bool TouchesOwnData(string c)
+        static readonly Regex UpToData = new Regex(@"(?:^|[\s""'=;(,])((?:\.\.\\+)+)data(?=[\\\s""';),]|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        static bool TouchesOwnData(string c, string cwd)
         {
             string l = c.ToLowerInvariant().Replace('/', '\\');
             string dd = Program.DataDir;
-            if (!string.IsNullOrEmpty(dd) && l.Contains(dd.ToLowerInvariant().Replace('/', '\\').TrimEnd('\\'))) return true;
-            if (Regex.IsMatch(l, @"(localappdata%?|env:localappdata\}?|appdata\\+local)\\+(mingent|justpad)\b")) return true;
-            return l.Contains("localapplicationdata") && (l.Contains("mingent") || l.Contains("justpad"));
+            if (string.IsNullOrEmpty(dd)) return false;
+            if (l.Contains(dd.ToLowerInvariant().Replace('/', '\\').TrimEnd('\\'))) return true;
+            if (string.IsNullOrEmpty(cwd) || !Program.Inside(cwd, Program.AppDir)) return false;
+            foreach (Match m in UpToData.Matches(l))
+            {
+                try { if (Program.Inside(Path.Combine(cwd, (m.Groups[1].Value + "data").Replace('\\', Path.DirectorySeparatorChar)), dd)) return true; }
+                catch { }
+            }
+            return false;
         }
 
         static readonly Regex LocationMove = new Regex(
@@ -3245,12 +3251,29 @@ namespace MinGent
 
         public static string LowRoot
         {
+            get { return Path.Combine(Program.DataDir ?? Path.Combine(Path.GetTempPath(), Program.AppName), "Sandbox"); }
+        }
+
+        public static string Unprotected
+        {
             get
             {
-                string low = Supported ? Known("A520A1A4-1780-4FF6-BD18-167343C5AF16") : null;
-                if (string.IsNullOrEmpty(low)) low = Path.Combine(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "AppData"), "LocalLow");
-                return Path.Combine(low, Program.AppName);
+                string d = Program.DataDir;
+                if (string.IsNullOrEmpty(d) || !Supported) return null;
+                return Secured(d) ? null : "MinGent's folder is on a drive without file permissions (" + FileSystem(d) + "), so the sandbox can't keep commands away from MinGent's settings, saved keys and chats";
             }
+        }
+
+        static string FileSystem(string path)
+        {
+            try
+            {
+                StringBuilder name = new StringBuilder(261), fs = new StringBuilder(261);
+                uint flags;
+                if (GetVolumeInformation(Path.GetPathRoot(path), name, name.Capacity, IntPtr.Zero, IntPtr.Zero, out flags, fs, fs.Capacity) && fs.Length > 0) return fs.ToString();
+            }
+            catch { }
+            return "like exFAT or FAT32";
         }
 
         public static Dictionary<string, string> Env()
@@ -3346,14 +3369,15 @@ namespace MinGent
             if (f.Length <= 3) return "it is a whole drive";
             try { if (new DriveInfo(Path.GetPathRoot(f)).DriveType == DriveType.Network) return "it is on a network drive"; } catch { }
             foreach (KeyValuePair<string, string> w in Whole()) if (Under(w.Key, f)) return string.Equals(w.Key, f, StringComparison.OrdinalIgnoreCase) ? "it is " + w.Value : "it holds " + w.Value;
-            string app = Trim(AppDomain.CurrentDomain.BaseDirectory);
-            if (app != null && (Under(f, app) || Under(app, f))) return "it holds MinGent itself";
+            string app = Trim(Program.AppDir ?? AppDomain.CurrentDomain.BaseDirectory), files = Trim(Program.FilesDir);
+            if (app != null && (Under(app, f) || (Under(f, app) && !(files != null && Under(f, files))))) return "it holds MinGent itself";
             List<string> inside = new List<string>();
             foreach (Environment.SpecialFolder sf in new Environment.SpecialFolder[] { Environment.SpecialFolder.Windows, Environment.SpecialFolder.ProgramFiles, Environment.SpecialFolder.ProgramFilesX86, Environment.SpecialFolder.CommonApplicationData })
                 inside.Add(Trim(Environment.GetFolderPath(sf)));
             foreach (string s in inside) if (s != null && (Under(f, s) || Under(s, f))) return "it is a Windows or program folder";
-            foreach (string s in new string[] { Trim(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)), Trim(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)), Trim(Path.GetDirectoryName(LowRoot)) })
-                if (s != null && (Under(f, s) || Under(s, f))) return "it is a folder where programs keep their own data";
+            bool ours = files != null && Under(f, files);
+            foreach (string s in new string[] { Trim(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)), Trim(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)) })
+                if (s != null && ((Under(f, s) && !ours) || Under(s, f))) return "it is a folder where programs keep their own data";
             string data = Trim(Program.DataDir);
             if (data != null && (Under(f, data) || Under(data, f))) return "it holds MinGent's own data";
             return null;
@@ -3565,6 +3589,7 @@ namespace MinGent
                 if (parent == null || !Directory.Exists(parent) || Link(parent)) return;
                 if (Directory.Exists(root) && Link(root)) return;
                 Directory.CreateDirectory(root);
+                if (Secured(root) && !LowLabel(root) && LabelBranch(root, "S:(ML;OICI;NW;;;LW)", "S:(ML;;NW;;;LW)") != null) return;
                 string top = Trim(root);
                 foreach (string d in Env().Values)
                 {

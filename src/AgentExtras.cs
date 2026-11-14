@@ -1189,7 +1189,7 @@ namespace MinGent
 
         static readonly HashSet<string> Blocked = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
             "cmd", "powershell", "pwsh", "conhost", "openconsole", "windowsterminal", "wt", "bash", "wsl", "wslhost", "mintty", "regedit", "mmc",
-            "taskmgr", "explorer", "control", "rundll32", "msiexec", "schtasks", "certmgr", "gpedit", "secpol", "netsh", "sc", "diskpart", "putty", "mingent", "justpad",
+            "taskmgr", "explorer", "control", "rundll32", "msiexec", "schtasks", "certmgr", "gpedit", "secpol", "netsh", "sc", "diskpart", "putty", "mingent",
             "systemsettings", "useraccountcontrolsettings", "consent", "credentialuibroker", "lockapp", "logonui", "securityhealthsystray", "windowsdefender", "msmpeng" };
 
         static readonly HashSet<string> Browsers = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
@@ -1215,7 +1215,7 @@ namespace MinGent
 
         static readonly HashSet<string> Guard = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
             "consent", "credentialuibroker", "lockapp", "logonui", "securityhealthsystray", "securityhealthhost", "windowsdefender", "msmpeng", "sechealthui",
-            "useraccountcontrolsettings", "mingent", "justpad" };
+            "useraccountcontrolsettings", "mingent" };
 
         static readonly HashSet<string> RemoteTerminals = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "putty", "kitty" };
 
@@ -1258,7 +1258,7 @@ namespace MinGent
         static readonly HashSet<string> SystemTools = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
             "regedit", "mmc", "taskmgr", "control", "rundll32", "msiexec", "schtasks", "certmgr", "gpedit", "secpol", "netsh", "sc", "diskpart", "systemsettings",
             "useraccountcontrolsettings", "consent", "credentialuibroker", "lockapp", "logonui", "securityhealthsystray", "securityhealthhost", "windowsdefender", "msmpeng",
-            "winstore.app", "mingent", "justpad", "perfmon", "resmon", "eventvwr", "compmgmt", "devmgmt", "services", "msconfig", "systempropertiesadvanced",
+            "winstore.app", "mingent", "perfmon", "resmon", "eventvwr", "compmgmt", "devmgmt", "services", "msconfig", "systempropertiesadvanced",
             "sechealthui", "regedt32", "procexp", "procexp64", "procmon", "procmon64", "autoruns", "autoruns64", "rammap", "rammap64", "tcpview", "tcpview64",
             "systeminformer", "processhacker", "wf", "gpmc", "lusrmgr", "certlm", "fsquirt", "optionalfeatures", "dfrgui", "cleanmgr", "recoverydrive", "rstrui" };
 
@@ -1275,7 +1275,7 @@ namespace MinGent
         public static string NeverWhy(string process)
         {
             string p = process ?? "";
-            if (string.Equals(p, "mingent", StringComparison.OrdinalIgnoreCase) || string.Equals(p, "justpad", StringComparison.OrdinalIgnoreCase)) return "it is MinGent itself";
+            if (string.Equals(p, "mingent", StringComparison.OrdinalIgnoreCase)) return "it is MinGent itself";
             if (Vault.Contains(p)) return "it handles your passwords, money or remote access";
             return "it is part of Windows' sign-in and security";
         }

@@ -51,12 +51,7 @@ namespace MinGent
 
         public static string[] Trusted { get { return ReleaseKeys.Pinned; } }
 
-        static string LocalData(string name)
-        {
-            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), name);
-        }
-
-        public static string Work { get { return Path.Combine(Program.DataDir ?? LocalData(Program.AppName), "Updates"); } }
+        public static string Work { get { return Path.Combine(Program.DataDir ?? Path.Combine(AppDir, "Data"), "Updates"); } }
 
         public static string Practice
         {
@@ -562,11 +557,11 @@ namespace MinGent
         {
             if (args.Length < 6) return null;
             string work = args[1], appDir = args[2], from = args[4], to = args[5];
-            if (!Same(work, Path.Combine(LocalData(Program.AppName), "Updates")) && !Same(work, Path.Combine(LocalData(Program.LegacyName), "Updates"))) return null;
+            if (!Same(work, Path.Combine(Path.Combine(appDir, "Data"), "Updates"))) return null;
             string exe = Path.Combine(appDir, ExeName), staging = Path.Combine(work, "new"), backup = Path.Combine(work, "backup");
             if (!File.Exists(exe)) return null;
             Mutex mutex = null;
-            try { mutex = new Mutex(false, Program.InstanceMutexName(Program.RunsElevated())); }
+            try { mutex = new Mutex(false, Program.InstanceMutexName(appDir, Program.RunsElevated())); }
             catch { mutex = null; }
             if (!Take(mutex, 120000))
             {
@@ -632,7 +627,7 @@ namespace MinGent
             {
                 string rel = Path.GetFullPath(f).Substring(root.Length);
                 string top = rel.Split(Path.DirectorySeparatorChar)[0];
-                if (top.Equals("build-temp", StringComparison.OrdinalIgnoreCase) || rel.Equals("icon.png", StringComparison.OrdinalIgnoreCase) || rel.Equals("icon.png.png", StringComparison.OrdinalIgnoreCase)) continue;
+                if (top.Equals("build-temp", StringComparison.OrdinalIgnoreCase) || top.Equals("Data", StringComparison.OrdinalIgnoreCase) || top.Equals("Files", StringComparison.OrdinalIgnoreCase) || rel.Equals("icon.png", StringComparison.OrdinalIgnoreCase) || rel.Equals("icon.png.png", StringComparison.OrdinalIgnoreCase)) continue;
                 if (rel.Equals(ExeName, StringComparison.OrdinalIgnoreCase)) files.Insert(0, rel);
                 else files.Add(rel);
             }

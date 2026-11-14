@@ -418,7 +418,9 @@ namespace MinGent
             c.Add(new KeysRow(Th, "Zoom in, out and back", "Ctrl +", "Ctrl -", "Ctrl 0"));
             c.Add(new KeysRow(Th, "Settings", "Ctrl ,"));
             quickKey = MakeCombo(QuickEntry.Names, QuickEntry.Index(s.QuickKey));
-            Row(c, "Bring up MinGent from any program", "Press it anywhere and MinGent comes to the front with the message box ready. It works while MinGent is running.", quickKey, quickKey.PreferredWidth);
+            bool taken = Program.Primary && QuickEntry.Clean(s.QuickKey).Length > 0 && QuickEntry.Held != QuickEntry.Clean(s.QuickKey);
+            Row(c, "Bring up MinGent from any program", taken ? "Another program, or another copy of MinGent, has this shortcut now, so it doesn't bring up this window. Choose another one, or close the other program." :
+                "Press it anywhere and MinGent comes to the front with the message box ready. It works while MinGent is running.", quickKey, quickKey.PreferredWidth);
             Place(p, c);
 
             Section(p, "Commands", "Type them in the message box. A list shows up as soon as you type /.");
@@ -772,7 +774,7 @@ namespace MinGent
 
             Section(p, "Sandbox", null);
             c = NewCard(p);
-            sandbox = Switch(c, "Run the agent's commands in a sandbox (experimental)", "Commands can read files and use the internet, but change files only in the work folder (not its .git folder), and can't change other programs, settings or your sign-ins. A command runs outside the sandbox only when you allow it, or in Full auto. MinGent lets low-rights programs change files in the folders the agent works in, and that stays after you turn this off. Turn it off if a tool stops working.", s.AiSandbox);
+            sandbox = Switch(c, "Run the agent's commands in a sandbox (experimental)", "Commands can read files and use the internet, but change files only in the work folder (not its .git folder), and can't change other programs, settings or your sign-ins. A command runs outside the sandbox only when you allow it, or in Full auto. MinGent lets low-rights programs change files in the folders the agent works in, and that stays after you turn this off. Turn it off if a tool stops working." + (Sandbox.Unprotected != null ? " " + Sandbox.Unprotected + ", so with this on, commands ask first, even in Auto." : ""), s.AiSandbox);
             Place(p, c);
 
             Section(p, "Always on", "These limits apply in every mode, even in Full auto.");
@@ -862,7 +864,7 @@ namespace MinGent
             Row(c, "Data folder", Program.DataDir ?? "", open, open.Width);
             Row(c, "Saved chats", "Rename, archive or delete a chat from its \"...\" menu in the sidebar. Deleting erases it for good.", del, del.Width);
             Row(c, "Browser data", "The built-in browser's sign-ins, history, cache and site data. Wiping signs you out of every site in it.", wipe, wipe.Width);
-            Row(c, "Erase everything", "Overwrites and deletes your chats, memory, API keys, browser data, logs and notes backups, then closes MinGent so it starts like new. You choose whether the agent's saved files, the engine and the models go too.", erase, erase.Width);
+            Row(c, "Erase everything", "Overwrites and deletes your chats, memory, API keys, browser data, logs and notes backups, then closes MinGent and removes it from its folder. You choose whether the agent's saved files, the engine and the models go too.", erase, erase.Width);
             Place(p, c);
             Finish(p);
         }
@@ -881,7 +883,7 @@ namespace MinGent
             {
                 string werr;
                 string wfull = AgentPaths.Resolve(wsText, null, out werr);
-                string why = wfull == null ? (werr ?? "it is not a valid folder path") : AgentPaths.WriteBlocked(Path.Combine(wfull, "x.txt"));
+                string why = wfull == null ? (werr ?? "it is not a valid folder path") : AgentPaths.InProgram(wfull) ? "it holds MinGent itself; its Files folder can be the default folder" : AgentPaths.WriteBlocked(Path.Combine(wfull, "x.txt"));
                 if (why != null)
                 {
                     Select(2);
@@ -941,7 +943,7 @@ namespace MinGent
             {
                 string err;
                 string full = AgentPaths.Resolve(s.AiWorkspace, null, out err);
-                if (full == null || AgentPaths.WriteBlocked(Path.Combine(full, "x.txt")) != null) s.AiWorkspace = def;
+                if (full == null || AgentPaths.InProgram(full) || AgentPaths.WriteBlocked(Path.Combine(full, "x.txt")) != null) s.AiWorkspace = def;
                 else s.AiWorkspace = full;
             }
             s.AiInstructions = instructions.Box.Text.Replace("\r\n", "\n").Trim();
