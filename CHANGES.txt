@@ -1,6 +1,38 @@
 MinGent - what changed
 ======================
 
+Version 1.1.9 beta
+- MinGent is portable. Everything it keeps, from chats, settings and saved
+  keys to the browser's data, downloaded models and the files the agent
+  works on, now stays in MinGent's own folder: settings and chats in Data,
+  the agent's work in Files. Copy the folder to move MinGent; delete it to
+  remove it. Nothing goes to AppData, LocalLow, the temp folder or
+  Documents anymore.
+- This is a fresh start: 1.1.9 doesn't read the data of earlier versions.
+  Extract it into a new folder, build it and add your API keys again. Your
+  old chats and settings stay where they were until you delete them.
+- A copy on a USB stick and one on the PC can run at the same time, each
+  with its own chats and settings. Folders inside MinGent's folder are
+  saved as relative paths, so a new drive letter doesn't break projects or
+  settings.
+- On another PC or Windows account, MinGent says which saved API keys
+  Windows can't open there and asks you to add them again, instead of
+  silently leaving them empty.
+- MinGent won't start from a folder it can't write to, like Program Files,
+  or straight from Desktop, Documents, Downloads or a drive's top folder,
+  and says why. It mentions once when its folder is in OneDrive.
+- Changing MinGent's own program files (MinGent.exe, src) asks first, also
+  in Auto. The Files folder is the agent's default work folder, and the only
+  part of MinGent's folder that sandboxed commands can change.
+- With the sandbox on and MinGent on an exFAT or FAT32 drive, commands ask
+  first, also in Auto, because such drives have no permissions the sandbox
+  can use. On FAT32, models over 4 GB are refused before they download.
+- "Erase everything" now also removes MinGent itself: after it erases your
+  data it deletes MinGent's program files and folder. What you choose to
+  keep, and anything else you put in the folder, stays.
+- Open with entries follow MinGent when it moves, and with two copies they
+  open the one you added them from.
+
 Version 1.1.8 beta
 - Claude models through OpenRouter use prompt caching now. Before, every
   step of a long chat paid full price for the whole conversation. The line

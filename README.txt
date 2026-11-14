@@ -15,6 +15,9 @@ leave them alone until it is done.
 
 No dependency tree: no installer, no packages, no plugins and no automatic
 updates.
+Portable: everything MinGent keeps, from chats and settings to the files it
+works on and downloaded models, stays in its own folder. Copy the folder to
+move MinGent; delete it to remove it.
 MinGent itself has no third-party code. You compile it yourself from the
 source in the "src" folder with the C# compiler that is part of Windows, so
 the program you run is the code you can read. The optional built-in engine
@@ -22,7 +25,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.1.8 beta: it works, and it still has rough edges. Report
+This is version 1.1.9 beta: it works, and it still has rough edges. Report
 problems at https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -32,7 +35,9 @@ anything you care about.
 
 BUILD IT (one time, takes a few seconds)
 ----------------------------------------
-1. Extract the whole MinGent folder somewhere you like, e.g. C:\Tools\MinGent
+1. Extract the whole MinGent folder into your own user folder, for example
+   Documents\MinGent. MinGent keeps everything in this folder, so it needs a
+   folder it can write to (not Program Files).
 2. Double-click  Build-MinGent.bat
 3. MinGent.exe appears next to the .bat file. That one file is the whole app.
 
@@ -728,14 +733,16 @@ ASK, AUTO OR FULL AUTO
   model can still be fooled.
 - In every mode, also Full auto, the agent's own file tools never write into
   Windows, Program Files, the Startup folder, shell profiles or MinGent's own
-  data folder, also not through a link or junction that points there.
+  Data folder, also not through a link or junction that points there.
+  Changing MinGent's program files (MinGent.exe, the src folder) asks first,
+  also in Auto.
   Commands are checked by the rows above instead: in Full auto they run
   without asking, and only Windows' own permissions protect Windows and
   Program Files. So don't start MinGent as administrator.
 - Sandbox (Settings > Safety, experimental, off by default): the agent's
   commands run with low rights. They can still read files and use the
   internet, but they can change files only in the work folder and in
-  MinGent's own temp and cache folders (in AppData\LocalLow\MinGent), and
+  MinGent's own temp and cache folders (in its Data\Sandbox folder), and
   they can't change other programs, your settings in the registry, or
   MinGent's own data, nor read MinGent's settings, keys, chats or notes
   backups. They can read the built-in browser's data, which MinGent leaves
@@ -744,8 +751,8 @@ ASK, AUTO OR FULL AUTO
   change files there, except its .git folder, files linked from elsewhere
   and links to other folders. It never does that for a whole drive, your
   user folder, Desktop, Documents, Downloads, OneDrive, a Windows or program
-  folder, or the folder MinGent runs from; commands then can't change files
-  there at all. The change stays when you turn the sandbox off; it only
+  folder, or the folder MinGent runs from (except its Files folder); commands
+  then can't change files there at all. The change stays when you turn the sandbox off; it only
   lets low-rights programs write there.
 - A command runs outside the sandbox only after you allow that command, or
   in Full auto: when the agent asks for it, when MinGent asks about the
@@ -757,6 +764,10 @@ ASK, AUTO OR FULL AUTO
   whatever it now says when you or another program run it. If a sandboxed
   command replaces the work folder's .git folder, MinGent tells you, because
   git run outside the sandbox would then use its hooks and settings.
+- A drive without file permissions (exFAT or FAT32, as on many USB sticks)
+  has nothing the sandbox can use, so it can't keep commands away from
+  MinGent's settings, keys and chats there. When MinGent runs from such a
+  drive, commands ask first with the sandbox on, also in Auto.
 
 Undo
 - After each reply that changed files with the agent's file tools, "N files
@@ -781,8 +792,8 @@ Undo
 Workspace
 - When the open Notes tab is a saved file, the agent works in that file's
   folder, unless that folder is a whole personal folder such as Documents,
-  Desktop or Downloads. Otherwise new files go to Documents\MinGent Files
-  (changeable in Settings > Agent). You never have to create a folder first.
+  Desktop or Downloads. Otherwise new files go to the Files folder in
+  MinGent's folder (changeable in Settings > Agent). You never have to create a folder first.
 - Unsaved Notes tabs can be read and edited too: it refers to them by their
   tab name.
 - Projects: the folder button at the top of a chat shows where that chat
@@ -1003,42 +1014,66 @@ this PC" > MinGent.exe > Always.)
 
 Add writes a few per-user entries under HKEY_CURRENT_USER (Software\Classes,
 Software\RegisteredApplications and Software\MinGent); Remove takes them out
-again. If you move MinGent.exe, the entries follow it the next time it starts.
+again. If you move MinGent, the entries follow it the next time it starts.
+With two copies of MinGent, they open the copy you added them from.
 
 
 WHERE YOUR DATA IS
 ------------------
-  %LOCALAPPDATA%\MinGent\settings.ini   settings; API keys encrypted with Windows
-                                        DPAPI: other Windows accounts and copies
-                                        of the file on other PCs can't read
-                                        them, programs you run can
-  %LOCALAPPDATA%\MinGent\session.txt    the list of open Notes tabs
-  %LOCALAPPDATA%\MinGent\backup\        text of tabs with unsaved changes
-  %LOCALAPPDATA%\MinGent\chats\         your chats (the 200 most recent;
-                                        temporary chats are never written;
-                                        archived chats are in chats\archive)
-  %LOCALAPPDATA%\MinGent\memory.md      what the agent remembers about you
-                                        (also shown in Settings > Memory)
-  %LOCALAPPDATA%\MinGent\scheduled.json your scheduled tasks
-  %LOCALAPPDATA%\MinGent\projects.json  the folders you chose as projects
-  %LOCALAPPDATA%\MinGent\Browser\       the built-in browser's profile
-  %LOCALAPPDATA%\MinGent\engine\        the built-in engine, if you set it up
-  %LOCALAPPDATA%\MinGent\models\        models downloaded in the model library
-                                        (or the folder you picked in
-                                        Settings > Models > Model folder)
-  %LOCALAPPDATA%\MinGent\connections.log only with "Keep a connection log file"
-  %LOCALAPPDATA%\MinGent\error.log       only with "Keep an error log"
-  %TEMP%\MinGent\                        the agent's PowerShell commands while
-                                        they run; erased when each one ends
-  Documents\MinGent Files\               what the agent saves when no other
-                                        folder is chosen (your files), with
-                                        your skills in its Skills folder
-Nothing goes into the registry, except the Open with entries if you add them.
+Everything MinGent keeps is in the folder it runs from, next to MinGent.exe:
 
-Uninstall: Settings > Privacy > "Erase everything" removes all of the above
-and the Open with entries; you choose whether the engine, the models and
-Documents\MinGent Files go too. Then delete the folder with Build-MinGent.bat
-and MinGent.exe.
+  Files\                    what the agent saves when no other folder is
+                            chosen (your files), with your skills in its
+                            Skills folder
+  Data\settings.ini         settings; API keys encrypted with Windows DPAPI:
+                            other Windows accounts and copies of the folder
+                            on other PCs can't read them, programs you run can
+  Data\session.txt          the list of open Notes tabs
+  Data\backup\              text of tabs with unsaved changes
+  Data\chats\               your chats (the 200 most recent; temporary chats
+                            are never written; archived chats are in
+                            chats\archive)
+  Data\memory.md            what the agent remembers about you (also shown
+                            in Settings > Memory)
+  Data\scheduled.json       your scheduled tasks
+  Data\projects.json        the folders you chose as projects
+  Data\Browser\             the built-in browser's profile
+  Data\engine\              the built-in engine, if you set it up
+  Data\models\              models downloaded in the model library (or the
+                            folder you picked in Settings > Models >
+                            Model folder)
+  Data\Sandbox\             temp and cache folders for sandboxed commands
+  Data\Temp\                the agent's PowerShell commands while they run;
+                            erased when each one ends
+  Data\Updates\             a new version while it is being installed
+  Data\connections.log      only with "Keep a connection log file"
+  Data\error.log            only with "Keep an error log"
+Nothing goes into the registry, except the Open with entries if you add them.
+Folders inside MinGent's folder, such as Files, are saved as relative paths,
+so a copy on another drive letter keeps its projects and settings.
+
+Move or copy it: close MinGent and copy the whole folder. A copy runs on its
+own, with its own chats and settings, and two copies can run at the same time
+(the "bring up MinGent" shortcut goes to the one that started first). Copy
+the folder rather than moving a drive between PCs, so its files belong to
+your account on the new PC. On another PC or Windows account, Windows can't
+open the saved API keys, so MinGent asks you to add them again, and you sign
+in to sites in the built-in browser again. Keep each copy in your own user
+folder: Windows accounts sharing one folder would share its chats.
+
+A few places don't suit it. MinGent won't start from Program Files or
+another folder it can't write to, or straight from Desktop, Documents,
+Downloads or a drive's top folder; put it in a folder of its own. In a folder
+OneDrive syncs, OneDrive uploads the chats, browser data and models all the
+time, so MinGent mentions it once. On a FAT32 drive, models over 4 GB don't
+fit, and on exFAT and FAT32 the sandbox can't protect MinGent's data (see the
+Sandbox notes above).
+
+Uninstall: Settings > Privacy > "Erase everything" erases all of the above,
+removes the Open with entries and then removes MinGent itself from its
+folder; you choose whether the engine, the models and the Files folder go
+too, and whatever you keep stays in the folder. Or delete the folder
+yourself: remove Open with first if you added it.
 
 
 PRIVACY
@@ -1069,13 +1104,15 @@ PRIVACY
   error.log, for a bug report.
 - Settings > Privacy > "Erase everything" overwrites MinGent's chats, memory,
   API keys, browser data, logs, notes backups, settings and temporary files
-  with random data, deletes them, removes its Open with entries and closes
-  MinGent, which starts like new the next time. Files still in use are
+  with random data, deletes them, removes its Open with entries, closes
+  MinGent and removes its program files and folder. Files still in use are
   overwritten and deleted right after MinGent closes, and links to other
   folders are removed without following them. It asks about two more things:
-  what the agent saved in Documents\MinGent Files (erased unless you switch it
-  off) and the engine and models (kept unless you switch them on; they are
-  downloads, not your data). Files in your other folders stay.
+  what the agent saved in the Files folder (erased unless you switch it off)
+  and the engine and models (kept unless you switch them on; they are
+  downloads, not your data). Files in your other folders stay, and so does
+  anything else you put in MinGent's folder. A copy that runs from a git
+  checkout keeps its program files.
 - A chat that used Claude, OpenAI, Gemini or OpenRouter was also sent to
   that provider (through OpenRouter, also to the model's maker), which keeps
   its own copy under its own rules; deleting the chat here can't reach that.
