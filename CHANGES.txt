@@ -1,6 +1,26 @@
 MinGent - what changed
 ======================
 
+Version 1.1.11 beta
+- No more projects. Every chat works in its own folder in Files, named
+  after the chat, so what it makes stays together. The folder is made when
+  the agent writes its first file, and deleting the chat deletes it too
+  (the delete question says how many files are in it). A temporary chat's
+  folder goes when the temporary chat ends.
+- To work in a folder you already have, use "Work in another folder..." in
+  the chat's "..." menu. Deleting the chat never deletes that folder.
+- The top of a chat shows only its title, and the chat list only chats.
+- Files open in Notes count as part of the work folder, so the agent can
+  change the file you are working on without asking, as before.
+- A scheduled task works in its own folder, Files\Scheduled tasks\<task
+  name>, which keeps what every run makes in one place, or in a folder you
+  choose for it.
+- "Best for this PC" in the model library now picks the highest quality
+  that still leaves room for 128K tokens of chat (or the model's longest),
+  instead of 64K. On a 32 GB card a 27B model gets Q6 rather than a Q8 that
+  leaves room for under 50K tokens; a card with room to spare still
+  gets Q8.
+
 Version 1.1.10 beta
 - Model library: some repositories hold more than the model's sizes, like a
   small draft model for speculative decoding with "Q8_0" in its name. It

@@ -25,7 +25,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.1.10 beta: it works, and it still has rough edges. Report
+This is version 1.1.11 beta: it works, and it still has rough edges. Report
 problems at https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -120,11 +120,10 @@ THE WINDOW
   with a search box, New chat, Models (the model library) and Settings. The
   button at the top folds the list into a narrow rail; it does that by itself
   when the window gets too narrow.
-- Your projects show above the chats (see Workspace). Click one to list only
-  its chats; new chats then start in that project until you click it again.
 - Each chat's "..." button has Rename, Archive and Delete. Archived chats
   leave the list but stay on your PC; "Archived chats" at the bottom of the
-  list shows them, and opening one moves it back. "Delete all chats" in
+  list shows them, and opening one moves it back. Deleting a chat deletes
+  its own folder in Files too (see Workspace). "Delete all chats" in
   Settings > Privacy deletes archived chats too.
 - Several chats can work at once. When you open another chat or start a new
   one while the agent works, the first chat keeps working in the background,
@@ -266,7 +265,7 @@ CHATS
 - Commands: type / in the message box and a list of them pops up - /compact,
   /new (or /clear) for a new chat, /temp for a temporary chat, /plan to switch
   plan first on or off, /skill to write a new skill, /schedule to set up a
-  task that runs by itself, /project to choose the folder the chat works in.
+  task that runs by itself.
   Your skills are in the same list (see Workspace). Pick one with the arrow
   keys and Enter or Tab, or click it. Settings > General lists the commands
   too.
@@ -356,7 +355,10 @@ models..." for the full list.
   first and say "Suits this PC". Pick one and MinGent shows a single Download
   button for the size that fits best: it reads the start of the model file to
   work out how much memory a long chat needs, picks the highest quality that
-  still leaves room for one, and says how many tokens of chat fit. "Other
+  still leaves room for 128K tokens of chat (or the model's longest, if
+  shorter), and says how many tokens fit. So a big card gets Q8, while a
+  card where Q8 would squeeze the chat gets a smaller size; only when
+  nothing leaves room for 128K does it settle for a shorter chat. "Other
   sizes" lists the rest, each marked "Fits your GPU", "Partly in RAM, slower"
   or "Too big for this PC" ("Fits in memory" or "Tight on memory" on a PC
   that runs models from RAM). Results carry a badge: "Official" (a well-known
@@ -547,9 +549,11 @@ Scheduled tasks
   MinGent was closed is made up for once, the next time it is open.
 - A run works like a task you start yourself. In Ask mode it waits for your
   OK, and the window title and the taskbar button show that it is waiting.
-- A task works in the default folder or in the project you pick for it. When
-  that folder can't be used (a drive that is not plugged in, a folder that
-  was moved), the run is skipped and a chat with the task's name says so.
+- A task works in its own folder, Files\Scheduled tasks\<task name>, which
+  keeps what every run makes in one place, or in a folder you choose for it.
+  When a chosen folder can't be used (a drive that is not plugged in, a
+  folder that was moved), the run is skipped and a chat with the task's name
+  says so.
 - You can also ask the agent to set one up ("every weekday at 8, check my
   site and write what changed to site.md"). It can add, change, pause,
   remove and list tasks. Before anything is saved, MinGent shows you the
@@ -797,25 +801,27 @@ Undo
   see the new code (Settings > Agent to switch this off).
 
 Workspace
-- When the open Notes tab is a saved file, the agent works in that file's
-  folder, unless that folder is a whole personal folder such as Documents,
-  Desktop or Downloads. Otherwise new files go to the Files folder in
-  MinGent's folder (changeable in Settings > Agent). You never have to create a folder first.
-- Unsaved Notes tabs can be read and edited too: it refers to them by their
-  tab name.
-- Projects: the folder button at the top of a chat shows where that chat
-  works. Click it and "Choose a folder..." (or type /project) to make the
-  chat work in a folder of your choice. MinGent remembers each folder you
-  choose as a project, named after the folder, and lists your projects in
-  that menu and above your chats. A chat stays in its project when you open
-  it again, and "No project" goes back to the open file's folder or the
-  default folder. A whole personal folder such as Documents, Desktop or a
-  drive can't be a project, because inside its work folder the agent changes
-  files without asking each time; choose a folder inside it.
-- Project notes: ask it to "remember" something about a project and it writes
-  it to MINGENT.md in the project folder; it reads that file at the start of
-  every request.
-- Project instructions: when the project has an AGENTS.md (or a CLAUDE.md),
+- Every chat works in its own folder in the Files folder in MinGent's folder
+  (changeable in Settings > Agent), named after the chat, such as
+  Files\Fix the login bug. It is made when the agent writes the first file,
+  so a chat that makes nothing leaves nothing behind. Deleting a chat
+  deletes its folder too, and the delete question says how many files are
+  in it; archiving a chat keeps it. A temporary chat's folder goes when the
+  temporary chat ends.
+- To work on files you already have, tell the agent where they are; it can
+  read and change files anywhere it is allowed to. To make another folder
+  the chat's work folder, so the agent changes files in it without asking
+  each time in Auto, use "Work in another folder..." in the chat's "..."
+  menu; "Work in its own folder again" switches back. Deleting the chat never
+  deletes that other folder. A whole personal folder such as Documents,
+  Desktop or a drive can't be a work folder; choose a folder inside it.
+- Files open in Notes count as part of the work folder, so the agent can
+  change the file you are working on without asking. Unsaved Notes tabs can
+  be read and edited too: it refers to them by their tab name.
+- Folder notes: ask it to "remember" something about a folder and it writes
+  it to MINGENT.md in the work folder; it reads that file at the start of
+  every request there.
+- Project instructions: when the folder has an AGENTS.md (or a CLAUDE.md),
   the file many coding agents read for how to build, test and write code in
   a project, the agent is told where it is and reads it before it changes
   the project's code. That costs one line of the model's context until
@@ -829,7 +835,7 @@ Workspace
   report"). Type / in the message box and your skills show up next to the
   commands; pick one and add what this run is about. /skill starts a new
   one in Notes, and you can ask the agent to save what it just did as a
-  skill. Skills live in the Skills folder inside the default folder
+  skill. Skills live in the Skills folder inside the Files folder
   (Settings > Agent). The agent only gets one line per skill, its name and
   when to use it, and reads the file when a task matches or when your
   message starts with /name. A skill folder made for Claude (a folder with
@@ -1043,7 +1049,6 @@ Everything MinGent keeps is in the folder it runs from, next to MinGent.exe:
   Data\memory.md            what the agent remembers about you (also shown
                             in Settings > Memory)
   Data\scheduled.json       your scheduled tasks
-  Data\projects.json        the folders you chose as projects
   Data\Browser\             the built-in browser's profile
   Data\engine\              the built-in engine, if you set it up
   Data\models\              models downloaded in the model library (or the
@@ -1057,7 +1062,7 @@ Everything MinGent keeps is in the folder it runs from, next to MinGent.exe:
   Data\error.log            only with "Keep an error log"
 Nothing goes into the registry, except the Open with entries if you add them.
 Folders inside MinGent's folder, such as Files, are saved as relative paths,
-so a copy on another drive letter keeps its projects and settings.
+so a copy on another drive letter keeps its chats' folders and settings.
 
 Move or copy it: close MinGent and copy the whole folder. A copy runs on its
 own, with its own chats and settings, and two copies can run at the same time

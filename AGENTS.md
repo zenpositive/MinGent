@@ -54,7 +54,7 @@ The TPM key is named `MinGentRelease`. It lives in that laptop's TPM, under its 
 | `Http.cs`, `Json.cs` | HTTP and JSON |
 | `Skills.cs` | Skills: the how-tos in the Skills folder, their line in the system prompt, the template for a new one |
 | `Schedule.cs` | Scheduled tasks: when a task is due and how they are saved. The runner is in `AiPanel.cs` |
-| `Projects.cs` | Projects: the work folders MinGent remembers |
+| `Projects.cs` | WorkFolders: each chat's own folder in Files, and which folders can be work folders |
 | `Charts.cs` | Charts in answers: reading a chart block and laying it out |
 | `QuickEntry.cs` | The shortcut that brings MinGent up from any program |
 | `YouTube.cs` | Video details and transcripts |
