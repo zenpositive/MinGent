@@ -881,6 +881,7 @@ namespace MinGent
             }
             string dir = Directory.Exists(full) ? full : System.IO.Path.GetDirectoryName(full);
             bool inside = AgentPaths.IsInside(full, Cfg.Workspace) && (!linked || AgentPaths.IsInside(real, AgentPaths.Real(Cfg.Workspace)));
+            if (!inside && !linked && OpenInTabs(full)) inside = true;
             PermissionState ps = Session.Perms;
             if (ps.WebGuard && ps.Tainted && !string.IsNullOrEmpty(Cfg.SkillsFolder) && AgentPaths.IsInside(full, Cfg.SkillsFolder))
             {
@@ -918,6 +919,18 @@ namespace MinGent
             if (!Approve(a)) return "The user did not allow writing to " + full + ". Do not try another way; ask the user if you need it.";
             if (!guard) lock (ps.AskLock) ps.TaskKeys.Add(sameFolder);
             return null;
+        }
+
+        bool OpenInTabs(string full)
+        {
+            if (Editor == null) return false;
+            try
+            {
+                foreach (TabInfo t in Editor.Tabs(false))
+                    if (!string.IsNullOrEmpty(t.Path) && string.Equals(System.IO.Path.GetFullPath(t.Path), full, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            catch { }
+            return false;
         }
 
         public string CheckRead(string full)
@@ -3357,7 +3370,7 @@ namespace MinGent
             string home = SafeFolder(Environment.SpecialFolder.UserProfile);
             sb.Append("- Folders: home ").Append(home).Append(", Desktop ").Append(SafeFolder(Environment.SpecialFolder.DesktopDirectory))
               .Append(", Documents ").Append(SafeFolder(Environment.SpecialFolder.MyDocuments)).Append(", Downloads ").Append(System.IO.Path.Combine(home, "Downloads")).Append(".\n");
-            sb.Append("- Workspace: the folder relative paths resolve in. It is the folder of the active tab, or MinGent's default folder for new files when the active tab is not saved in a folder.\n");
+            sb.Append("- Workspace: the folder relative paths resolve in and new files go to: this chat's own folder, unless the user chose another folder for the chat. Files open in the user's tabs count as part of it.\n");
             sb.Append("- Permissions: in Auto mode your actions run without asking, except risky ones, which the app asks the user about. In Ask mode the app asks the user before commands, web access and writes outside the workspace. In Full auto mode nothing asks, so be extra careful: don't do anything destructive or irreversible the user did not ask for.\n");
             if (browser) sb.Append("- The browser is MinGent's own Chromium browser, separate from the user's browser and logins.\n");
             if (!vision) sb.Append("- The current model cannot see images.\n");
@@ -3501,7 +3514,7 @@ namespace MinGent
         {
             StringBuilder sb = new StringBuilder("[");
             sb.Append(DateTime.Now.ToString("dddd d MMMM yyyy, HH:mm", CultureInfo.InvariantCulture));
-            if (!string.IsNullOrEmpty(workspace)) sb.Append(" | Workspace: ").Append(workspace).Append(workspaceIsDefault ? " (default folder)" : "");
+            if (!string.IsNullOrEmpty(workspace)) sb.Append(" | Workspace: ").Append(workspace).Append(workspaceIsDefault ? " (this chat's own folder)" : "");
             sb.Append(level == "full" ? " | Full auto mode" : level == "auto" ? " | Auto mode" : " | Ask mode");
             string t = TabsText(tabs);
             if (session == null || t != session.LastTabs)

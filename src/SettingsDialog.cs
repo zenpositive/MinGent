@@ -525,16 +525,16 @@ namespace MinGent
         void BuildAgent()
         {
             ScrollHost p = AddPage("Agent", "face");
-            Section(p, "Workspace", "When the open notes tab is a saved file, the agent works in that file's folder. Otherwise new files go here.");
+            Section(p, "Workspace", "Every chat gets its own folder in here for the files it makes. Deleting a chat deletes its folder. Your skills and scheduled tasks' folders live here too.");
             Card c = NewCard(p);
             workspace = MakeField(s.AiWorkspace.Length > 0 ? s.AiWorkspace : s.DefaultWorkspace, false, false);
             PillButton browse = new PillButton("Browse...", Th, false);
             browse.Click += delegate
             {
-                string picked = FolderPicker.Pick(this, "Choose the default folder", "Choose the folder new files go to.", workspace.Box.Text);
+                string picked = FolderPicker.Pick(this, "Choose the Files folder", "Choose the folder that holds each chat's own folder.", workspace.Box.Text);
                 if (!string.IsNullOrEmpty(picked)) workspace.Box.Text = picked;
             };
-            c.Add(new FieldRow(Th, "Default folder", null, workspace, 0, UI.S(32), true, browse));
+            c.Add(new FieldRow(Th, "Files folder", null, workspace, 0, UI.S(32), true, browse));
             Place(p, c);
 
             Section(p, "Your instructions", "Sent with every chat, like how you want answers or facts about your setup. For one project, ask the agent to keep notes in MINGENT.md in its folder.");
@@ -649,17 +649,39 @@ namespace MinGent
             taskOn.Checked = t.On;
             if (taskRemove != null) taskRemove.Enabled = taskAt >= 0;
             DayNeeded();
-            List<string> known = Projects.Load();
-            string own = Projects.Clean(t.Folder);
-            if (own != null && Projects.Find(known, own) < 0) known.Add(own);
-            List<string> shown = Projects.Names(known);
+            FolderChoices(WorkFolders.Clean(t.Folder));
+            taskLoading = false;
+        }
+
+        void FolderChoices(string chosen)
+        {
             taskFolders.Clear();
             taskFolders.Add("");
-            taskFolders.AddRange(known);
-            shown.Insert(0, "The default folder");
-            taskFolder.SetItems(shown.ToArray(), own != null ? Projects.Find(known, own) + 1 : 0);
-            for (int i = 0; i < known.Count; i++) taskFolder.SetNote(i + 1, known[i]);
+            List<string> shown = new List<string>();
+            shown.Add("Its own folder");
+            if (chosen != null) { taskFolders.Add(chosen); shown.Add(WorkFolders.Name(chosen)); }
+            shown.Add("Choose a folder...");
+            taskFolder.SetItems(shown.ToArray(), chosen != null ? 1 : 0);
+            string name = taskName != null ? taskName.Box.Text.Trim() : "";
+            taskFolder.SetNote(0, WorkFolders.TaskFolder(s.DefaultWorkspace, name.Length > 0 ? name : "the task's name"));
+            if (chosen != null) taskFolder.SetNote(1, chosen);
+            taskFolderAt = taskFolder.SelectedIndex;
+        }
+
+        int taskFolderAt;
+
+        void PickTaskFolder()
+        {
+            if (taskLoading || taskFolder.SelectedIndex != taskFolders.Count) { taskFolderAt = taskFolder.SelectedIndex; return; }
+            string start = taskFolderAt > 0 && taskFolderAt < taskFolders.Count ? taskFolders[taskFolderAt] : "";
+            if (start.Length == 0) { try { start = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments); } catch { } }
+            string picked = FolderPicker.Pick(this, "Work in a folder", "Choose the folder the task works in.", start);
+            string why = string.IsNullOrEmpty(picked) ? "" : WorkFolders.Check(picked);
+            taskLoading = true;
+            if (string.IsNullOrEmpty(picked) || why != null) taskFolder.SelectedIndex = taskFolderAt;
+            else FolderChoices(WorkFolders.Clean(picked));
             taskLoading = false;
+            if (!string.IsNullOrEmpty(why)) Alert.Show(this, Th, why, Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         string StoreTask()
@@ -721,8 +743,9 @@ namespace MinGent
             taskTime = MakeField("08:00", false, false);
             taskTime.Box.AccessibleName = "Time";
             c.Add(new FieldRow(Th, "Time", "Such as 8:00 or 17:30.", taskTime, UI.S(100), UI.S(32), false, null));
-            taskFolder = MakeCombo(new string[] { "The default folder" }, 0);
-            Row(c, "Work in", "The folder the run works in: the default folder, or one of your projects. A project is a folder you chose with the folder button above a chat.", taskFolder, UI.S(260));
+            taskFolder = MakeCombo(new string[] { "Its own folder" }, 0);
+            taskFolder.SelectedIndexChanged += delegate { PickTaskFolder(); };
+            Row(c, "Work in", "Its own folder keeps what every run makes in one place, in Scheduled tasks in MinGent's Files folder. Or choose another folder.", taskFolder, UI.S(260));
             taskOn = Switch(c, "Switched on", "Off keeps the task but doesn't run it.", true);
             PillButton remove = new PillButton("Delete", Th, false);
             taskRemove = remove;
@@ -883,11 +906,11 @@ namespace MinGent
             {
                 string werr;
                 string wfull = AgentPaths.Resolve(wsText, null, out werr);
-                string why = wfull == null ? (werr ?? "it is not a valid folder path") : AgentPaths.InProgram(wfull) ? "it holds MinGent itself; its Files folder can be the default folder" : AgentPaths.WriteBlocked(Path.Combine(wfull, "x.txt"));
+                string why = wfull == null ? (werr ?? "it is not a valid folder path") : AgentPaths.InProgram(wfull) ? "it holds MinGent itself; choose its Files folder or a folder outside it" : AgentPaths.WriteBlocked(Path.Combine(wfull, "x.txt"));
                 if (why != null)
                 {
                     Select(2);
-                    Alert.Show(this, Th, "The default folder can't be used:\n" + wsText + "\n\n" + why, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    Alert.Show(this, Th, "The Files folder can't be used:\n" + wsText + "\n\n" + why, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     workspace.Box.Focus();
                     workspace.Box.SelectAll();
                     return false;

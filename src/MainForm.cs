@@ -48,7 +48,6 @@ namespace MinGent
         public string AiEffort = "";
         public string AiInstructions = "";
         public string AiWorkspace = "";
-        public string AiProject = "";
         public string QuickKey = "";
         public string AiLastChat = "";
         public float ChatFontSize = 10f;
@@ -166,7 +165,6 @@ namespace MinGent
                         case "aiEffort": if (v.Length < 20) s.AiEffort = v; break;
                         case "aiInstructions": s.AiInstructions = Unesc(v); break;
                         case "aiWorkspace": s.AiWorkspace = Program.FromStored(v); break;
-                        case "aiProject": s.AiProject = Program.FromStored(v); break;
                         case "oneDriveNoted": s.OneDriveNoted = v == "1"; break;
                         case "quickKey": s.QuickKey = QuickEntry.Clean(v); break;
                         case "aiLastChat": if (v.IndexOfAny(Path.GetInvalidFileNameChars()) < 0) s.AiLastChat = v; break;
@@ -274,7 +272,6 @@ namespace MinGent
                 w("aiEffort", AiEffort);
                 w("aiInstructions", Esc(AiInstructions));
                 w("aiWorkspace", Program.ToStored(AiWorkspace));
-                w("aiProject", Program.ToStored(AiProject));
                 if (OneDriveNoted) w("oneDriveNoted", "1");
                 w("quickKey", QuickKey);
                 w("aiLastChat", AiLastChat);
@@ -522,14 +519,6 @@ namespace MinGent
             sidebar.ArchiveClicked += delegate (string p) { (PanelWith(p) ?? aiPanel).ArchiveChat(p); RefreshSidebar(); };
             sidebar.RestoreClicked += delegate (string p) { aiPanel.RestoreChat(p); RefreshSidebar(); };
             sidebar.ArchiveViewClicked += delegate { showArchived = !showArchived; RefreshSidebar(); };
-            sidebar.ProjectClicked += delegate (string f) { SelectProject(Projects.Same(f, settings.AiProject) ? "" : f); };
-            sidebar.ProjectRemoved += delegate (string f)
-            {
-                List<string> known = Projects.Load();
-                if (Projects.Forget(known, f)) Projects.Save(known);
-                if (Projects.Same(f, settings.AiProject)) SelectProject("");
-                RefreshSidebar();
-            };
             sidebar.DeleteClicked += DeleteChat;
             sidebar.RenameClicked += RenameChat;
             sidebar.SettingsClicked += delegate { ShowSettings(); };
@@ -1139,24 +1128,8 @@ namespace MinGent
             if (aiPanel == null) return;
             int archived = aiPanel.ArchivedCount();
             if (archived == 0) showArchived = false;
-            List<string> projects = Projects.Load();
-            if (settings.AiProject.Length > 0 && Projects.Find(projects, settings.AiProject) < 0)
-            {
-                settings.AiProject = "";
-                settings.Save();
-                aiPanel.Project = "";
-            }
-            sidebar.SetProjects(projects, settings.AiProject);
             sidebar.SetChats(showArchived ? aiPanel.ListArchived() : aiPanel.ListChats(), aiPanel.ActiveChatPath, aiPanel.Running, archived, showArchived);
             UpdateWork();
-        }
-
-        void SelectProject(string folder)
-        {
-            settings.AiProject = folder ?? "";
-            settings.Save();
-            foreach (AiPanel p in panels) p.Project = settings.AiProject;
-            RefreshSidebar();
         }
 
         void OpenFromSidebar(string path)
@@ -1241,7 +1214,6 @@ namespace MinGent
             p.NotesClicked += delegate { if (p == aiPanel) ShowNotes(!shell.NotesOn, true); };
             p.BrowserClicked += delegate { if (p == aiPanel) ShowBrowser(!shell.BrowserOn, true); };
             p.ChatsChanged += delegate { RefreshSidebar(); };
-            p.Project = settings.AiProject;
             p.StateChanged += delegate { PanelState(p); };
             p.TitleNoteChanged += delegate { if (p == aiPanel) UpdateTitle(); };
             p.RenameRequested += delegate { if (p.ActiveChatPath != null) RenameChat(p.ActiveChatPath); };
@@ -1438,12 +1410,12 @@ namespace MinGent
             return true;
         }
 
-        const string DeleteAllText = "Delete all chats?\n\nThey're erased from this PC, archived ones too, and can't be brought back. What the agent remembered from them is forgotten; facts you added yourself in Settings > Memory stay.";
+        const string DeleteAllText = "Delete all chats?\n\nThey're erased from this PC, archived ones too, and can't be brought back. Each chat's own folder in Files goes with it; other folders the agent worked in stay. What the agent remembered from them is forgotten; facts you added yourself in Settings > Memory stay.";
 
         string DeleteAllPrompt()
         {
             List<string> unsaved = UnsavedNotes(null);
-            return DeleteAllText + (unsaved.Count > 0 ? "\n\nTheir notes close too, and unsaved changes in " + AiPanel.NoteNames(unsaved) + " are lost. Files saved on your PC stay." : "");
+            return DeleteAllText + (unsaved.Count > 0 ? "\n\nTheir notes close too, and unsaved changes in " + AiPanel.NoteNames(unsaved) + " are lost." : "");
         }
 
         bool AskErase(IWin32Window owner, out bool downloads, out bool outputs)
@@ -1811,20 +1783,8 @@ namespace MinGent
 
         public string WorkspaceFolder(out bool isDefault)
         {
-            bool def = true;
-            string ws = OnUi<string>(delegate ()
-            {
-                Document d = NotesShown ? CurDoc : null;
-                string folder = null;
-                if (d != null && d.Path != null)
-                {
-                    try { folder = Path.GetDirectoryName(Path.GetFullPath(d.Path)); } catch { folder = null; }
-                }
-                if (folder != null && !BroadFolder(folder) && !AgentPaths.InProgram(folder) && AgentPaths.WriteBlocked(Path.Combine(folder, "x.txt")) == null) { def = false; return folder; }
-                return settings.DefaultWorkspace;
-            });
-            isDefault = def;
-            return ws;
+            isDefault = true;
+            return settings.DefaultWorkspace;
         }
 
         static bool OneDriveFolder()
@@ -1835,14 +1795,6 @@ namespace MinGent
                 if (!string.IsNullOrEmpty(d) && Program.Inside(Program.AppDir, d)) return true;
             }
             return false;
-        }
-
-        static bool BroadFolder(string folder)
-        {
-            string f = folder.TrimEnd('\\');
-            if (f.Length <= 3) return true;
-            try { return Sandbox.Personal(f) != null; }
-            catch { return true; }
         }
 
         public void RunEnded() { if (browser != null) browser.AgentRunEnded(); }

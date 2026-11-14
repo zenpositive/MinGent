@@ -5,12 +5,8 @@ using System.Text;
 
 namespace MinGent
 {
-    static class Projects
+    static class WorkFolders
     {
-        public const int Most = 12;
-
-        public static string FilePath { get { return Path.Combine(Program.DataDir, "projects.json"); } }
-
         public static string Clean(string folder)
         {
             if (string.IsNullOrEmpty(folder) || folder.Trim().Length == 0) return null;
@@ -30,61 +26,12 @@ namespace MinGent
             return x != null && y != null && string.Equals(x, y, StringComparison.OrdinalIgnoreCase);
         }
 
-        public static int Find(List<string> list, string folder)
-        {
-            for (int i = 0; i < list.Count; i++) if (Same(list[i], folder)) return i;
-            return -1;
-        }
-
-        public static bool Add(List<string> list, string folder)
-        {
-            string f = Clean(folder);
-            if (f == null || Find(list, f) >= 0) return false;
-            list.Insert(0, f);
-            while (list.Count > Most) list.RemoveAt(list.Count - 1);
-            return true;
-        }
-
-        public static bool Forget(List<string> list, string folder)
-        {
-            int at = Find(list, folder);
-            if (at < 0) return false;
-            list.RemoveAt(at);
-            return true;
-        }
-
         public static string Name(string folder)
         {
             string f = Clean(folder);
             if (f == null) return "";
             string n = Path.GetFileName(f);
             return string.IsNullOrEmpty(n) ? f : n;
-        }
-
-        static string Parent(string folder)
-        {
-            try
-            {
-                string p = Path.GetDirectoryName(Clean(folder) ?? "");
-                return string.IsNullOrEmpty(p) ? "" : Name(p);
-            }
-            catch { return ""; }
-        }
-
-        public static List<string> Names(List<string> folders)
-        {
-            List<string> names = new List<string>();
-            foreach (string f in folders) names.Add(Name(f));
-            for (int i = 0; i < names.Count; i++)
-            {
-                bool twice = false;
-                for (int k = 0; k < folders.Count && !twice; k++)
-                    twice = k != i && string.Equals(Name(folders[k]), Name(folders[i]), StringComparison.OrdinalIgnoreCase);
-                if (!twice) continue;
-                string p = Parent(folders[i]);
-                if (p.Length > 0) names[i] = names[i] + " (" + p + ")";
-            }
-            return names;
         }
 
         public static string Check(string folder)
@@ -102,37 +49,103 @@ namespace MinGent
             return null;
         }
 
-        public static List<string> Load()
+        static readonly string[] Reserved = { "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9" };
+
+        public static string SafeName(string title)
         {
-            List<string> list = new List<string>();
-            try
+            StringBuilder sb = new StringBuilder();
+            bool space = false;
+            foreach (char ch in title ?? "")
             {
-                if (Program.Erased || !File.Exists(FilePath)) return list;
-                List<object> items = Json.List(Json.Parse(File.ReadAllText(FilePath)), "folders");
-                if (items == null) return list;
-                foreach (object o in items)
-                {
-                    string f = Clean(Program.FromStored(o as string));
-                    if (f != null && Find(list, f) < 0 && list.Count < Most) list.Add(f);
-                }
+                bool bad = ch < 32 || ch == 127 || "<>:\"/\\|?*".IndexOf(ch) >= 0 || char.IsSurrogate(ch);
+                if (bad || char.IsWhiteSpace(ch)) { space = sb.Length > 0; continue; }
+                if (space) { sb.Append(' '); space = false; }
+                sb.Append(ch);
+                if (sb.Length >= 60) break;
             }
-            catch { }
-            return list;
+            string s = sb.ToString().Trim().TrimEnd('.', ' ', '\u2026').TrimStart('.', ' ');
+            if (s.Length == 0) s = "Chat";
+            foreach (string r in Reserved)
+                if (string.Equals(s, r, StringComparison.OrdinalIgnoreCase) || s.StartsWith(r + ".", StringComparison.OrdinalIgnoreCase)) { s = s + " chat"; break; }
+            return s;
         }
 
-        public static bool Save(List<string> list)
+        public static string Unique(string parent, string name, ICollection<string> taken)
+        {
+            for (int n = 1; n < 10000; n++)
+            {
+                string candidate = Path.Combine(parent, n == 1 ? name : name + " " + n);
+                bool used = false;
+                try { used = Directory.Exists(candidate) || File.Exists(candidate); } catch { used = true; }
+                if (!used && taken != null) foreach (string t in taken) if (Same(t, candidate)) { used = true; break; }
+                if (!used) return candidate;
+            }
+            return Path.Combine(parent, name + " " + Guid.NewGuid().ToString("N").Substring(0, 8));
+        }
+
+        public const string TasksName = "Scheduled tasks";
+
+        public static string TaskFolder(string workRoot, string taskName)
+        {
+            return Path.Combine(Path.Combine(workRoot, TasksName), SafeName(taskName));
+        }
+
+        public static List<string> Kept(string workRoot)
+        {
+            List<string> l = new List<string>();
+            string skills = Skills.Folder(workRoot);
+            if (skills != null) l.Add(skills);
+            l.Add(Path.Combine(workRoot, TasksName));
+            return l;
+        }
+
+        public static bool IsOwnFolder(string folder, string workRoot)
+        {
+            string f = Clean(folder), root = Clean(workRoot);
+            if (f == null || root == null || Same(f, root)) return false;
+            string parent;
+            try { parent = Path.GetDirectoryName(f); } catch { return false; }
+            if (!Same(parent, root)) return false;
+            foreach (string k in Kept(root)) if (Same(f, k)) return false;
+            return true;
+        }
+
+        static bool Walk(string dir, Action<string> file)
+        {
+            foreach (string f in Directory.GetFiles(dir)) file(f);
+            foreach (string d in Directory.GetDirectories(dir))
+            {
+                if ((File.GetAttributes(d) & FileAttributes.ReparsePoint) != 0) { file(d); continue; }
+                Walk(d, file);
+            }
+            return true;
+        }
+
+        public static int CountFiles(string folder)
         {
             try
             {
-                if (Program.Erased) return false;
-                List<object> items = new List<object>();
-                foreach (string f in list) items.Add(Program.ToStored(f));
-                Directory.CreateDirectory(Program.DataDir);
-                string tmp = FilePath + ".tmp";
-                File.WriteAllText(tmp, Json.Write(Json.O("folders", items)), new UTF8Encoding(false));
-                if (File.Exists(FilePath)) File.Delete(FilePath);
-                File.Move(tmp, FilePath);
-                return true;
+                if (!Directory.Exists(folder)) return 0;
+                int n = 0;
+                Walk(folder, delegate (string f) { n++; });
+                return n;
+            }
+            catch { return -1; }
+        }
+
+        public static bool Delete(string folder, string workRoot)
+        {
+            if (!IsOwnFolder(folder, workRoot)) return false;
+            try
+            {
+                if (!Directory.Exists(folder)) return true;
+                if ((File.GetAttributes(folder) & FileAttributes.ReparsePoint) != 0) { Directory.Delete(folder, false); return true; }
+                Walk(folder, delegate (string f)
+                {
+                    try { if (File.Exists(f)) File.SetAttributes(f, FileAttributes.Normal); } catch { }
+                });
+                Directory.Delete(folder, true);
+                return !Directory.Exists(folder);
             }
             catch { return false; }
         }

@@ -39,7 +39,6 @@ namespace MinGent
         Theme th = Theme.Light(Color.SteelBlue);
 
         readonly FlatButton bTemp = new FlatButton("", "temp", true);
-        readonly FolderChip bFolder = new FolderChip();
         readonly SlashList slash = new SlashList();
         bool slashOff;
         readonly FlatButton bNotes = new FlatButton("", "notes", false);
@@ -66,7 +65,8 @@ namespace MinGent
         AgentSession session = new AgentSession();
         string chatFile;
         string chatTitle = "";
-        string chatFolder = "";
+        string chatFolder = "", ownFolder = "";
+        static readonly List<string> handedOut = new List<string>();
         bool titleSet;
         static int runCounter;
         int curTurn, turnCounter;
@@ -100,8 +100,7 @@ namespace MinGent
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             SetStyle(ControlStyles.Selectable, false);
             Font = UI.Font;
-            Controls.AddRange(new Control[] { slash, composer, todo, bFolder, bTemp, bNotes, bBrowser, bMore, bClose, chat });
-            bFolder.Click += delegate { ShowFolderMenu(); };
+            Controls.AddRange(new Control[] { slash, composer, todo, bTemp, bNotes, bBrowser, bMore, bClose, chat });
             slash.Picked += delegate (int i) { RunSlash(i); };
             composer.Box.TextChanged += delegate { UpdateSlash(); };
             composer.Box.LostFocus += delegate { HideSlash(); };
@@ -351,8 +350,8 @@ namespace MinGent
             ClearView(false, false);
             BrowserPane pane = host.Browser;
             if (had && (pane == null || !pane.UserIsUsing)) host.ResetBrowser();
-            string folder = Projects.Clean(t.Folder) ?? "";
-            if (folder.Length > 0 && Projects.Check(folder) != null)
+            string folder = WorkFolders.Clean(t.Folder) ?? "";
+            if (folder.Length > 0 && WorkFolders.Check(folder) != null)
             {
                 NewChatFile(t.Name);
                 titleSet = true;
@@ -364,8 +363,8 @@ namespace MinGent
             }
             if (folder.Length == 0)
             {
-                try { Directory.CreateDirectory(settings.DefaultWorkspace); } catch { }
-                folder = Projects.Clean(settings.DefaultWorkspace) ?? "";
+                folder = WorkFolders.TaskFolder(FilesRoot, t.Name);
+                try { Directory.CreateDirectory(folder); } catch { }
             }
             chatFolder = folder;
             UpdateEmptyState();
@@ -430,7 +429,6 @@ namespace MinGent
             tip.Th = t;
             BackColor = t.Back;
             foreach (FlatButton b in new FlatButton[] { bTemp, bNotes, bBrowser, bMore, bClose }) b.SetTheme(t);
-            bFolder.SetTheme(t);
             slash.SetTheme(t);
             chat.SetTheme(t);
             todo.SetTheme(t);
@@ -477,11 +475,6 @@ namespace MinGent
             bNotes.SetBounds(x, y0, b, b); x -= b + UI.S(4);
             bTemp.SetBounds(x, y0, b, b);
             bTemp.Visible = temporary || EmptyLayout;
-            int headRoom = (bTemp.Visible ? bTemp.Left : bNotes.Left) - UI.S(12) - UI.S(14);
-            int fw = Math.Min(bFolder.PreferredWidth, UI.S(190));
-            bFolder.Compact = headRoom < fw + UI.S(110);
-            bFolder.SetBounds(UI.S(14), y0, bFolder.Compact ? UI.S(46) : fw, b);
-            bFolder.Visible = headRoom >= UI.S(46);
             int pad = UI.S(16);
             int colW = Math.Max(UI.S(120), Math.Min(UI.S(760), w - pad * 2 - UI.S(6)));
             int colX = Math.Max(pad, (w - colW) / 2);
@@ -616,11 +609,6 @@ namespace MinGent
             {
                 int right = (bTemp.Visible ? bTemp.Left : bNotes.Left) - UI.S(12);
                 int left = UI.S(20);
-                if (bFolder.Visible)
-                {
-                    Glyphs.Draw("right", g, new Rectangle(bFolder.Right + UI.S(1), UI.S(6), UI.S(14), UI.S(30)), th.ChromeDim);
-                    left = bFolder.Right + UI.S(17);
-                }
                 int room = Math.Max(UI.S(20), right - left);
                 using (Font f = new Font(UI.Font.FontFamily, UI.Font.Size * 1.04f, FontStyle.Regular))
                 {
@@ -666,59 +654,58 @@ namespace MinGent
 
         public string ChatFolder { get { return chatFolder; } }
 
+        public string OwnFolder { get { return ownFolder; } }
+
+        string FilesRoot { get { return WorkFolders.Clean(settings.DefaultWorkspace) ?? settings.DefaultWorkspace; } }
+
+        bool ElsewhereFolder { get { return chatFolder.Length > 0 && !WorkFolders.Same(chatFolder, ownFolder); } }
+
         public string WorkFolder(out bool isDefault)
         {
-            if (chatFolder.Length > 0)
+            if (ElsewhereFolder)
             {
                 bool there;
                 try { there = Directory.Exists(chatFolder); } catch { there = false; }
-                if (there) { isDefault = Projects.Same(chatFolder, settings.DefaultWorkspace); return chatFolder; }
+                if (there) { isDefault = false; return chatFolder; }
             }
-            return host.WorkspaceFolder(out isDefault);
+            isDefault = true;
+            return ownFolder.Length > 0 ? ownFolder : FilesRoot;
         }
 
-        string project = "";
-
-        string ProjectFolder() { return project.Length > 0 && Projects.Check(project) == null ? project : ""; }
-
-        public string Project
+        string NewOwnFolder(string title)
         {
-            get { return project; }
-            set
+            List<string> taken = WorkFolders.Kept(FilesRoot);
+            lock (handedOut) taken.AddRange(handedOut);
+            foreach (string dir in new string[] { ChatDir, ArchiveDir })
             {
-                string f = string.IsNullOrEmpty(value) ? "" : Projects.Clean(value) ?? "";
-                if (string.Equals(f, project, StringComparison.OrdinalIgnoreCase)) return;
-                string was = project;
-                project = f;
-                if (chat.Items.Count > 0 || running || chatFile != null) return;
-                if (chatFolder.Length > 0 && !Projects.Same(chatFolder, was)) return;
-                chatFolder = ProjectFolder();
-                UpdateEmptyState();
+                string[] files = new string[0];
+                try { if (Directory.Exists(dir)) files = Directory.GetFiles(dir, "*.json"); } catch { }
+                foreach (string f in files)
+                {
+                    DateTime w;
+                    try { w = File.GetLastWriteTimeUtc(f); } catch { continue; }
+                    string o = ReadOwn(f, w);
+                    if (o.Length > 0) taken.Add(o);
+                }
             }
+            string folder = WorkFolders.Unique(FilesRoot, WorkFolders.SafeName(title), taken);
+            lock (handedOut) handedOut.Add(folder);
+            return folder;
         }
 
-        void UpdateFolderChip()
+        void GiveOwnFolder(string title)
         {
-            string where = "";
-            bool def = true;
-            try { where = WorkFolder(out def); } catch { }
-            string name = Projects.Name(where);
-            string hint = (where.Length > 0 ? "Works in " + where : "Work folder") + (chatFolder.Length > 0 ? "" : def ? " (the default folder)" : " (the open file's folder)") + "\nClick to choose a project folder for this chat.";
-            if (bFolder.FolderName != name)
-            {
-                bFolder.FolderName = name;
-                PerformLayout();
-                Invalidate();
-            }
-            if (tip.GetToolTip(bFolder) != hint) tip.SetToolTip(bFolder, hint);
+            if (ownFolder.Length > 0) return;
+            ownFolder = NewOwnFolder(title);
+            if (chatFolder.Length == 0) chatFolder = ownFolder;
         }
 
         public bool SetChatFolder(string folder, bool note)
         {
-            string f = string.IsNullOrEmpty(folder) ? "" : Projects.Clean(folder) ?? "";
-            if (f.Length > 0)
+            string f = string.IsNullOrEmpty(folder) ? ownFolder : WorkFolders.Clean(folder) ?? "";
+            if (f.Length > 0 && !WorkFolders.Same(f, ownFolder))
             {
-                string why = Projects.Check(f);
+                string why = WorkFolders.Check(f);
                 if (why != null)
                 {
                     Alert.Show(FindForm(), th, why, Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -734,7 +721,7 @@ namespace MinGent
                 {
                     bool def;
                     string now = WorkFolder(out def);
-                    Notice("This chat now works in " + ShortPath(now) + ".", 0);
+                    Notice(def ? "This chat works in its own folder again, " + ShortPath(now) + "." : "This chat now works in " + ShortPath(now) + ".", 0);
                     chat.ScrollToEnd();
                 }
                 SaveChat();
@@ -745,20 +732,11 @@ namespace MinGent
 
         void ChooseFolder()
         {
-            string start = chatFolder;
-            if (start.Length == 0) { bool def; try { start = WorkFolder(out def); } catch { start = ""; } }
-            string picked = FolderPicker.Pick(FindForm(), "Choose the folder this chat works in", "Choose the folder this chat works in. MinGent remembers it as a project.", start);
+            string start = ElsewhereFolder ? chatFolder : "";
+            if (start.Length == 0) { try { start = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments); } catch { } }
+            string picked = FolderPicker.Pick(FindForm(), "Work in a folder", "Choose the folder this chat works in. The agent changes files in it without asking each time in Auto.", start);
             if (string.IsNullOrEmpty(picked)) return;
-            if (!SetChatFolder(picked, true)) return;
-            List<string> list = Projects.Load();
-            if (Projects.Add(list, picked)) { Projects.Save(list); Changed(); }
-        }
-
-        void ForgetProject(string folder)
-        {
-            List<string> list = Projects.Load();
-            if (Projects.Forget(list, folder)) Projects.Save(list);
-            Changed();
+            SetChatFolder(picked, true);
         }
 
         void OpenWorkFolder()
@@ -768,54 +746,8 @@ namespace MinGent
             try { Directory.CreateDirectory(ws); System.Diagnostics.Process.Start(Native.WindowsExe("explorer.exe"), "\"" + ws + "\""); } catch { }
         }
 
-        static string MenuText(string text) { return (text ?? "").Replace("&", "&&"); }
-
-        void ShowFolderMenu()
-        {
-            ContextMenuStrip m = Menus.Create(th);
-            m.ShowCheckMargin = true;
-            m.ShowItemToolTips = true;
-            List<string> list = Projects.Load();
-            bool own = chatFolder.Length > 0;
-            bool loose = own && Projects.Find(list, chatFolder) < 0;
-            if (loose) list.Insert(0, chatFolder);
-            List<string> names = Projects.Names(list);
-            for (int i = 0; i < list.Count; i++)
-            {
-                string f = list[i];
-                bool onlyHere = loose && i == 0;
-                ToolStripMenuItem it = Menus.Item(MenuText(names[i]) + (onlyHere ? " (this chat only)" : ""), own && Projects.Same(f, chatFolder), delegate { SetChatFolder(f, true); });
-                it.ToolTipText = f + (onlyHere ? "\nThis chat works here, but the folder is not in your projects." : "");
-                it.Enabled = !running;
-                m.Items.Add(it);
-            }
-            string fallback = "";
-            if (!own) { bool d; try { fallback = Projects.Name(WorkFolder(out d)); } catch { } }
-            ToolStripMenuItem none = Menus.Item(fallback.Length > 0 ? "No project (" + MenuText(fallback) + ")" : "No project", !own, delegate { SetChatFolder("", true); });
-            none.ToolTipText = "Works in the folder of the file open in Notes, or in the default folder";
-            none.Enabled = !running;
-            m.Items.Add(none);
-            m.Items.Add(new ToolStripSeparator());
-            ToolStripMenuItem choose = Menus.Item("Choose a folder...", false, delegate { ChooseFolder(); });
-            choose.Enabled = !running;
-            m.Items.Add(choose);
-            if (own && Projects.Find(Projects.Load(), chatFolder) >= 0)
-            {
-                string mine = chatFolder;
-                m.Items.Add(Menus.Item("Remove \u201C" + MenuText(Projects.Name(mine)) + "\u201D from this list", false, delegate
-                {
-                    ForgetProject(mine);
-                    Notice("Removed " + Projects.Name(mine) + " from your projects. This chat still works in " + ShortPath(mine) + "; pick another folder or No project to change that.", 0);
-                }));
-            }
-            m.Items.Add(Menus.Item("Open the work folder", false, delegate { OpenWorkFolder(); }));
-            m.Closed += delegate { BeginInvoke(new Action(delegate { m.Dispose(); })); };
-            m.Show(bFolder, new Point(0, bFolder.Height + UI.S(2)));
-        }
-
         void UpdateEmptyState()
         {
-            UpdateFolderChip();
             chat.EmptyTitle = temporary ? "Temporary chat" : "What should we work on?";
             chat.EmptyActions.Clear();
             string where = "";
@@ -842,11 +774,11 @@ namespace MinGent
                 string folder = where.Length > 0 ? ShortPath(where) : "";
                 if (temporary)
                 {
-                    chat.EmptyText = "Not saved to your chats, and memory stays off. It's gone when you start a new chat or close MinGent.";
+                    chat.EmptyText = "Not saved to your chats, and memory stays off. It's gone, with the files it makes in its folder, when you start a new chat or close MinGent.";
                     chat.Invalidate();
                     return;
                 }
-                chat.EmptyText = (folder.Length > 0 ? "Works in " + folder + (def || chatFolder.Length > 0 ? "" : " (the open file's folder)") + "  \u00B7  " : "") +
+                chat.EmptyText = (folder.Length > 0 ? (def ? "Works in its own folder in " + ShortPath(FilesRoot) : "Works in " + folder) + "  \u00B7  " : "") +
                                  (composer.Plan ? "Plans first: researches, then waits for you to approve a plan" :
                                   level == "full" ? "Full auto: asks nothing" : level == "auto" ? "Auto: acts without asking, except for risky steps" : "Asks before it runs commands or changes things");
             }
@@ -1867,22 +1799,22 @@ namespace MinGent
         void StartRun(string text, List<Attachment> atts, string ctxText, string label, ChatItem reuse)
         {
             holdNoticeShown = false;
-            if (chatFolder.Length > 0)
+            bool fresh = chatFile == null;
+            if (fresh && !temporary) NewChatFile(text.Trim().Length > 0 || atts == null || atts.Count == 0 ? text : atts[0].Name);
+            else if (fresh) chatTitle = "Temporary chat";
+            GiveOwnFolder(chatTitle);
+            if (ElsewhereFolder)
             {
                 bool there;
                 try { there = Directory.Exists(chatFolder); } catch { there = false; }
                 if (!there)
                 {
                     string gone = chatFolder;
-                    chatFolder = "";
+                    chatFolder = ownFolder;
                     UpdateEmptyState();
-                    bool def;
-                    Notice("The folder " + ShortPath(gone) + " can't be found, so this chat now works in " + ShortPath(WorkFolder(out def)) + ".", 1);
+                    Notice("The folder " + ShortPath(gone) + " can't be found, so this chat works in its own folder again.", 1);
                 }
             }
-            bool fresh = chatFile == null;
-            if (fresh && !temporary) NewChatFile(text.Trim().Length > 0 || atts == null || atts.Count == 0 ? text : atts[0].Name);
-            else if (fresh) chatTitle = "Temporary chat";
             ChatItem user = reuse ?? new ChatItem();
             curTurn = ++turnCounter;
             user.Turn = curTurn;
@@ -3002,6 +2934,7 @@ namespace MinGent
         void DiscardTemporary()
         {
             if (temporary && chat.Items.Count > 0) host.ClearBrowserHistory();
+            if (temporary && ownFolder.Length > 0) WorkFolders.Delete(ownFolder, FilesRoot);
         }
 
         void ClearView(bool temp, bool sameChat)
@@ -3014,7 +2947,7 @@ namespace MinGent
             chatFile = null;
             savedJson = null;
             chatTitle = "";
-            if (!sameChat) chatFolder = ProjectFolder();
+            if (!sameChat) { chatFolder = ""; ownFolder = ""; }
             titleSet = false;
             temporary = temp;
             if (!sameChat) conversation = ++conversations;
@@ -3201,7 +3134,7 @@ namespace MinGent
             return names[0] + ", " + names[1] + " and " + (names.Count - 2).ToString(CultureInfo.InvariantCulture) + " more";
         }
 
-        public bool ConfirmAndDelete(string path)
+        public string DeleteQuestion(string path, out string own)
         {
             bool active = string.Equals(path, chatFile, StringComparison.OrdinalIgnoreCase);
             string title = ChatTitleOf(path);
@@ -3209,11 +3142,31 @@ namespace MinGent
             string head = active && running ? "The agent is still working in this chat. Stop it and delete the chat?" :
                           "Delete \u201C" + (title.Length > 0 ? title : "Untitled chat") + "\u201D?";
             List<string> notes = host.UnsavedNotes(Path.GetFileName(path));
+            own = OwnOf(path);
+            if (!WorkFolders.IsOwnFolder(own, FilesRoot)) own = "";
+            int made = own.Length > 0 ? WorkFolders.CountFiles(own) : 0;
+            string folder = made == 1 ? "\n\nThe file in its folder is deleted too." :
+                            made > 1 ? "\n\nThe " + made.ToString(CultureInfo.InvariantCulture) + " files in its folder are deleted too." :
+                            made < 0 ? "\n\nIts folder is deleted too." : "";
             string body = "It is erased from this PC and can't be brought back." +
                           (facts > 0 ? " " + char.ToUpperInvariant(Things(facts)[0]) + Things(facts).Substring(1) + " the agent remembered in this chat " + (facts == 1 ? "is" : "are") + " forgotten too." : "") +
-                          (notes != null && notes.Count > 0 ? "\n\nIts notes close with it, and unsaved changes in " + NoteNames(notes) + " are lost. Files saved on your PC stay." : "");
-            if (!Alert.Confirm(FindForm(), th, head + "\n\n" + body, Program.AppName, active && running ? "Stop and delete" : "Delete", true)) return false;
-            active = string.Equals(path, chatFile, StringComparison.OrdinalIgnoreCase);
+                          folder +
+                          (notes != null && notes.Count > 0 ? "\n\nIts notes close with it, and unsaved changes in " + NoteNames(notes) + " are lost." + (folder.Length > 0 ? "" : " Files saved on your PC stay.") : "");
+            return head + "\n\n" + body;
+        }
+
+        public bool ConfirmAndDelete(string path)
+        {
+            string own;
+            string question = DeleteQuestion(path, out own);
+            bool active = string.Equals(path, chatFile, StringComparison.OrdinalIgnoreCase);
+            if (!Alert.Confirm(FindForm(), th, question, Program.AppName, active && running ? "Stop and delete" : "Delete", true)) return false;
+            return DeleteNow(path, own, true);
+        }
+
+        public bool DeleteNow(string path, string own, bool tell)
+        {
+            bool active = string.Equals(path, chatFile, StringComparison.OrdinalIgnoreCase);
             List<string> list = ChatFacts(path);
             if (active)
             {
@@ -3225,7 +3178,9 @@ namespace MinGent
             MemoryStore.Forget(list);
             titleCache.Remove(path);
             host.ClearBrowserHistory();
-            if (!gone) Alert.Show(FindForm(), th, "MinGent could not erase this chat file. Another program may have it open:\n" + path, Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            bool folderGone = !gone || own.Length == 0 || WorkFolders.Delete(own, FilesRoot);
+            if (tell && !gone) Alert.Show(FindForm(), th, "MinGent could not erase this chat file. Another program may have it open:\n" + path, Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            else if (tell && !folderGone) Alert.Show(FindForm(), th, "The chat is deleted, but MinGent could not delete all of its folder. A program may have a file in it open:\n" + own, Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             if (string.Equals(settings.AiLastChat, Path.GetFileName(path), StringComparison.OrdinalIgnoreCase)) { settings.AiLastChat = ""; settings.Save(); }
             if (gone) deletedChats.Add(Path.GetFileName(path));
             NotesChanged();
@@ -3273,6 +3228,8 @@ namespace MinGent
         {
             List<string> facts = new List<string>();
             lock (session.Remembered) facts.AddRange(session.Remembered);
+            List<string> folders = new List<string>();
+            if (ownFolder.Length > 0) folders.Add(ownFolder);
             ClearView(false, false);
             foreach (string dir in new string[] { ChatDir, ArchiveDir })
             {
@@ -3284,12 +3241,14 @@ namespace MinGent
                             string ext = Path.GetExtension(f).ToLowerInvariant();
                             if (ext != ".json" && ext != ".tmp") continue;
                             if (ext == ".json") foreach (string x in ChatFacts(f)) if (!facts.Contains(x)) facts.Add(x);
+                            if (ext == ".json") { string o = OwnOf(f); if (o.Length > 0) folders.Add(o); }
                             if (SecureFile.Erase(f) && ext == ".json") deletedChats.Add(Path.GetFileName(f));
                         }
                 }
                 catch { }
             }
             MemoryStore.Forget(facts);
+            foreach (string o in folders) WorkFolders.Delete(o, FilesRoot);
             titleCache.Clear();
             settings.AiLastChat = "";
             settings.Save();
@@ -3304,34 +3263,43 @@ namespace MinGent
         {
             KeyValuePair<DateTime, string> c;
             if (titleCache.TryGetValue(f, out c) && c.Key == when) return c.Value;
-            string title = "", folder = "";
+            string title = "", own = "";
             try
             {
                 using (StreamReader r = new StreamReader(f, Encoding.UTF8))
                 {
-                    char[] buf = new char[1200];
+                    char[] buf = new char[4000];
                     int len = r.Read(buf, 0, buf.Length);
                     string head = new string(buf, 0, len);
                     System.Text.RegularExpressions.Match mt = System.Text.RegularExpressions.Regex.Match(head, "\"title\":\"((?:[^\"\\\\]|\\\\.)*)\"");
                     if (mt.Success) title = Json.TryParse("\"" + mt.Groups[1].Value + "\"") as string ?? "";
-                    System.Text.RegularExpressions.Match mf = System.Text.RegularExpressions.Regex.Match(head, "^\\{\"version\":\\d+,\"title\":\"(?:[^\"\\\\]|\\\\.)*\",\"folder\":\"((?:[^\"\\\\]|\\\\.)*)\"");
-                    if (mf.Success) folder = Program.FromStored(Json.TryParse("\"" + mf.Groups[1].Value + "\"") as string ?? "");
+                    System.Text.RegularExpressions.Match mf = System.Text.RegularExpressions.Regex.Match(head, "^\\{\"version\":\\d+,\"title\":\"(?:[^\"\\\\]|\\\\.)*\",\"folder\":\"((?:[^\"\\\\]|\\\\.)*)\"(?:,\"own\":\"((?:[^\"\\\\]|\\\\.)*)\")?");
+                    if (mf.Success && mf.Groups[2].Success) own = Program.FromStored(Json.TryParse("\"" + mf.Groups[2].Value + "\"") as string ?? "");
                 }
             }
             catch { }
             titleCache[f] = new KeyValuePair<DateTime, string>(when, title);
-            folderCache[f] = new KeyValuePair<DateTime, string>(when, folder);
+            ownCache[f] = new KeyValuePair<DateTime, string>(when, own);
             return title;
         }
 
-        readonly Dictionary<string, KeyValuePair<DateTime, string>> folderCache = new Dictionary<string, KeyValuePair<DateTime, string>>(StringComparer.OrdinalIgnoreCase);
+        readonly Dictionary<string, KeyValuePair<DateTime, string>> ownCache = new Dictionary<string, KeyValuePair<DateTime, string>>(StringComparer.OrdinalIgnoreCase);
 
-        string ReadFolder(string f, DateTime when)
+        string ReadOwn(string f, DateTime when)
         {
             KeyValuePair<DateTime, string> c;
-            if (!folderCache.TryGetValue(f, out c) || c.Key != when) { titleCache.Remove(f); ReadTitle(f, when); }
-            return folderCache.TryGetValue(f, out c) && c.Key == when ? c.Value : "";
+            if (!ownCache.TryGetValue(f, out c) || c.Key != when) { titleCache.Remove(f); ReadTitle(f, when); }
+            return ownCache.TryGetValue(f, out c) && c.Key == when ? c.Value : "";
         }
+
+        string OwnOf(string path)
+        {
+            if (string.Equals(path, chatFile, StringComparison.OrdinalIgnoreCase)) return ownFolder;
+            DateTime w;
+            try { w = File.GetLastWriteTimeUtc(path); } catch { return ""; }
+            return WorkFolders.Clean(ReadOwn(path, w)) ?? "";
+        }
+
 
         void RecoverTemps()
         {
@@ -3373,7 +3341,6 @@ namespace MinGent
                 c.When = w.ToLocalTime();
                 bool open = string.Equals(f, chatFile, StringComparison.OrdinalIgnoreCase);
                 c.Title = open && (chatTitle ?? "").Length > 0 ? chatTitle : ReadTitle(f, w);
-                c.Folder = open ? chatFolder : ReadFolder(f, w);
                 list.Add(c);
             }
             list.Sort(delegate (ChatInfo a, ChatInfo b) { return b.When.CompareTo(a.When); });
@@ -3384,7 +3351,7 @@ namespace MinGent
 
         string ChatJson()
         {
-            Dictionary<string, object> root = Json.O("version", 2, "title", chatTitle, "folder", Program.ToStored(chatFolder) ?? "", "model", settings.AiModel ?? "", "summary", session.Summary ?? "");
+            Dictionary<string, object> root = Json.O("version", 2, "title", chatTitle, "folder", Program.ToStored(chatFolder) ?? "", "own", Program.ToStored(ownFolder) ?? "", "model", settings.AiModel ?? "", "summary", session.Summary ?? "");
             if (titleSet) root["titleSet"] = true;
             List<object> items = new List<object>();
             foreach (ChatItem it in chat.Items)
@@ -3620,8 +3587,8 @@ namespace MinGent
             chatFile = path;
             try { chatStamp = File.GetLastWriteTimeUtc(path); } catch { chatStamp = DateTime.MinValue; }
             chatTitle = Json.Str(root, "title") ?? "";
-            chatFolder = Projects.Clean(Program.FromStored(Json.Str(root, "folder"))) ?? "";
-            UpdateFolderChip();
+            chatFolder = WorkFolders.Clean(Program.FromStored(Json.Str(root, "folder"))) ?? "";
+            ownFolder = WorkFolders.Clean(Program.FromStored(Json.Str(root, "own"))) ?? "";
             titleSet = Json.Bool(root, "titleSet");
             savedJson = null;
             try { savedJson = ChatJson(); } catch { }
@@ -4002,6 +3969,15 @@ namespace MinGent
             m.Items.Add(Menus.Item("Send the notes selection with messages", settings.AiSendContext, delegate { settings.AiSendContext = !settings.AiSendContext; settings.Save(); if (ContextToggled != null) ContextToggled(this, EventArgs.Empty); }));
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add(Menus.Item("Open the work folder", false, delegate { OpenWorkFolder(); }));
+            ToolStripMenuItem elsewhere = Menus.Item("Work in another folder...", false, delegate { BeginInvoke(new Action(ChooseFolder)); });
+            elsewhere.Enabled = !running;
+            m.Items.Add(elsewhere);
+            if (ElsewhereFolder)
+            {
+                ToolStripMenuItem back = Menus.Item("Work in its own folder again", false, delegate { SetChatFolder("", true); });
+                back.Enabled = !running;
+                m.Items.Add(back);
+            }
             m.Items.Add(Menus.Item("Settings...", false, delegate { host.ShowSettings(); }));
             m.Closed += delegate { BeginInvoke(new Action(delegate { m.Dispose(); })); };
             m.Show(bMore, new Point(bMore.Width, bMore.Height + UI.S(2)), ToolStripDropDownDirection.BelowLeft);
@@ -4104,10 +4080,6 @@ namespace MinGent
                 case "/schedule":
                     composer.Text = "";
                     host.ShowSettings("Scheduled");
-                    return true;
-                case "/project":
-                    composer.Text = "";
-                    if (bFolder.Visible) ShowFolderMenu(); else ChooseFolder();
                     return true;
             }
             if (SkillNamed(text) != null && !composer.Text.EndsWith(" ", StringComparison.Ordinal))
@@ -4329,50 +4301,6 @@ namespace MinGent
         }
     }
 
-    class FolderChip : Control
-    {
-        string name = "";
-        bool hover;
-        Theme th = Theme.Light(Color.SteelBlue);
-        public bool Compact;
-
-        public FolderChip()
-        {
-            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-            SetStyle(ControlStyles.Selectable, false);
-            Font = UI.Font;
-            AccessibleRole = AccessibleRole.ButtonDropDown;
-            AccessibleName = "Work folder";
-            Cursor = Cursors.Hand;
-        }
-
-        public void SetTheme(Theme t) { th = t; Invalidate(); }
-
-        public string FolderName
-        {
-            get { return name; }
-            set { name = value ?? ""; AccessibleDescription = name; Invalidate(); }
-        }
-
-        public int PreferredWidth { get { return TextRenderer.MeasureText(name, Font, Size.Empty, TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width + UI.S(52); } }
-
-        protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); hover = true; Invalidate(); }
-        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hover = false; Invalidate(); }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            Graphics g = e.Graphics;
-            g.Clear(th.Back);
-            Rectangle r = new Rectangle(0, 0, Width - 1, Height - 1);
-            if (hover) Glyphs.Hover(g, th, th.ButtonHover, r, UI.S(8));
-            Glyphs.Draw("folder", g, new Rectangle(UI.S(6), 0, UI.S(18), Height), hover ? th.Fore : th.ChromeDim);
-            if (!Compact)
-                TextRenderer.DrawText(g, name, Font, new Rectangle(UI.S(28), 0, Math.Max(0, Width - UI.S(28) - UI.S(20)), Height), hover ? th.Fore : th.ChromeFore,
-                    TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
-            Glyphs.Draw("down", g, new Rectangle(Width - UI.S(20), 0, UI.S(16), Height), th.ChromeDim);
-        }
-    }
-
     class ModelChip : Control
     {
         string name = "", sub = "";
@@ -4449,8 +4377,7 @@ namespace MinGent
             new SlashCommand("/temp", "Start a temporary chat: not saved, memory off"),
             new SlashCommand("/plan", "Turn plan first on or off (Shift+Tab)"),
             new SlashCommand("/skill", "Write a new skill: a how-to the agent can use again"),
-            new SlashCommand("/schedule", "Set up a task that runs by itself, such as every morning"),
-            new SlashCommand("/project", "Choose the project folder this chat works in")
+            new SlashCommand("/schedule", "Set up a task that runs by itself, such as every morning")
         };
     }
 

@@ -342,7 +342,7 @@ namespace MinGent
                 rep["enum"] = Json.A("daily", "weekdays", "weekly", "monthly", "once");
                 return Obj("action", act, true, "name", P("string", "Task name; an existing one for change and remove"), false, "prompt", P("string", "The instruction to run"), false,
                     "repeat", rep, false, "time", P("string", "Such as 08:30"), false, "day", P("string", "weekly: weekday; monthly: 1-31; once: date like 2026-12-24"), false,
-                    "folder", P("string", "Work folder; the default folder when left out"), false, "on", P("boolean", "false pauses it"), false);
+                    "folder", P("string", "Work folder; the task's own folder when left out"), false, "on", P("boolean", "false pauses it"), false);
             }
         }
         public override string Label(Dictionary<string, object> a)
@@ -437,8 +437,8 @@ namespace MinGent
                     string folder = (S(a, "folder") ?? "").Trim();
                     if (folder.Length > 0)
                     {
-                        string clean = Projects.Clean(folder);
-                        string no = Projects.Check(folder);
+                        string clean = WorkFolders.Clean(folder);
+                        string no = WorkFolders.Check(folder);
                         if (clean == null || no != null) return ToolOutcome.Fail("The folder can't be used for a scheduled task: " + (no ?? "MinGent can't use that as a folder."));
                         folder = clean;
                     }

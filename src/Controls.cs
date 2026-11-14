@@ -1524,8 +1524,8 @@ namespace MinGent
             Size = sz;
             list.Picked += delegate (int i)
             {
-                if (Picked != null) Picked(i);
                 Close();
+                if (Picked != null) Picked(i);
             };
             list.Cancelled += delegate { Close(); };
         }

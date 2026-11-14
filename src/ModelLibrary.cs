@@ -1561,10 +1561,11 @@ namespace MinGent
             bool ramPool;
             Pool(out budget, out fitsLimit, out limit, out ramPool);
             long usable = Usable(ramPool);
-            int target = wantCtx > 0 ? wantCtx : 65536;
+            int target = wantCtx > 0 ? wantCtx : 131072;
             if (shape.Context > 0) target = Math.Min(target, shape.Context);
             List<int> ctxs = new List<int>();
             ctxs.Add(target);
+            if (target > 65536) ctxs.Add(65536);
             if (target > 32768) ctxs.Add(32768);
             if (target > Engine.MinAutoContext) ctxs.Add(Engine.MinAutoContext);
             int[] tiers = ramPool ? new int[] { 4, 5, 6, 8 } : new int[] { 8, 6, 5, 4 };
