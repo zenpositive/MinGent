@@ -927,13 +927,14 @@ namespace MinGent
             foreach (RowItem r in local.Items) if (r.Selected && r.Tag is LocalModel) keep = ((LocalModel)r.Tag).Path;
             local.Items.Clear();
             string cur = s.AiModel ?? "";
-            foreach (DownloadJob j in ModelDownloads.Active())
+            foreach (DownloadJob j in ModelDownloads.Listed())
             {
                 RowItem jr = new RowItem();
                 jr.Title = j.Title;
-                jr.Badges.Add(new KeyValuePair<string, int>("Downloading", 1));
+                jr.Badges.Add(new KeyValuePair<string, int>(j.Paused ? "Paused" : "Downloading", j.Paused ? 0 : 1));
                 jr.Progress = j.Progress;
-                jr.ProgressText = j.Text;
+                jr.ProgressText = j.Status;
+                jr.Buttons.Add(j.Paused ? "Resume" : "Pause");
                 jr.Buttons.Add("Cancel");
                 jr.Tag = j;
                 local.Items.Add(jr);
@@ -969,7 +970,9 @@ namespace MinGent
             DownloadJob job = it.Tag as DownloadJob;
             if (job != null)
             {
-                if (b == "Cancel") { job.D.Cancel = true; it.ProgressText = "Cancelling..."; local.Invalidate(); }
+                JobButton(job, b);
+                it.ProgressText = job.Status;
+                local.Invalidate();
                 return;
             }
             LocalModel m = (LocalModel)it.Tag;
@@ -1214,7 +1217,7 @@ namespace MinGent
         RowItem VariantRow(HubRepo repo, HubVariant v, List<LocalModel> have, bool recommended, GgufShape shape)
         {
             RowItem r = new RowItem();
-            r.Title = v.Quant.Length > 0 ? v.Quant : v.Label;
+            r.Title = v.Name;
             r.Sub = ModelCatalog.Join("  \u00B7  ", ModelCatalog.Size(v.TotalBytes), Needs(v.TotalBytes, shape), QuantNote(v.Quant), v.Projector != null ? "can see images" : null);
             if (recommended) r.Badges.Add(new KeyValuePair<string, int>("Best for this PC", 1));
             r.Badges.Add(FitBadge(v.TotalBytes, shape));
@@ -1224,19 +1227,27 @@ namespace MinGent
             string localPath = ModelLibrary.LocalPathFor(repo.Id, v, have);
             r.Tag = new object[] { repo, v, localPath };
             DownloadJob job = ModelDownloads.Find(repo.Id, v);
-            if (job != null && (!job.Finished || job.Error != null)) ApplyJob(r, job);
+            if (job != null && (!job.Finished || job.Paused || job.Error != null)) ApplyJob(r, job);
             else r.Buttons.Add(localPath != null ? "Use" : "Download");
             return r;
+        }
+
+        static void JobButton(DownloadJob job, string b)
+        {
+            if (b == "Pause") ModelDownloads.Pause(job);
+            else if (b == "Resume") ModelDownloads.Resume(job);
+            else if (b == "Cancel") ModelDownloads.Drop(job);
         }
 
         void ApplyJob(RowItem r, DownloadJob job)
         {
             object[] tag = r.Tag as object[];
             r.Buttons.Clear();
-            if (!job.Finished)
+            if (!job.Finished || job.Paused)
             {
                 r.Progress = job.Progress;
-                r.ProgressText = job.D.Cancel ? "Cancelling..." : job.Text;
+                r.ProgressText = job.Status;
+                r.Buttons.Add(job.Paused ? "Resume" : "Pause");
                 r.Buttons.Add("Cancel");
                 return;
             }
@@ -1273,9 +1284,14 @@ namespace MinGent
                     if (r.Tag != job) continue;
                     shown = true;
                     r.Progress = job.Progress;
-                    r.ProgressText = job.D.Cancel ? "Cancelling..." : job.Text;
+                    r.ProgressText = job.Status;
+                    r.Badges.Clear();
+                    r.Badges.Add(new KeyValuePair<string, int>(job.Paused ? "Paused" : "Downloading", job.Paused ? 0 : 1));
+                    r.Buttons.Clear();
+                    r.Buttons.Add(job.Paused ? "Resume" : "Pause");
+                    r.Buttons.Add("Cancel");
                 }
-                if (job.Finished || !shown) RefreshLocal(job.Finished);
+                if ((job.Finished && !job.Paused) || !shown) RefreshLocal(job.Finished);
                 else local.Invalidate();
             });
         }
@@ -1326,10 +1342,10 @@ namespace MinGent
                 if (ModelChosen != null) ModelChosen("engine:" + path);
                 return;
             }
-            if (b == "Cancel")
+            if (b == "Cancel" || b == "Pause" || b == "Resume")
             {
                 DownloadJob running = ModelDownloads.Find(repo.Id, v);
-                if (running != null && !running.Finished) { running.D.Cancel = true; it.ProgressText = "Cancelling..."; RefreshRowsFor(it); }
+                if (running != null) { JobButton(running, b); it.ProgressText = running.Status; RefreshRowsFor(it); }
                 return;
             }
             if (b != "Download") return;

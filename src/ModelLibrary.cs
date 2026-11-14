@@ -369,7 +369,7 @@ namespace MinGent
             "Q4_K_S", "Q4_K_M", "Q5_K_S", "Q5_K_M", "Q6_K", "IQ2_XXS", "IQ2_XS", "Q2_K_S", "IQ3_XS", "IQ3_XXS", "IQ1_S",
             "IQ4_NL", "IQ3_S", "IQ3_M", "IQ2_S", "IQ2_M", "IQ4_XS", "IQ1_M", "BF16", "", "", "", "TQ1_0", "TQ2_0", "MXFP4" };
 
-        static readonly Regex QuantInName = new Regex(@"(?<![A-Za-z0-9])(I?Q\d(?:_[A-Z0-9]+)*|BF16|F16|F32|MXFP4|UD-[A-Z0-9_]+)(?![A-Za-z0-9])", RegexOptions.IgnoreCase);
+        public static readonly Regex QuantInName = new Regex(@"(?<![A-Za-z0-9])(I?Q\d(?:_[A-Z0-9]+)*|BF16|F16|F32|MXFP4|UD-[A-Z0-9_]+)(?![A-Za-z0-9])", RegexOptions.IgnoreCase);
 
         public static bool Helper(string path, long size)
         {
@@ -1145,7 +1145,10 @@ namespace MinGent
 
     class HubVariant
     {
-        public string Quant = "", Label = "";
+        public string Quant = "", Label = "", Extra = "";
+        public bool Main = true;
+
+        public string Name { get { return Quant.Length == 0 ? Label : Extra.Length > 0 ? Quant + " \u00B7 " + Extra : Quant; } }
         public List<HubFile> Files = new List<HubFile>();
         public HubFile Projector;
         public long TotalBytes;
@@ -1343,7 +1346,7 @@ namespace MinGent
             if (vs == null || vs.Count == 0) return null;
             lock (shapes) { GgufShape have; if (shapes.TryGetValue(repo, out have)) return have; }
             HubVariant probe = null;
-            foreach (HubVariant v in vs) if (v.Files.Count > 0 && (probe == null || v.TotalBytes < probe.TotalBytes)) probe = v;
+            foreach (HubVariant v in MainOnes(vs)) if (v.Files.Count > 0 && (probe == null || v.TotalBytes < probe.TotalBytes)) probe = v;
             if (probe == null) return null;
             GgufShape g = Gguf.ReadShape(Head(repo, probe.Files[0].Path, 1 << 20, ct));
             if (!g.Known) return null;
@@ -1435,8 +1438,70 @@ namespace MinGent
                 v.TotalBytes += f.Size;
             }
             foreach (HubVariant v in res) v.Files.Sort(delegate (HubFile a, HubFile b) { return string.CompareOrdinal(a.Path, b.Path); });
-            res.Sort(delegate (HubVariant a, HubVariant b) { return a.TotalBytes.CompareTo(b.TotalBytes); });
+            Families(res);
+            res.Sort(delegate (HubVariant a, HubVariant b) { return a.Main != b.Main ? (a.Main ? -1 : 1) : a.TotalBytes.CompareTo(b.TotalBytes); });
             return res;
+        }
+
+        static List<string> NameWords(string label)
+        {
+            string stem = Gguf.QuantInName.Replace(System.IO.Path.GetFileNameWithoutExtension(label ?? ""), " ");
+            List<string> words = new List<string>();
+            foreach (string w in Regex.Split(stem, @"[-_.\s]+")) if (w.Length > 0) words.Add(w);
+            return words;
+        }
+
+        static string Key(List<string> words)
+        {
+            return string.Join(" ", words.ToArray()).ToLowerInvariant();
+        }
+
+        static void Families(List<HubVariant> res)
+        {
+            if (res.Count < 2) return;
+            if (res.Exists(delegate (HubVariant v) { return !Drafty(v.Label); })) res.RemoveAll(delegate (HubVariant v) { return Drafty(v.Label); });
+            Dictionary<string, int> count = new Dictionary<string, int>();
+            Dictionary<string, long> bytes = new Dictionary<string, long>();
+            foreach (HubVariant v in res)
+            {
+                string k = Key(NameWords(v.Label));
+                int c;
+                count.TryGetValue(k, out c);
+                count[k] = c + 1;
+                long b;
+                bytes.TryGetValue(k, out b);
+                bytes[k] = Math.Max(b, v.TotalBytes);
+            }
+            string main = null;
+            foreach (KeyValuePair<string, int> e in count)
+            {
+                if (main == null) { main = e.Key; continue; }
+                int mc = count[main];
+                int ew = e.Key.Split(' ').Length, mw = main.Split(' ').Length;
+                if (e.Value > mc || (e.Value == mc && (ew < mw || (ew == mw && bytes[e.Key] > bytes[main])))) main = e.Key;
+            }
+            HashSet<string> mainWords = new HashSet<string>(main.Split(' '), StringComparer.OrdinalIgnoreCase);
+            foreach (HubVariant v in res)
+            {
+                List<string> words = NameWords(v.Label);
+                if (Key(words) == main) continue;
+                v.Main = false;
+                List<string> extra = new List<string>();
+                foreach (string w in words) if (!mainWords.Contains(w)) extra.Add(w);
+                v.Extra = extra.Count > 0 ? string.Join(" ", extra.ToArray()) : System.IO.Path.GetFileNameWithoutExtension(v.Label);
+            }
+        }
+
+        static bool Drafty(string label)
+        {
+            foreach (string w in NameWords(label)) if (w.Equals("draft", StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        static List<HubVariant> MainOnes(List<HubVariant> vs)
+        {
+            List<HubVariant> main = vs.FindAll(delegate (HubVariant v) { return v.Main; });
+            return main.Count > 0 ? main : vs;
         }
 
         public static int QuantClass(string quant)
@@ -1490,6 +1555,7 @@ namespace MinGent
         {
             room = 0;
             if (vs == null || vs.Count == 0) return null;
+            vs = MainOnes(vs);
             if (shape == null || !shape.Known) return Recommend(vs);
             long budget, fitsLimit, limit;
             bool ramPool;
@@ -1636,6 +1702,7 @@ namespace MinGent
         public static HubVariant Recommend(List<HubVariant> vs)
         {
             if (vs == null || vs.Count == 0) return null;
+            vs = MainOnes(vs);
             long budget, fitsLimit, limit;
             bool ramPool;
             Pool(out budget, out fitsLimit, out limit, out ramPool);
@@ -1684,8 +1751,7 @@ namespace MinGent
             if (v.Projector != null) files.Add(v.Projector);
             Total = 0;
             foreach (HubFile f in files) Total += f.Size;
-            string[] rp = repo.Split('/');
-            string dir = System.IO.Path.Combine(System.IO.Path.Combine(ModelLibrary.OwnRoot, Safe(rp[0])), Safe(rp.Length > 1 ? rp[1] : "model"));
+            string dir = FolderFor(repo);
             Directory.CreateDirectory(dir);
             long before = 0;
             foreach (HubFile f in files)
@@ -1707,6 +1773,29 @@ namespace MinGent
             Status = "Done";
             if (progress != null) progress(this);
             return null;
+        }
+
+        static string FolderFor(string repo)
+        {
+            string[] rp = (repo ?? "").Split('/');
+            return System.IO.Path.Combine(System.IO.Path.Combine(ModelLibrary.OwnRoot, Safe(rp[0])), Safe(rp.Length > 1 ? rp[1] : "model"));
+        }
+
+        public static void Discard(string repo, HubVariant v)
+        {
+            if (v == null) return;
+            string dir = FolderFor(repo);
+            List<HubFile> files = new List<HubFile>(v.Files);
+            if (v.Projector != null) files.Add(v.Projector);
+            bool whole = true;
+            foreach (HubFile f in v.Files) if (!File.Exists(System.IO.Path.Combine(dir, Safe(System.IO.Path.GetFileName(f.Path))))) whole = false;
+            foreach (HubFile f in files)
+            {
+                string target = System.IO.Path.Combine(dir, Safe(System.IO.Path.GetFileName(f.Path)));
+                try { if (File.Exists(target + ".part")) File.Delete(target + ".part"); } catch { }
+                try { if (!whole && f != v.Projector && File.Exists(target)) File.Delete(target); } catch { }
+            }
+            try { if (Directory.Exists(dir) && Directory.GetFileSystemEntries(dir).Length == 0) Directory.Delete(dir); } catch { }
         }
 
         static string Safe(string s)
@@ -1871,13 +1960,16 @@ namespace MinGent
         public string RepoId = "", RepoName = "";
         public HubVariant Variant;
         public readonly Downloader D = new Downloader();
-        public volatile bool Finished;
+        public volatile bool Finished, Pausing, Dropping;
+        public bool Paused;
         public string Error, LocalPath;
         public int Progress;
         public string Text = "Starting...";
         public bool Verified;
 
-        public string Title { get { return RepoName + (Variant != null && Variant.Quant.Length > 0 ? " " + Variant.Quant : ""); } }
+        public string Status { get { return Pausing ? "Pausing..." : Dropping || D.Cancel ? "Cancelling..." : Text; } }
+
+        public string Title { get { return RepoName + (Variant != null && Variant.Quant.Length > 0 ? " " + Variant.Name : ""); } }
 
         public bool Is(string repoId, HubVariant v)
         {
@@ -1895,6 +1987,52 @@ namespace MinGent
 
         public static List<DownloadJob> Active() { lock (gate) return jobs.FindAll(delegate (DownloadJob j) { return !j.Finished; }); }
 
+        public static List<DownloadJob> Listed() { lock (gate) return jobs.FindAll(delegate (DownloadJob j) { return !j.Finished || j.Paused; }); }
+
+        public static void Pause(DownloadJob j)
+        {
+            if (j == null || j.Finished || j.Dropping) return;
+            j.Pausing = true;
+            j.D.Cancel = true;
+            Raise(j);
+        }
+
+        public static void Resume(DownloadJob j)
+        {
+            lock (gate)
+            {
+                if (j == null || !j.Paused) return;
+                j.Paused = false;
+                j.Pausing = false;
+                j.Error = null;
+                j.D.Cancel = false;
+                j.Text = "Resuming...";
+                j.Finished = false;
+            }
+            Raise(j);
+            Thread t = new Thread(delegate () { Run(j); });
+            t.IsBackground = true;
+            t.Start();
+        }
+
+        public static void Drop(DownloadJob j)
+        {
+            if (j == null) return;
+            if (!j.Finished)
+            {
+                j.Pausing = false;
+                j.Dropping = true;
+                j.D.Cancel = true;
+                Raise(j);
+                return;
+            }
+            if (!j.Paused) return;
+            j.Paused = false;
+            Downloader.Discard(j.RepoId, j.Variant);
+            j.Error = j.Text = "Cancelled.";
+            Raise(j);
+        }
+
         public static DownloadJob Find(string repoId, HubVariant v)
         {
             lock (gate)
@@ -1906,7 +2044,7 @@ namespace MinGent
         public static long PendingBytes()
         {
             long n = 0;
-            foreach (DownloadJob j in Active())
+            foreach (DownloadJob j in Listed())
             {
                 long total = j.D.Total > 0 ? j.D.Total : (j.Variant != null ? j.Variant.TotalBytes : 0);
                 n += Math.Max(0, total - j.D.Done);
@@ -1914,7 +2052,7 @@ namespace MinGent
             return n;
         }
 
-        public static void CancelAll() { foreach (DownloadJob j in Active()) j.D.Cancel = true; }
+        public static void PauseAll() { foreach (DownloadJob j in Active()) Pause(j); }
 
         static void Raise(DownloadJob j)
         {
@@ -2001,6 +2139,20 @@ namespace MinGent
                 });
             }
             catch (Exception ex) { err = "The download failed: " + ex.Message; }
+            if (err == "Cancelled." && job.Pausing && !job.Dropping)
+            {
+                job.Pausing = false;
+                job.Paused = true;
+                job.Text = "Paused  \u00B7  " + ModelCatalog.Size(job.D.Done) + " of " + ModelCatalog.Size(Math.Max(job.D.Done, job.D.Total));
+                job.Finished = true;
+                Raise(job);
+                return;
+            }
+            if (err == "Cancelled." && job.Dropping)
+            {
+                job.Dropping = false;
+                Downloader.Discard(job.RepoId, job.Variant);
+            }
             if (err == null)
             {
                 List<LocalModel> have;

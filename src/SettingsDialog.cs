@@ -904,8 +904,8 @@ namespace MinGent
             if (offline.Checked && !s.Offline)
             {
                 int n = ModelDownloads.Active().Count;
-                if (n > 0 && !Alert.Confirm(this, Th, (n == 1 ? "A model is downloading. Offline mode stops it." : n + " models are downloading. Offline mode stops them.") +
-                        "\n\nA download that stops picks up where it left off when you start it again.", Text, "Turn on offline mode", false))
+                if (n > 0 && !Alert.Confirm(this, Th, (n == 1 ? "A model is downloading. Offline mode pauses it." : n + " models are downloading. Offline mode pauses them.") +
+                        "\n\nResume them in the model library after you turn offline mode off.", Text, "Turn on offline mode", false))
                 {
                     Select(5);
                     return false;

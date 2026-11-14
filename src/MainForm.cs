@@ -1489,7 +1489,7 @@ namespace MinGent
             StopAllThen(delegate
             {
                 foreach (AiPanel p in panels.ToArray()) { try { p.Shutdown(); } catch { } }
-                ModelDownloads.CancelAll();
+                ModelDownloads.PauseAll();
                 Shell.KillAll();
                 try { Engine.Instance.Stop(); } catch { }
                 foreach (PanelHost h in hosts.Values) if (h.Pane != null) { try { h.Pane.Release(); } catch { } }
@@ -2125,7 +2125,7 @@ namespace MinGent
             bool wasOffline = Net.Offline;
             settings.Save();
             settings.ApplyPrivacy();
-            if (Net.Offline && !wasOffline) ModelDownloads.CancelAll();
+            if (Net.Offline && !wasOffline) ModelDownloads.PauseAll();
             if (Net.Offline != wasOffline) foreach (PanelHost h in hosts.Values) if (h.Pane != null) h.Pane.ApplyOffline();
             ModelLibrary.Apply(settings);
             EngineUpdates.CheckSoon();
