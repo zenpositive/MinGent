@@ -157,7 +157,7 @@ namespace MinGent
         public string Stop = "";
         public string Error;
         public int Status;
-        public bool ConnectFailed, Unauthorized, Retryable, ContextOverflow, Cancelled, Interrupted, SawEnd, EngineGone, ParseFailure;
+        public bool ConnectFailed, Unauthorized, Retryable, ContextOverflow, Cancelled, Interrupted, SawEnd, EngineGone, ParseFailure, UsedWeb;
         public int InputTokens, OutputTokens, HiddenReasoningTokens;
         public int CachedTokens = -1;
         public bool Truncated { get { return Stop == "length"; } }

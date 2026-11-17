@@ -143,7 +143,8 @@ namespace MinGent
             if (a >= 1e9) return (v / 1e9).ToString("0.##", CultureInfo.InvariantCulture) + "B";
             if (a >= 1e6) return (v / 1e6).ToString("0.##", CultureInfo.InvariantCulture) + "M";
             if (a >= 1e4) return (v / 1e3).ToString("0.##", CultureInfo.InvariantCulture) + "K";
-            int places = step >= 1 ? 0 : Math.Min(6, (int)Math.Ceiling(-Math.Log10(step) - 1e-9));
+            int places = step >= 1 ? (Math.Abs(step - Math.Round(step)) > 1e-6 ? 1 : 0) : Math.Min(6, (int)Math.Ceiling(-Math.Log10(step) - 1e-9));
+            if (step >= 1 && places == 1) return v.ToString("0.#", CultureInfo.InvariantCulture);
             if (step > 0 && step < 1 && Math.Abs(step * Math.Pow(10, places) - Math.Round(step * Math.Pow(10, places))) > 1e-6) places = Math.Min(6, places + 1);
             return v.ToString(places == 0 ? "0" : "0." + new string('0', places), CultureInfo.InvariantCulture);
         }
@@ -184,7 +185,18 @@ namespace MinGent
 
         public const string Unfinished = "Chart, not finished yet";
 
+        public const int ImageTag = 1 << 20, DataTag = 2 << 20;
+
+        public static int BlockOf(int tag) { return tag & (ImageTag - 1); }
+
+        public static int CopyKind(int tag) { return tag >= DataTag ? 2 : tag >= ImageTag ? 1 : 0; }
+
         static DrawOp Frame(Graphics g, string source, int width, int y, ChatFonts f, MdLayout L, out int copyWidth)
+        {
+            return Frame(g, source, width, y, f, L, false, out copyWidth);
+        }
+
+        static DrawOp Frame(Graphics g, string source, int width, int y, ChatFonts f, MdLayout L, bool chart, out int copyWidth)
         {
             int idx = L.CodeBlocks.Count;
             L.CodeBlocks.Add(source);
@@ -192,13 +204,92 @@ namespace MinGent
             bg.Kind = DrawOp.KCodeBlock;
             bg.Tag = idx;
             L.Ops.Add(bg);
-            DrawOp copy = new DrawOp();
-            copy.Kind = DrawOp.KCopy;
-            copy.Tag = idx;
-            copyWidth = f.Width(g, "Copy", f.Small) + UI.S(26);
-            copy.R = new Rectangle(width - copyWidth - UI.S(4), y + UI.S(2), copyWidth, f.SmallLineH + UI.S(4));
-            L.Ops.Add(copy);
+            if (!chart)
+            {
+                DrawOp copy = new DrawOp();
+                copy.Kind = DrawOp.KCopy;
+                copy.Tag = idx;
+                copyWidth = f.Width(g, "Copy", f.Small) + UI.S(26);
+                copy.R = new Rectangle(width - copyWidth - UI.S(4), y + UI.S(2), copyWidth, f.SmallLineH + UI.S(4));
+                L.Ops.Add(copy);
+                return bg;
+            }
+            int copied = f.Width(g, "Copied", f.Small);
+            string[] labels = { "Copy image", "Copy data" };
+            int full = 0;
+            foreach (string s in labels) full += Math.Max(copied, f.Width(g, s, f.Small)) + UI.S(26);
+            if (width - full < UI.S(180)) labels = new string[] { "Image", "Data" };
+            int x = width - UI.S(4);
+            copyWidth = UI.S(4);
+            for (int i = labels.Length - 1; i >= 0; i--)
+            {
+                int w = Math.Max(copied, f.Width(g, labels[i], f.Small)) + UI.S(26);
+                x -= w;
+                DrawOp b = new DrawOp();
+                b.Kind = DrawOp.KCopy;
+                b.Tag = (i == 0 ? ImageTag : DataTag) + idx;
+                b.Text = labels[i];
+                b.R = new Rectangle(x, y + UI.S(2), w, f.SmallLineH + UI.S(4));
+                L.Ops.Add(b);
+                copyWidth += w;
+            }
             return bg;
+        }
+
+        public static string Tsv(ChartSpec c, CultureInfo culture)
+        {
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            for (int si = 0; si < c.Series.Count; si++) sb.Append('\t').Append(Clean(SeriesName(c, si)));
+            sb.Append("\r\n");
+            for (int i = 0; i < c.Points; i++)
+            {
+                sb.Append(Clean(i < c.Labels.Count ? c.Labels[i] : ""));
+                foreach (ChartSeries s in c.Series) sb.Append('\t').Append(i < s.Values.Length && !double.IsNaN(s.Values[i]) ? s.Values[i].ToString("R", culture) : "");
+                sb.Append("\r\n");
+            }
+            return sb.ToString();
+        }
+
+        public static string Html(ChartSpec c, CultureInfo culture)
+        {
+            System.Text.StringBuilder sb = new System.Text.StringBuilder("<table>");
+            if (c.Title.Length > 0) sb.Append("<caption>").Append(System.Net.WebUtility.HtmlEncode(c.Title)).Append("</caption>");
+            sb.Append("<tr><th></th>");
+            for (int si = 0; si < c.Series.Count; si++) sb.Append("<th>").Append(System.Net.WebUtility.HtmlEncode(SeriesName(c, si))).Append("</th>");
+            sb.Append("</tr>");
+            for (int i = 0; i < c.Points; i++)
+            {
+                sb.Append("<tr><td>").Append(System.Net.WebUtility.HtmlEncode(i < c.Labels.Count ? c.Labels[i] : "")).Append("</td>");
+                foreach (ChartSeries s in c.Series) sb.Append("<td>").Append(i < s.Values.Length && !double.IsNaN(s.Values[i]) ? s.Values[i].ToString("R", culture) : "").Append("</td>");
+                sb.Append("</tr>");
+            }
+            return sb.Append("</table>").ToString();
+        }
+
+        static string SeriesName(ChartSpec c, int si)
+        {
+            string n = c.Series[si].Name;
+            return n.Length > 0 ? n : c.Series.Count == 1 && c.Title.Length > 0 ? c.Title : "Series " + (si + 1).ToString(CultureInfo.InvariantCulture);
+        }
+
+        static string Clean(string s) { return (s ?? "").Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' '); }
+
+        public static Bitmap Picture(ChartSpec c, string source, int width, ChatFonts f, Theme th)
+        {
+            MdLayout L = new MdLayout();
+            int h;
+            using (Bitmap probe = new Bitmap(1, 1))
+            using (Graphics pg = Graphics.FromImage(probe)) h = Layout(pg, c, source, width, 0, f, L);
+            L.Ops.RemoveAll(delegate (DrawOp op) { return op.Kind == DrawOp.KCopy; });
+            L.Height = h;
+            Bitmap bm = new Bitmap(Math.Max(1, width), Math.Max(1, h));
+            using (Graphics g = Graphics.FromImage(bm))
+            {
+                g.Clear(th.Back);
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+                MdRenderer.Paint(g, L, 0, 0, new Rectangle(0, 0, bm.Width, bm.Height), th, false, null, -1, -1, f);
+            }
+            return bm;
         }
 
         public static int Pending(Graphics g, string source, int width, int y, ChatFonts f, MdLayout L)
@@ -215,7 +306,7 @@ namespace MinGent
         public static int Layout(Graphics g, ChartSpec c, string source, int width, int y, ChatFonts f, MdLayout L)
         {
             int cw, pad = UI.S(12), top = y;
-            DrawOp bg = Frame(g, source, width, y, f, L, out cw);
+            DrawOp bg = Frame(g, source, width, y, f, L, true, out cw);
             y += UI.S(8);
             string title = Fit(g, f, c.Title.Length > 0 ? c.Title : "Chart", f.SmallBold, width - pad * 2 - cw);
             Text(L, title, f.SmallBold, c.Title.Length > 0 ? DrawOp.RFore : DrawOp.RDim, pad, y, width - pad * 2 - cw, f.SmallLineH);

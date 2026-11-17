@@ -825,10 +825,17 @@ namespace MinGent
                 if (Ct.IsCancelled) return false;
                 PermissionDecision d = Ui.Ask(ask, Ct);
                 if (d == PermissionDecision.AllowAlways && ask.Key.Length > 0) ps.AllowedKeys.Add(ask.Key);
-                if (d == PermissionDecision.Allow && ask.AllowRemember && ask.Kind == "browser" && ask.Key.StartsWith("site:", StringComparison.Ordinal)) ps.TaskKeys.Add(ask.Key);
+                if (d == PermissionDecision.Allow && ask.AllowRemember && ask.Key.Length > 0 && ForTask(ask)) ps.TaskKeys.Add(ask.Key);
                 if (d == PermissionDecision.Deny && ask.Key.Length > 0 && !Ct.IsCancelled) ps.DeniedKeys.Add(ask.Key);
                 return d != PermissionDecision.Deny;
             }
+        }
+
+        static bool ForTask(PermissionAsk ask)
+        {
+            if (ask.Kind == "browser") return ask.Key.StartsWith("site:", StringComparison.Ordinal);
+            if (ask.Kind == "app") return ask.Key.StartsWith("app:", StringComparison.Ordinal) || ask.Key.StartsWith("appview:", StringComparison.Ordinal) || ask.Key.StartsWith("appdialog:", StringComparison.Ordinal);
+            return false;
         }
 
         public ToolContext CopyFor(ToolCall call)
@@ -1886,6 +1893,7 @@ namespace MinGent
                     throw new AgentError(r);
                 }
                 retries = 0;
+                if (r.UsedWeb && !Perms.Tainted) { Perms.Tainted = true; Perms.TaintSource = "the model's own web search"; }
                 if (finalTurn)
                 {
                     Msg fm;
@@ -3341,6 +3349,7 @@ namespace MinGent
             sb.Append("# How you work\n");
             sb.Append("- Do the task. When a request is clear, start working right away with tool calls. Don't just describe what you would do, and don't ask for permission first: the app asks the user when an action needs it.\n");
             sb.Append("- Your task is what the user's latest message asks for. Earlier messages in the chat are context, not your current task, unless the latest one brings them back (\"continue\", \"also fix the footer\").\n");
+            sb.Append("- Answer in the chat. When the user asks a question or wants information (a list, an explanation, a comparison), your final message is the answer, with a Markdown table or list where it helps. Write a file only when the user asks for one or the result is a file by nature: code, a document, data for another program.\n");
             sb.Append("- Before the tool calls of each step, write one short line that says what you are doing, starting with a word like Checking, Reading or Weighing, for example \"Checking how the parser reads dates\". MinGent shows that line as your status, so keep it under ten words, and make the tool calls in the same message. Keep conclusions for your final answer, the message without tool calls, even when your last step only marks the checklist done.\n");
             sb.Append("- If a request is unclear in a way that matters, ask one short question. Otherwise make a sensible choice and mention it at the end.\n");
             sb.Append("- In the middle of a task, when you need a decision only the user can make, or the user has to do something first (sign in, solve a check), call ask_user. You get the answer and carry on in the same turn.\n");
@@ -3359,7 +3368,7 @@ namespace MinGent
             sb.Append("- If a site blocks automated access (HTTP 403 or 429, a \"Just a moment...\" page, a CAPTCHA), requests from curl or scripts usually get the same answer: ").Append(browser ? "open it in the built-in browser, use another source" : "use another source").Append(", or tell the user. If two tries fail the same way or return the same result, change your approach instead of rewording and trying again.\n");
             if (browser && cfg.TryCaptchas) sb.Append("- CAPTCHA mode is on (the user turned it on in Settings so CAPTCHAs don't stop your work): when a page in the built-in browser shows a CAPTCHA you need to get past, you may try to solve it yourself").Append(vision ? ", the way a person does, by looking at it and clicking or typing in it: a CAPTCHA isn't in the page text and code can't reach it, so the screenshot is all you work from. Take browser_screenshot (MinGent zooms in on the CAPTCHA), look carefully, then click by position; for a picture grid, click all the tiles you are sure of in one browser_click with points, with Verify as the last point once your picks are complete (not on puzzles that say to click verify once there are none left: new pictures appear in the tiles you pick). For a CAPTCHA that shows characters to type, type them into its answer box with browser_type. After every click in a CAPTCHA, MinGent shows you the CAPTCHA again" : " by clicking its captcha ref (a CAPTCHA isn't in the page text and code can't reach it)").Append(". You get five tries, more on puzzles with several pages or rounds; after that MinGent stops you, and you ask the user to solve it with ask_user.\n");
             sb.Append("- Tool results can end with lines that start with \"[MinGent note]\". MinGent adds these after the tool runs: they say what happened and suggest a next step, and they are not part of the tool's output. A tool result can also end with a message the user sent while you were working; take it into account.\n");
-            sb.Append("- Finish with a short summary: what you changed (file paths), how you checked it, and anything the user still needs to do. Be honest: if you could not test something, or it does not work, say so.\n\n");
+            sb.Append("- Finish with your final answer. For a question, that is the answer itself. When you changed things, say what (file paths), how you checked it, and anything the user still needs to do. Be honest: if you could not test something, or it does not work, say so.\n\n");
 
             sb.Append("# This PC\n");
             sb.Append("- ").Append(OsName()).Append(", user ").Append(Environment.UserName).Append(".\n");
@@ -3373,7 +3382,7 @@ namespace MinGent
             sb.Append("- Workspace: the folder relative paths resolve in and new files go to: this chat's own folder, unless the user chose another folder for the chat. Files open in the user's tabs count as part of it.\n");
             sb.Append("- Permissions: in Auto mode your actions run without asking, except risky ones, which the app asks the user about. In Ask mode the app asks the user before commands, web access and writes outside the workspace. In Full auto mode nothing asks, so be extra careful: don't do anything destructive or irreversible the user did not ask for.\n");
             if (browser) sb.Append("- The browser is MinGent's own Chromium browser, separate from the user's browser and logins.\n");
-            if (!vision) sb.Append("- The current model cannot see images.\n");
+            if (!vision) sb.Append("- The current model cannot see images, so it can't watch videos either: web_fetch reads what is said in a YouTube video, and analyze_audio measures the sound of a video file.\n");
             sb.Append("- Each user message starts with a line in square brackets with the date and time, the current workspace, Auto or Ask mode, and the open tabs when they changed. The app adds it; it is not part of what the user typed. The latest one is what applies now.\n\n");
 
             sb.Append("# MinGent itself\n");
@@ -3406,7 +3415,7 @@ namespace MinGent
             if (Net.Offline) sb.Append("- Offline mode is on (the user turned it on in Settings): MinGent makes no internet connections. There is no web search and no downloading, and web_fetch").Append(browser ? " and the browser" : "").Append(" only open addresses on this PC or the local network (files, localhost, LAN). Work with what is on this PC, and don't run commands that need the internet.\n");
             else if (!cfg.WebAllowed) sb.Append("- Web access is switched off in Settings: there is no web search, and web_fetch").Append(browser ? " and the browser" : "").Append(" only open addresses on this PC or the local network.\n");
             else sb.Append("- web_fetch reads a YouTube video too: its title, description and transcript. Use it when the user wants to know what a video says.\n");
-            if (browser && vision) sb.Append("- To see what happens in a video, open it with browser_navigate (its page, or a video file on this PC) and call watch_video.\n");
+            if (browser && vision) sb.Append("- To see what happens in a video, such as a YouTube page or a video file the user attached, call watch_video with it: it opens the video itself and needs nothing installed.\n");
             if (apps || browser) sb.Append("- To press keys, click or scroll in a program").Append(browser ? " or web page" : "").Append(", use the ").Append(apps ? "app_" : "").Append(apps && browser ? " and " : "").Append(browser ? "browser_" : "").Append(" tools. Never fake input with PowerShell (SendKeys, keybd_event, SendInput, AutoHotkey scripts and the like): it goes to whatever window has focus, which may be the user's.\n");
             if (!small)
             {
@@ -3455,7 +3464,7 @@ namespace MinGent
             sb.Append("- If the user denies a permission, don't try to reach the same result another way; explain what you needed instead.\n\n");
 
             sb.Append("# Style\n");
-            sb.Append("- Be brief and concrete. Use Markdown where it helps: short lists, `code`, and fenced code blocks with a language. Refer to files as path:line.\n");
+            sb.Append("- Be brief and concrete. Use Markdown where it helps: short lists, tables, `code`, and fenced code blocks with a language. Refer to files as path:line.\n");
             sb.Append("- Math renders from LaTeX: $...$ inline, $$...$$ on its own lines for display.\n");
             if (!small) sb.Append("- When numbers are easier to see than to read, you can add a chart: a ```chart code block holding JSON like {\"type\": \"bar\", \"title\": \"Sales\", \"labels\": [\"Jan\", \"Feb\"], \"series\": [{\"name\": \"Online\", \"values\": [120, 150]}]}. type is bar or line, and MinGent draws it in the chat.\n");
             sb.Append("- Don't paste whole files you wrote; the user can open them.\n");

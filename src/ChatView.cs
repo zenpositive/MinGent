@@ -55,6 +55,7 @@ namespace MinGent
         public int MdOx = -1, MdOy = -1, BubbleOff, BubbleW;
         public List<KeyValuePair<Rectangle, int>> Buttons = new List<KeyValuePair<Rectangle, int>>();
         public List<string> DetailLines;
+        public int ReportTop, ReportH;
         public int Top, AnswerY;
 
         public void Touch() { Version++; }
@@ -903,12 +904,37 @@ namespace MinGent
                         {
                             if (it.Expanded)
                             {
-                                List<string> log = new List<string>();
+                                MdLayout all = new MdLayout();
+                                int ly = 0, shown = 0;
                                 if (it.Kids == 0)
-                                    foreach (string l in it.Detail.Replace("\r\n", "\n").Split('\n')) if (l.Trim().Length > 0 && log.Count < 30) log.Add(l.Length > 200 ? l.Substring(0, 200) + "..." : l);
-                                if (log.Count > 0) { it.DetailLines = log; h += log.Count * f.SmallLineH + UI.S(10); }
-                                it.Md = MdRenderer.Layout(g, Markdown.Parse(it.Report), Math.Max(UI.S(60), w - UI.S(48)), f, th, false);
-                                h += it.Md.Height + UI.S(24);
+                                    foreach (string l in it.Detail.Replace("\r\n", "\n").Split('\n'))
+                                    {
+                                        if (l.Trim().Length == 0 || shown >= 30) continue;
+                                        shown++;
+                                        string rest = (l.Length > 200 ? l.Substring(0, 200) + "..." : l).Replace("\t", "    ");
+                                        bool cont = false;
+                                        while (rest.Length > 0)
+                                        {
+                                            int n = MdRenderer.Fit(g, rest, f.Small, Math.Max(UI.S(60), w - UI.S(22)), f);
+                                            if (n <= 0) n = 1;
+                                            all.Ops.Add(ToolText(g, rest.Substring(0, n), f.Small, DrawOp.RDim, 0, ly, f.SmallLineH, cont, 0));
+                                            rest = rest.Substring(n);
+                                            ly += f.SmallLineH;
+                                            cont = true;
+                                        }
+                                    }
+                                it.ReportTop = ly > 0 ? ly + UI.S(10) : 0;
+                                MdLayout rep = MdRenderer.Layout(g, Markdown.Parse(it.Report), Math.Max(UI.S(60), w - UI.S(48)), f, th, false);
+                                foreach (DrawOp op in rep.Ops)
+                                {
+                                    op.R = new Rectangle(op.R.X + UI.S(10), op.R.Y + it.ReportTop + UI.S(10), op.R.Width, op.R.Height);
+                                    all.Ops.Add(op);
+                                }
+                                all.CodeBlocks = rep.CodeBlocks;
+                                it.ReportH = rep.Height;
+                                all.Height = it.ReportTop + rep.Height + UI.S(20);
+                                it.Md = all;
+                                h += all.Height + UI.S(4);
                             }
                             it.H = h;
                             break;
@@ -919,15 +945,26 @@ namespace MinGent
                         if (show)
                         {
                             List<string> lines = new List<string>();
+                            MdLayout box = new MdLayout();
                             string[] raw = body.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
                             int limit = it.Status == 0 ? 8 : 400;
                             int start = it.Status == 0 ? Math.Max(0, raw.Length - limit) : 0;
                             int avail = Math.Max(UI.S(60), w - UI.S(20) - UI.S(16));
+                            bool diff = it.Detail.Length > 0 && (it.Detail.StartsWith("- ") || it.Detail.StartsWith("+ "));
+                            int indent = f.Width(g, "  ", f.Mono), blanks = 0;
                             for (int i = start; i < raw.Length && lines.Count < limit; i++)
                             {
                                 string line = raw[i].Replace("\t", "    ");
                                 if (line.Length > 2000) line = line.Substring(0, 2000) + "...";
-                                if (it.Status == 0 || line.Length == 0) { lines.Add(line); continue; }
+                                if (line.Length == 0) { lines.Add(line); blanks++; continue; }
+                                int role = diff && line.StartsWith("+ ") ? DrawOp.RAdded : diff && line.StartsWith("- ") ? DrawOp.RRemoved : it.Status != 0 ? DrawOp.RCodeFore : DrawOp.RDim;
+                                if (it.Status == 0)
+                                {
+                                    box.Ops.Add(ToolText(g, line, f.Mono, role, UI.S(8), UI.S(7) + lines.Count * f.MonoLineH, f.MonoLineH, false, blanks));
+                                    blanks = 0;
+                                    lines.Add(line);
+                                    continue;
+                                }
                                 int guard = 0;
                                 while (line.Length > 0 && lines.Count < limit && guard++ < 40)
                                 {
@@ -939,12 +976,22 @@ namespace MinGent
                                         int sp = line.LastIndexOf(' ', n - 1, Math.Min(n, 40));
                                         if (sp > n / 2) n = sp + 1;
                                     }
+                                    box.Ops.Add(ToolText(g, line.Substring(0, n), f.Mono, role, UI.S(8) + (cont ? indent : 0), UI.S(7) + lines.Count * f.MonoLineH, f.MonoLineH, cont, blanks));
+                                    blanks = 0;
                                     lines.Add((cont ? "  " : "") + line.Substring(0, n));
                                     line = line.Substring(n);
                                 }
                             }
-                            if (it.Status != 0 && raw.Length > 0 && lines.Count >= limit) lines.Add("... more lines (right-click to copy all)");
+                            if (it.Status != 0 && raw.Length > 0 && lines.Count >= limit)
+                            {
+                                DrawOp more = ToolText(g, "... more lines (right-click to copy all)", f.Mono, DrawOp.RCodeFore, UI.S(8), UI.S(7) + lines.Count * f.MonoLineH, f.MonoLineH, false, 0);
+                                more.NoSelect = true;
+                                box.Ops.Add(more);
+                                lines.Add(more.Text);
+                            }
                             it.DetailLines = lines;
+                            box.Height = lines.Count * f.MonoLineH + UI.S(14);
+                            it.Md = box;
                             h += lines.Count * f.MonoLineH + UI.S(18);
                         }
                         it.H = h;
@@ -1173,6 +1220,19 @@ namespace MinGent
                 Size s = TextRenderer.MeasureText(g, EmptyText, fonts.Small, new Size(a.Width, 2000), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
                 TextRenderer.DrawText(g, EmptyText, fonts.Small, new Rectangle(a.X, y, a.Width, s.Height + 4), th.ChromeDim, TextFormatFlags.NoPrefix | TextFormatFlags.WordBreak | TextFormatFlags.HorizontalCenter);
             }
+        }
+
+        static DrawOp ToolText(Graphics g, string text, Font font, int role, int x, int y, int lineH, bool continues, int blanksBefore)
+        {
+            DrawOp op = new DrawOp();
+            op.Kind = DrawOp.KText;
+            op.Text = text;
+            op.Font = font;
+            op.Role = role;
+            op.R = new Rectangle(x, y, TextRenderer.MeasureText(g, text, font, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width, lineH);
+            op.Brk = (byte)(continues ? 4 : 2);
+            op.Blank = (byte)Math.Min(250, blanksBefore);
+            return op;
         }
 
         Color UserBack { get { return th.HighContrast ? th.Back : th.Dark ? Color.FromArgb(0x2D, 0x2D, 0x2F) : Color.FromArgb(0xEF, 0xEF, 0xF1); } }
@@ -1417,14 +1477,7 @@ namespace MinGent
             return FaceMood(a, out step, out dim);
         }
 
-        public string StatusLine(ChatItem a)
-        {
-            string step;
-            FaceMood(a, out step);
-            return step;
-        }
-
-        public const string FirstStep = "Thinking about your message", AfterAnswer = "Thinking about your answer";
+        public const string FirstStep = "MinGenting", AfterAnswer = "Thinking about your answer";
 
         static string FirstWord(string t)
         {
@@ -1769,21 +1822,11 @@ namespace MinGent
             if (it.Status != 0 && it.Report.Length > 0)
             {
                 if (!it.Expanded || it.Md == null) return;
-                int by = y + rowH + UI.S(2);
-                if (it.DetailLines != null)
-                {
-                    foreach (string line in it.DetailLines)
-                    {
-                        TextRenderer.DrawText(g, line, f.Small, new Rectangle(tx, by, w - UI.S(22), f.SmallLineH), th.ChromeDim,
-                            TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter);
-                        by += f.SmallLineH;
-                    }
-                    by += UI.S(10);
-                }
-                Rectangle rb = new Rectangle(tx - UI.S(2), by, w - UI.S(20), it.Md.Height + UI.S(20));
+                int top = y + rowH + UI.S(2);
+                Rectangle rb = new Rectangle(tx - UI.S(2), top + it.ReportTop, w - UI.S(20), it.ReportH + UI.S(20));
                 Glyphs.FillRound(g, CardBack, rb, UI.S(8));
                 Glyphs.DrawRound(g, th.InputBorder, new Rectangle(rb.X, rb.Y, rb.Width - 1, rb.Height - 1), UI.S(8));
-                PaintMd(g, it, idx, x, y, rb.X + UI.S(12), rb.Y + UI.S(10), ClientRectangle, false, -1, -1);
+                PaintMd(g, it, idx, x, y, tx, top, ClientRectangle, false, -1, -1);
                 return;
             }
             if (it.DetailLines != null && it.DetailLines.Count > 0)
@@ -1791,19 +1834,9 @@ namespace MinGent
                 Rectangle box = new Rectangle(tx - UI.S(2), y + rowH + UI.S(2), w - UI.S(20), it.DetailLines.Count * f.MonoLineH + UI.S(14));
                 Glyphs.FillRound(g, MdRenderer.CodeBack(th), box, UI.S(8));
                 Glyphs.DrawRound(g, MdRenderer.CodeBorder(th), new Rectangle(box.X, box.Y, box.Width - 1, box.Height - 1), UI.S(8));
-                int ly = box.Y + UI.S(7);
                 Region old = g.Clip;
                 g.SetClip(new Rectangle(box.X + UI.S(6), box.Y, box.Width - UI.S(12), box.Height), CombineMode.Intersect);
-                bool diff = it.Detail.Length > 0 && (it.Detail.StartsWith("- ") || it.Detail.StartsWith("+ "));
-                foreach (string line in it.DetailLines)
-                {
-                    Color c = th.ChromeDim;
-                    if (diff && line.StartsWith("+ ")) c = th.Dark ? Color.FromArgb(0x7E, 0xC6, 0x7E) : Color.FromArgb(0x1E, 0x7B, 0x34);
-                    else if (diff && line.StartsWith("- ")) c = th.Dark ? Color.FromArgb(0xE5, 0x8A, 0x8A) : Color.FromArgb(0xB3, 0x26, 0x1E);
-                    else if (it.Status != 0) c = th.Fore;
-                    TextRenderer.DrawText(g, line, f.Mono, new Point(box.X + UI.S(8), ly), c, TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.PreserveGraphicsClipping);
-                    ly += f.MonoLineH;
-                }
+                PaintMd(g, it, idx, x, y, box.X, box.Y, ClientRectangle, false, -1, -1);
                 g.Clip = old;
                 old.Dispose();
             }
@@ -2278,6 +2311,55 @@ namespace MinGent
             try { if (!string.IsNullOrEmpty(s)) Clipboard.SetText(s); } catch { }
         }
 
+        static List<string> CodeOnly(MdLayout md)
+        {
+            List<string> l = new List<string>();
+            if (md == null) return l;
+            HashSet<int> charts = new HashSet<int>();
+            foreach (DrawOp op in md.Ops) if (op.Kind == DrawOp.KCopy && Charts.CopyKind(op.Tag) != 0) charts.Add(Charts.BlockOf(op.Tag));
+            for (int i = 0; i < md.CodeBlocks.Count; i++) if (!charts.Contains(i)) l.Add(md.CodeBlocks[i]);
+            return l;
+        }
+
+        void CopyChart(ChatItem it, int block, bool image)
+        {
+            ChartSpec spec = Charts.Parse(it.Md.CodeBlocks[block]);
+            if (spec == null) return;
+            try
+            {
+                DataObject d = new DataObject();
+                if (image)
+                {
+                    int width = 0;
+                    foreach (DrawOp op in it.Md.Ops) if (op.Kind == DrawOp.KCodeBlock && op.Tag == block) width = op.R.Width;
+                    if (width <= 0) return;
+                    using (Bitmap bm = Charts.Picture(spec, it.Md.CodeBlocks[block], width, fonts, th))
+                    using (System.IO.MemoryStream png = new System.IO.MemoryStream())
+                    {
+                        bm.Save(png, System.Drawing.Imaging.ImageFormat.Png);
+                        d.SetData(DataFormats.Bitmap, true, new Bitmap(bm));
+                        d.SetData("PNG", false, new System.IO.MemoryStream(png.ToArray()));
+                        Clipboard.SetDataObject(d, true);
+                    }
+                    return;
+                }
+                CultureInfo here = CultureInfo.CurrentCulture;
+                d.SetText(Charts.Tsv(spec, here), TextDataFormat.UnicodeText);
+                d.SetText(HtmlClip(Charts.Html(spec, here)), TextDataFormat.Html);
+                Clipboard.SetDataObject(d, true);
+            }
+            catch { }
+        }
+
+        static string HtmlClip(string fragment)
+        {
+            const string head = "Version:0.9\r\nStartHTML:{0:D10}\r\nEndHTML:{1:D10}\r\nStartFragment:{2:D10}\r\nEndFragment:{3:D10}\r\n";
+            string pre = "<html><body><!--StartFragment-->", post = "<!--EndFragment--></body></html>";
+            int headLen = string.Format(CultureInfo.InvariantCulture, head, 0, 0, 0, 0).Length;
+            int start = headLen, frag = start + System.Text.Encoding.UTF8.GetByteCount(pre), fragEnd = frag + System.Text.Encoding.UTF8.GetByteCount(fragment), end = fragEnd + System.Text.Encoding.UTF8.GetByteCount(post);
+            return string.Format(CultureInfo.InvariantCulture, head, start, end, frag, fragEnd) + pre + fragment + post;
+        }
+
         int ItemAt(Point p)
         {
             int y = p.Y + scrollY;
@@ -2377,7 +2459,7 @@ namespace MinGent
         {
             if (h.Item < 0 || h.Bar || h.Jump) return false;
             ChatItem it = Items[h.Item];
-            return it.Md != null && it.MdOy >= 0 && (it.Kind == ChatKind.Assistant || it.Kind == ChatKind.User || it.Kind == ChatKind.Thinking || it.Kind == ChatKind.Tool || it.Kind == ChatKind.Permission);
+            return it.Md != null && it.MdOy >= 0 && (it.Kind == ChatKind.Assistant || it.Kind == ChatKind.User || it.Kind == ChatKind.Thinking || it.Kind == ChatKind.Tool || it.Kind == ChatKind.Permission || it.Kind == ChatKind.Notice || it.Kind == ChatKind.Error);
         }
 
         void RefreshHover()
@@ -2513,9 +2595,11 @@ namespace MinGent
             }
             if (h.Item < 0 || h.Item >= Items.Count) return;
             ChatItem it = Items[h.Item];
-            if (h.Copy >= 0 && it.Md != null && h.Copy < it.Md.CodeBlocks.Count)
+            if (h.Copy >= 0 && it.Md != null && Charts.BlockOf(h.Copy) < it.Md.CodeBlocks.Count)
             {
-                SetClipboard(it.Md.CodeBlocks[h.Copy]);
+                int block = Charts.BlockOf(h.Copy), kind = Charts.CopyKind(h.Copy);
+                if (kind == 0) SetClipboard(it.Md.CodeBlocks[block]);
+                else CopyChart(it, block, kind == 1);
                 copiedItem = h.Item;
                 copiedBlock = h.Copy;
                 Invalidate();
@@ -2812,11 +2896,9 @@ namespace MinGent
                     ChatItem target = it;
                     m.Items.Add(Menus.Item("Retry", false, delegate { if (Changeable) RetryRequested(target); }));
                 }
-                if (it.Kind == ChatKind.Assistant && it.Md != null && it.Md.CodeBlocks.Count > 0)
-                {
-                    List<string> blocks = it.Md.CodeBlocks;
+                List<string> blocks = it.Kind == ChatKind.Assistant ? CodeOnly(it.Md) : null;
+                if (blocks != null && blocks.Count > 0)
                     m.Items.Add(Menus.Item(blocks.Count == 1 ? "Copy the code" : "Copy all code blocks", false, delegate { SetClipboard(string.Join("\n\n", blocks.ToArray())); }));
-                }
             }
             if (m.Items.Count > 0 && !(m.Items[m.Items.Count - 1] is ToolStripSeparator)) m.Items.Add(new ToolStripSeparator());
             m.Items.Add(Menus.Item("Select all", false, delegate { SelectAll(); }));

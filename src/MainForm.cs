@@ -63,12 +63,14 @@ namespace MinGent
         public int BrowserConsoleHeight;
         public string ModelsFolder = "", ModelsOldFolders = "";
         public bool Offline, KeepNetLog, KeepErrorLog;
+        public bool GeminiWeb;
+        public string GeminiBrowser = "";
 
         static readonly string[] KeptOnReset = {
             "KeyAnthropic", "KeyOpenAi", "KeyGemini", "KeyOpenRouter", "KeyCustom", "KeyLmStudio", "CustomUrl", "CustomModel",
             "ModelsFolder", "ModelsOldFolders", "AiModel", "AiLastLmModel", "AiLastChat",
             "Bounds", "Maximized", "NotesVisible", "AgentVisible", "SidebarCollapsed", "NotesWidth", "BrowserWidth", "BrowserVisible", "BrowserConsoleHeight",
-            "AiAutoExplained", "AiPlanExplained", "AiFullExplained", "AiInstructions", "AiMemory", "Offline", "OneDriveNoted" };
+            "AiAutoExplained", "AiPlanExplained", "AiFullExplained", "AiInstructions", "AiMemory", "Offline", "OneDriveNoted", "GeminiWeb", "GeminiBrowser" };
 
         public void ResetPreferences()
         {
@@ -85,6 +87,7 @@ namespace MinGent
             Net.Offline = Offline;
             Net.KeepLog = KeepNetLog;
             Program.KeepErrorLog = KeepErrorLog;
+            GeminiHelper.Apply(GeminiWeb, GeminiBrowser);
         }
 
         static string FilePath { get { return Path.Combine(Program.DataDir, "settings.ini"); } }
@@ -177,6 +180,8 @@ namespace MinGent
                         case "keyOpenRouter": s.KeyOpenRouter = v; break;
                         case "keyCustom": s.KeyCustom = v; break;
                         case "keyLmStudio": s.KeyLmStudio = v; break;
+                        case "geminiWeb": s.GeminiWeb = v == "1"; break;
+                        case "geminiBrowser": s.GeminiBrowser = v; break;
                         case "customUrl": s.CustomUrl = v; break;
                         case "customModel": s.CustomModel = v; break;
                         case "lmContext": if (int.TryParse(v, out iv) && iv >= 0 && iv <= 4194304) s.LmContext = iv; break;
@@ -282,6 +287,8 @@ namespace MinGent
                 if (KeyOpenRouter.Length > 0) w("keyOpenRouter", KeyOpenRouter);
                 if (KeyCustom.Length > 0) w("keyCustom", KeyCustom);
                 if (KeyLmStudio.Length > 0) w("keyLmStudio", KeyLmStudio);
+                if (GeminiWeb) w("geminiWeb", "1");
+                if (GeminiBrowser.Length > 0) w("geminiBrowser", GeminiBrowser);
                 w("customUrl", CustomUrl);
                 w("customModel", CustomModel);
                 w("lmContext", LmContext.ToString(CultureInfo.InvariantCulture));
@@ -1215,7 +1222,6 @@ namespace MinGent
             p.BrowserClicked += delegate { if (p == aiPanel) ShowBrowser(!shell.BrowserOn, true); };
             p.ChatsChanged += delegate { RefreshSidebar(); };
             p.StateChanged += delegate { PanelState(p); };
-            p.TitleNoteChanged += delegate { if (p == aiPanel) UpdateTitle(); };
             p.RenameRequested += delegate { if (p.ActiveChatPath != null) RenameChat(p.ActiveChatPath); };
             p.DeleteRequested += delegate { if (p.ActiveChatPath != null) DeleteChat(p.ActiveChatPath); };
             p.ContextToggled += delegate { if (p == aiPanel) UpdateAiChip(); };
@@ -1443,6 +1449,7 @@ namespace MinGent
         void StartErase(bool downloads, bool outputs)
         {
             if (Program.Erased) return;
+            string helperIn = GeminiHelper.SetUp ? GeminiHelper.BrowserName : null;
             Program.Erased = true;
             sessionTimer.Stop();
             if (library != null && !library.IsDisposed) { try { library.Hide(); } catch { } }
@@ -1465,6 +1472,7 @@ namespace MinGent
                 Shell.KillAll();
                 try { Engine.Instance.Stop(); } catch { }
                 foreach (PanelHost h in hosts.Values) if (h.Pane != null) { try { h.Pane.Release(); } catch { } }
+                GeminiBridge.Stop();
                 try { FileTypes.RemoveAll(); } catch { }
                 List<string> roots = ModelLibrary.OwnRoots();
                 string outDir = outputs ? Eraser.OutputsFolder() : null;
@@ -1486,7 +1494,7 @@ namespace MinGent
                         {
                             done = true;
                             try { wait.Close(); } catch { }
-                            FinishErase(downloads, roots, result);
+                            FinishErase(downloads, roots, result, helperIn);
                         }));
                     }
                     catch { Eraser.AfterExit(result); Environment.Exit(0); }
@@ -1513,7 +1521,7 @@ namespace MinGent
             UpdateAiChip();
         }
 
-        void FinishErase(bool downloads, List<string> roots, EraseResult result)
+        void FinishErase(bool downloads, List<string> roots, EraseResult result, string helperIn)
         {
             Enabled = true;
             List<string> kept = downloads ? new List<string>() : Eraser.DownloadPlaces(roots);
@@ -1525,6 +1533,7 @@ namespace MinGent
                           (links.Length > 0 ? "\n\nThese were links to other folders. MinGent removed the links and left what they point to alone:" + links : "") +
                           (Eraser.KeepsProgram(Program.AppDir) ? "\n\nMinGent runs from a git checkout, so its program files stay in " + Program.AppDir + "." :
                            "\n\nWhen MinGent closes, it removes itself from " + Program.AppDir + "." + (kept.Count > 0 || Directory.Exists(Program.FilesDir ?? "") ? " The folder stays with what you kept." : "")) +
+                          (helperIn != null ? "\n\nThe Gemini helper is still on the Extensions page of " + helperIn + ", now without its files. Remove it there." : "") +
                           "\n\nWindows keeps a few traces of any program you run, such as recent files in its Open and Save dialogs. MinGent can't remove those.";
             Alert.Show(this, theme, text, Program.AppName, MessageBoxButtons.OK, MessageBoxIcon.Information);
             Eraser.AfterExit(result);
@@ -2073,7 +2082,7 @@ namespace MinGent
                 }
                 return;
             }
-            if (!saved) return;
+            if (!saved) { GeminiHelper.Apply(settings.GeminiWeb, settings.GeminiBrowser); return; }
             bool wasOffline = Net.Offline;
             settings.Save();
             settings.ApplyPrivacy();
@@ -2702,9 +2711,7 @@ namespace MinGent
 
         void UpdateTitle()
         {
-            string note = aiPanel != null ? aiPanel.TitleNote : "";
-            string title = note.Length > 0 ? note + " - " + Program.AppName : Program.AppName;
-            if (Text != title) Text = title;
+            if (Text != Program.AppName) Text = Program.AppName;
             UpdateAiChip();
         }
 
@@ -3719,6 +3726,9 @@ namespace MinGent
             settings.WholeWord = findBar.WholeWord;
             settings.Maximized = WindowState == FormWindowState.Maximized;
             Rectangle rb = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+            Rectangle unsplit;
+            bool wasMaximized;
+            if (AppHighlight.Before(this, out unsplit, out wasMaximized)) { rb = unsplit; settings.Maximized = wasMaximized; }
             if (rb.Width > 0 && rb.Height > 0) settings.Bounds = rb;
             foreach (AiPanel p in panels.ToArray()) if (p != aiPanel) { try { p.Shutdown(); p.SaveChat(); } catch { } }
             if (aiPanel != null) { try { aiPanel.Shutdown(); aiPanel.SaveChat(); } catch { } }
@@ -3740,6 +3750,7 @@ namespace MinGent
             Shell.KillAll();
             try { Engine.Instance.Stop(); } catch { }
             foreach (PanelHost h in hosts.Values) if (h.Pane != null) { try { h.Pane.Shutdown(); } catch { } }
+            GeminiBridge.Stop();
             try { ModelCatalog.UnloadOurLmStudioModels(3000); } catch { }
             if (ipc != null) { try { ipc.DestroyHandle(); } catch { } ipc = null; }
             closedForGood = true;

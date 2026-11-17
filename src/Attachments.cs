@@ -38,7 +38,7 @@ namespace MinGent
             { ".rb", "Ruby" }, { ".php", "PHP" }, { ".ps1", "PowerShell" }, { ".bat", "Batch file" }, { ".cmd", "Batch file" }, { ".sh", "Shell script" }, { ".sql", "SQL" },
             { ".png", "PNG image" }, { ".jpg", "JPEG image" }, { ".jpeg", "JPEG image" }, { ".gif", "GIF image" }, { ".bmp", "Bitmap image" }, { ".webp", "WebP image" }, { ".svg", "SVG image" }, { ".tif", "TIFF image" }, { ".tiff", "TIFF image" }, { ".ico", "Icon" },
             { ".wav", "Audio" }, { ".mp3", "Audio" }, { ".m4a", "Audio" }, { ".flac", "Audio" }, { ".ogg", "Audio" }, { ".opus", "Audio" }, { ".wma", "Audio" }, { ".aac", "Audio" }, { ".aif", "Audio" }, { ".aiff", "Audio" },
-            { ".mp4", "Video" }, { ".mov", "Video" }, { ".mkv", "Video" }, { ".avi", "Video" }, { ".webm", "Video" }, { ".wmv", "Video" },
+            { ".mp4", "Video" }, { ".m4v", "Video" }, { ".ogv", "Video" }, { ".mov", "Video" }, { ".mkv", "Video" }, { ".avi", "Video" }, { ".webm", "Video" }, { ".wmv", "Video" },
             { ".zip", "Archive" }, { ".7z", "Archive" }, { ".rar", "Archive" }, { ".tar", "Archive" }, { ".gz", "Archive" },
             { ".exe", "Program" }, { ".msi", "Installer" }, { ".dll", "Library" }
         };
@@ -101,6 +101,7 @@ namespace MinGent
             if (a.Folder) return "folder";
             string k = Kind(a);
             if (k == "Audio") return "wave";
+            if (k == "Video") return "film";
             if (k == "Program" || k == "Installer" || k == "Library" || k == "PowerShell" || k == "Batch file" || k == "Shell script") return "terminal";
             return "file";
         }

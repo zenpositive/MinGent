@@ -126,6 +126,19 @@ namespace MinGent
             catch (Exception) { }
         }
 
+        public static void NewTask()
+        {
+            Post(delegate { seen.Clear(); });
+        }
+
+        public static bool Apart(Rectangle work, Rectangle pad, Rectangle app)
+        {
+            int slack = UI.S(24);
+            if (!work.IntersectsWith(pad) || !work.IntersectsWith(app) || Rectangle.Intersect(pad, app).Width > slack) return false;
+            Rectangle both = Rectangle.Union(pad, app);
+            return both.Left <= work.Left + slack && both.Right >= work.Right - slack && Math.Min(pad.Height, app.Height) >= work.Height - UI.S(160);
+        }
+
         public static bool Arrange(IntPtr app)
         {
             if (app == IntPtr.Zero || broken || Environment.OSVersion.Platform != PlatformID.Win32NT) return false;
@@ -155,23 +168,27 @@ namespace MinGent
         {
             seen.RemoveAll(delegate (IntPtr h) { return !IsWindow(h); });
             if (seen.Contains(app)) return false;
-            seen.Add(app);
             Form main = invoker as Form ?? invoker.FindForm();
-            if (main == null || !main.Visible || main.WindowState == FormWindowState.Minimized || !IsWindow(app) || !IsWindowVisible(app) || IsIconic(app)) return false;
+            if (main == null || !main.Visible || main.WindowState == FormWindowState.Minimized || !IsWindow(app) || !IsWindowVisible(app)) return false;
+            seen.Add(app);
             if (GetWindow(app, 4) != IntPtr.Zero) return false;
             System.Text.StringBuilder cls = new System.Text.StringBuilder(64);
             GetClassName(app, cls, 64);
             if (cls.ToString() == "#32770") return false;
             int ex = GetWindowLong(app, -20);
             if ((ex & 0x80) != 0 || (ex & 0x8) != 0) return false;
+            if (IsIconic(app)) ShowWindow(app, 9);
             Rectangle appR = Visible(app), mainR = Visible(main.Handle);
             Screen scr = Screen.FromHandle(main.Handle);
             Rectangle work = scr.WorkingArea;
             if (work.Width < UI.S(1100) || work.Height < UI.S(560)) return false;
             if (!scr.Bounds.IntersectsWith(appR)) return false;
-            Rectangle both = Rectangle.Intersect(appR, mainR);
-            long overlap = (long)both.Width * both.Height, smaller = Math.Min((long)appR.Width * appR.Height, (long)mainR.Width * mainR.Height);
-            if (both.IsEmpty || overlap * 4 < smaller) return false;
+            if (main.WindowState == FormWindowState.Normal && !IsZoomed(app) && Apart(work, mainR, appR))
+            {
+                if (!placed.Contains(app)) placed.Add(app);
+                Lift(app);
+                return false;
+            }
             bool padLeft = mainR.Left + mainR.Width / 2 <= work.Left + work.Width / 2;
             int half = work.Width / 2;
             Rectangle left = new Rectangle(work.Left, work.Top, half, work.Height), right = new Rectangle(work.Left + half, work.Top, work.Width - half, work.Height);
@@ -187,7 +204,15 @@ namespace MinGent
             if (IsZoomed(app)) ShowWindow(app, 9);
             bool sizable = (GetWindowLong(app, -16) & 0x40000) != 0;
             Place(app, padLeft ? right : left, sizable);
+            Rectangle padAt, appAt;
+            if (Uneven(work, padLeft, Visible(app).Width, Math.Max(UI.S(420), main.MinimumSize.Width), out padAt, out appAt))
+            {
+                Place(main.Handle, padAt, true);
+                putBounds = main.Bounds;
+                Place(app, appAt, false);
+            }
             if (!placed.Contains(app)) placed.Add(app);
+            Lift(app);
             misses = 0;
             if (watch == null)
             {
@@ -200,6 +225,22 @@ namespace MinGent
                 };
             }
             watch.Start();
+            return true;
+        }
+
+        static void Lift(IntPtr h)
+        {
+            SetWindowPos(h, new IntPtr(-1), 0, 0, 0, 0, 0x0013);
+            SetWindowPos(h, new IntPtr(-2), 0, 0, 0, 0, 0x0013);
+        }
+
+        public static bool Uneven(Rectangle work, bool padLeft, int appWidth, int padMin, out Rectangle pad, out Rectangle app)
+        {
+            pad = app = Rectangle.Empty;
+            int half = work.Width / 2, side = padLeft ? work.Width - half : half, rest = work.Width - appWidth;
+            if (appWidth <= side + UI.S(8) || rest < padMin) return false;
+            pad = new Rectangle(padLeft ? work.Left : work.Left + appWidth, work.Top, rest, work.Height);
+            app = new Rectangle(padLeft ? work.Left + rest : work.Left, work.Top, appWidth, work.Height);
             return true;
         }
 
@@ -247,6 +288,13 @@ namespace MinGent
             if (main == null || main.IsDisposed || main.WindowState != FormWindowState.Normal || main.Bounds != putBounds) return;
             main.Bounds = oldBounds;
             if (oldState == FormWindowState.Maximized) main.WindowState = FormWindowState.Maximized;
+        }
+
+        public static bool Before(Form main, out Rectangle bounds, out bool maximized)
+        {
+            bounds = oldBounds;
+            maximized = oldState == FormWindowState.Maximized;
+            return restorePending && main != null && main.WindowState == FormWindowState.Normal && main.Bounds == putBounds && oldBounds.Width > 0 && oldBounds.Height > 0;
         }
 
         internal static void Post(Action a)

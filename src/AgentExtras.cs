@@ -1070,6 +1070,7 @@ namespace MinGent
         [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr lParam);
         [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr parent, EnumProc cb, IntPtr lParam);
         [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr hwnd);
+        [DllImport("user32.dll")] static extern int GetDlgCtrlID(IntPtr hwnd);
         [DllImport("user32.dll")] static extern int GetWindowThreadProcessId(IntPtr hwnd, out int pid);
         [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
         [DllImport("user32.dll")] static extern bool IsWindow(IntPtr hwnd);
@@ -1411,6 +1412,74 @@ namespace MinGent
             "python", "pythonw", "py", "pyw", "node", "electron", "java", "javaw", "dotnet", "deno", "bun", "ruby", "rubyw", "php", "php-cgi", "perl", "lua", "luajit",
             "tauri-driver", "flutter", "dart", "godot", "love", "processing", "pwsh-preview" };
 
+        public static List<IntPtr> OpenWindowsOf(string exe)
+        {
+            List<IntPtr> list = new List<IntPtr>();
+            if (string.IsNullOrEmpty(exe) || Environment.OSVersion.Platform != PlatformID.Win32NT) return list;
+            Dictionary<int, bool> theirs = new Dictionary<int, bool>();
+            EnumProc cb = delegate (IntPtr h, IntPtr l)
+            {
+                try
+                {
+                    if (!IsWindowVisible(h) || IsIconic(h) || GetWindow(h, 4) != IntPtr.Zero) return true;
+                    RECT r;
+                    if (!GetWindowRect(h, out r) || r.Right - r.Left < 200 || r.Bottom - r.Top < 120) return true;
+                    int pid;
+                    GetWindowThreadProcessId(h, out pid);
+                    bool yes;
+                    if (!theirs.TryGetValue(pid, out yes))
+                    {
+                        string path = ExePath(pid);
+                        yes = path != null && string.Equals(path, exe, StringComparison.OrdinalIgnoreCase);
+                        theirs[pid] = yes;
+                    }
+                    if (yes) list.Add(h);
+                }
+                catch { }
+                return true;
+            };
+            EnumWindows(cb, IntPtr.Zero);
+            GC.KeepAlive(cb);
+            return list;
+        }
+
+        public static void Tuck(IntPtr h)
+        {
+            try { if (IsWindow(h) && !IsIconic(h)) ShowWindow(h, GetForegroundWindow() == h ? 6 : 7); } catch { }
+        }
+
+        public static IntPtr OwnFront()
+        {
+            try
+            {
+                IntPtr h = GetForegroundWindow();
+                if (h == IntPtr.Zero) return IntPtr.Zero;
+                int pid;
+                GetWindowThreadProcessId(h, out pid);
+                return pid == OwnPid ? h : IntPtr.Zero;
+            }
+            catch { return IntPtr.Zero; }
+        }
+
+        public static void GiveBack(IntPtr to, string takenBy)
+        {
+            try
+            {
+                if (to == IntPtr.Zero || !IsWindow(to) || IsIconic(to)) return;
+                IntPtr now = GetForegroundWindow();
+                if (now == to) return;
+                if (now != IntPtr.Zero)
+                {
+                    int pid;
+                    GetWindowThreadProcessId(now, out pid);
+                    string path = ExePath(pid);
+                    if (path == null || !string.Equals(path, takenBy, StringComparison.OrdinalIgnoreCase)) return;
+                }
+                SetForegroundWindow(to);
+            }
+            catch { }
+        }
+
         public static string ExePath(int pid)
         {
             IntPtr hp = OpenProcess(0x1000, false, pid);
@@ -1692,7 +1761,74 @@ namespace MinGent
             }
         }
 
-        public static void ForgetAdopted() { lock (adoptGate) { adopted.Clear(); launches.Clear(); } }
+        public static void ForgetAdopted() { lock (adoptGate) { adopted.Clear(); launches.Clear(); opened.Clear(); } }
+
+        public const int StartSeconds = 180;
+
+        sealed class Opened { public string Id, Name, Key; public DateTime At; public bool Seen; }
+
+        static readonly List<Opened> opened = new List<Opened>();
+
+        public static void Opening(string id, string name, DateTime at)
+        {
+            lock (adoptGate)
+            {
+                opened.RemoveAll(delegate (Opened o) { return o.Id == id; });
+                Opened n = new Opened();
+                n.Id = id;
+                n.Name = name;
+                n.Key = NameKey(name);
+                n.At = at.AddSeconds(-1);
+                opened.Add(n);
+                if (opened.Count > 20) opened.RemoveAt(0);
+            }
+        }
+
+        public static void Showed(string id)
+        {
+            lock (adoptGate) foreach (Opened o in opened) if (o.Id == id) o.Seen = true;
+        }
+
+        public static string Starting(string id, out int seconds)
+        {
+            seconds = 0;
+            DateTime now = DateTime.UtcNow;
+            lock (adoptGate)
+                for (int i = opened.Count - 1; i >= 0; i--)
+                {
+                    Opened o = opened[i];
+                    if (o.Seen || (id != null && o.Id != id) || (now - o.At).TotalSeconds > StartSeconds) continue;
+                    seconds = Math.Max(1, (int)(now - o.At).TotalSeconds);
+                    return o.Name;
+                }
+            return null;
+        }
+
+        static string NameKey(string s)
+        {
+            StringBuilder sb = new StringBuilder();
+            foreach (char c in (s ?? "").ToLowerInvariant()) sb.Append(char.IsLetterOrDigit(c) ? c : ' ');
+            return " " + Regex.Replace(sb.ToString(), @"\s+", " ").Trim() + " ";
+        }
+
+        static bool NamedAfter(int pid, string process, string title, string key)
+        {
+            if (key.Trim().Length < 3) return false;
+            List<string> names = new List<string> { process, title };
+            try
+            {
+                string exe = ExePath(pid);
+                if (!string.IsNullOrEmpty(exe))
+                {
+                    FileVersionInfo v = FileVersionInfo.GetVersionInfo(exe);
+                    names.Add(v.FileDescription);
+                    names.Add(v.ProductName);
+                }
+            }
+            catch { }
+            foreach (string n in names) if (NameKey(n).Contains(key)) return true;
+            return false;
+        }
 
         public static bool AgentInFront(Dictionary<string, AppGrant> grants)
         {
@@ -1791,7 +1927,7 @@ namespace MinGent
                 {
                     if (!IsWindowVisible(h)) return true;
                     RECT r;
-                    if (!GetWindowRect(h, out r) || r.Right - r.Left < 40 || r.Bottom - r.Top < 30) return true;
+                    if (!GetWindowRect(h, out r) || (!IsIconic(h) && (r.Right - r.Left < 40 || r.Bottom - r.Top < 30))) return true;
                     if (Cloaked(h)) return true;
                     int pid;
                     GetWindowThreadProcessId(h, out pid);
@@ -1868,13 +2004,14 @@ namespace MinGent
         {
             if (pid == 0 || pid == OwnPid) return false;
             DateTime started;
-            string name;
+            string name, title = "";
             try
             {
                 using (Process p = Process.GetProcessById(pid))
                 {
                     started = p.StartTime.ToUniversalTime();
                     name = p.ProcessName;
+                    try { title = p.MainWindowTitle; } catch { }
                 }
             }
             catch { return false; }
@@ -1894,6 +2031,16 @@ namespace MinGent
                 foreach (KeyValuePair<DateTime, DateTime> w in launches)
                     if (started >= w.Key && started <= w.Value) { adopted[pid] = started; return true; }
             }
+            List<string> keys = new List<string>();
+            lock (adoptGate)
+                foreach (Opened o in opened)
+                    if (started >= o.At && started <= o.At.AddSeconds(StartSeconds)) keys.Add(o.Key);
+            foreach (string k in keys)
+                if (NamedAfter(pid, name, title, k))
+                {
+                    lock (adoptGate) adopted[pid] = started;
+                    return true;
+                }
             return false;
         }
 
@@ -2080,7 +2227,7 @@ namespace MinGent
                 {
                     if (!IsWindowVisible(h)) return true;
                     RECT r;
-                    if (!GetWindowRect(h, out r) || r.Right - r.Left < 40 || r.Bottom - r.Top < 30) return true;
+                    if (!GetWindowRect(h, out r) || (!IsIconic(h) && (r.Right - r.Left < 40 || r.Bottom - r.Top < 30))) return true;
                     if (Cloaked(h)) return true;
                     int pid;
                     GetWindowThreadProcessId(h, out pid);
@@ -2179,6 +2326,53 @@ namespace MinGent
             "lagre", "\u00E5pne", "\u00E5bn", "ulo\u017Eit", "otev\u0159\u00EDt", "ment\u00E9s", "megnyit\u00E1s", "\u4FDD\u5B58", "\u6253\u5F00", "\u958B\u304F", "\u958B\u555F",
             "\uC800\uC7A5", "\uC5F4\uAE30", "\u05E9\u05DE\u05D5\u05E8", "\u05E4\u05EA\u05D7", "\u062D\u0641\u0638", "\u0641\u062A\u062D" };
 
+        public static string FileDialogNote(AppWindow w, Dictionary<string, AppElement> refs, string workspace)
+        {
+            if (!IsFileDialog(w)) return null;
+            Rectangle nameBox = Rectangle.Empty, folderBox = Rectangle.Empty, okButton = Rectangle.Empty;
+            try
+            {
+                StringBuilder sb = new StringBuilder(64);
+                EnumProc cb = delegate (IntPtr h, IntPtr l)
+                {
+                    RECT r;
+                    if (!IsWindowVisible(h) || !GetWindowRect(h, out r)) return true;
+                    int id = GetDlgCtrlID(h);
+                    sb.Length = 0;
+                    GetClassName(h, sb, 64);
+                    string cls = sb.ToString();
+                    Rectangle rc = Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
+                    if (id == 1148 && nameBox.IsEmpty && (cls == "ComboBox" || cls == "ComboBoxEx32" || cls == "Edit")) nameBox = rc;
+                    else if (id == 1152 && folderBox.IsEmpty && cls == "Edit") folderBox = rc;
+                    else if (id == 1 && okButton.IsEmpty && cls == "Button") okButton = rc;
+                    return true;
+                };
+                EnumChildWindows(w.Hwnd, cb, IntPtr.Zero);
+                GC.KeepAlive(cb);
+            }
+            catch { }
+            bool folder = nameBox.IsEmpty && !folderBox.IsEmpty;
+            Rectangle want = folder ? folderBox : nameBox;
+            string box = null, value = "", ok = null, okName = "";
+            foreach (KeyValuePair<string, AppElement> r in refs)
+            {
+                Rectangle er = r.Value.Rect;
+                if (er.Width <= 0 || er.Height <= 0) continue;
+                Point mid = new Point(er.X + er.Width / 2, er.Y + er.Height / 2);
+                if (box == null && (r.Value.Role == RoleText || r.Value.Role == RoleCombo) && want.Contains(mid)) { box = r.Key; value = r.Value.Value; }
+                else if (ok == null && r.Value.Role == RoleButton && okButton.Contains(mid)) { ok = r.Key; okName = (r.Value.Name ?? "").Replace("&", "").Trim(); }
+            }
+            string button = ok != null ? ok + (okName.Length > 0 && okName.Length <= 40 ? " (\"" + okName + "\")" : "") : null;
+            string avoid = " Don't type into the address or search boxes at the top: they don't choose anything.";
+            if (folder)
+                return "This dialog picks a folder. " + (box != null ? "Its folder box is " + box : "Find its folder box") +
+                    ": type the folder's full path there, then " + (button != null ? "click " + button : "click the dialog's main button") + ". Enter alone only opens the folder." + avoid;
+            return "This is a file dialog. " + (box != null ? "Its file name box is " + box + (value.Length > 0 ? ", which holds \"" + value + "\"" : "") : "Find its file name box") +
+                ": type the full path of the file there, folder and name, then press Enter" + (button != null ? " or click " + button : "") +
+                ". To open several files from one folder, type the folder's path and press Enter first, then type the names in quotes with spaces between them (\"a.png\" \"b.png\") and press Enter" +
+                ". When saving, keep the name the program suggests unless the user asked for another, and save into the chat's work folder (" + workspace + ") when you will use the file yourself; otherwise keep the folder the dialog shows and tell the user where the file went." + avoid;
+        }
+
         public static bool IsFileDialog(AppWindow w)
         {
             if (w.Class != "#32770") return false;
@@ -2240,6 +2434,13 @@ namespace MinGent
         public static AppWindow Pick(List<AppWindow> all, string which, bool others, out string error)
         {
             error = null;
+            int ago = 0;
+            string starting = all.Count == 0 ? Starting(null, out ago) : null;
+            if (starting != null)
+            {
+                error = "No window of " + starting + " has shown up yet: Windows was asked to open it " + ago + " seconds ago, and it is still starting. A program that starts through a launcher, such as a game store, can take a minute or more. Look again with app_read in a few seconds, and don't open it again.";
+                return null;
+            }
             if (all.Count == 0)
             {
                 error = "No window of a program you started is open. Open the program with app_open, or start your own with run_command (background=true), wait a moment, then try again. " +
@@ -2282,7 +2483,9 @@ namespace MinGent
             order.Sort(delegate (AppWindow x, AppWindow y) { return x.Id != y.Id ? x.Id.CompareTo(y.Id) : all.IndexOf(x).CompareTo(all.IndexOf(y)); });
             foreach (AppWindow w in order)
             {
-                sb.Append(w.Ref(all)).Append(": \"").Append(w.Title).Append("\" (").Append(w.Process).Append(", ").Append(w.Rect.Width).Append('x').Append(w.Rect.Height);
+                sb.Append(w.Ref(all)).Append(": \"").Append(w.Title).Append("\" (").Append(w.Process).Append(", ");
+                if (Place(w) == "minimized") sb.Append("minimized");
+                else sb.Append(w.Rect.Width).Append('x').Append(w.Rect.Height);
                 if (w.Class == "#32770") sb.Append(", dialog");
                 if (w.Granted) sb.Append(w.Tier == AppTier.Look ? ", the user's, look only" : ", the user's");
                 if (w.Veiled) sb.Append(w.Barred ? ", off limits" : ", needs the user's OK first");
@@ -3075,8 +3278,8 @@ namespace MinGent
             if (why != null) return why;
             string tier = TierGate(w, act);
             if (tier != null) return tier;
-            bool arrange = ctx.Cfg.SideBySide && !w.Granted;
-            bool early = arrange && !w.Adopted && !Refused(ctx, w);
+            bool arrange = ctx.Cfg.SideBySide;
+            bool early = arrange && !w.Granted && !w.Adopted && !Refused(ctx, w);
             if (early) SideBySide(ctx, w);
             AppHighlight.Show(w.Hwnd);
             string denied = Check(ctx, w, acting, cancelOnly, act);
@@ -3158,7 +3361,7 @@ namespace MinGent
             if (ps.Auto && !(acting && tainted) && (trusted || (!acting && !w.Adopted))) return null;
             string exe = AppControl.ExePath(w.Pid) ?? w.Process;
             string useKey = "app:" + UseName(w);
-            if (!acting) lock (ps.AskLock) if (ps.AllowedKeys.Contains(useKey)) return null;
+            if (!acting) lock (ps.AskLock) if (ps.AllowedKeys.Contains(useKey) || ps.TaskKeys.Contains(useKey)) return null;
             bool use = acting || w.Adopted;
             PermissionAsk a = new PermissionAsk();
             a.Kind = "app";
@@ -3492,6 +3695,12 @@ namespace MinGent
             }
             if (els.Count == 0) sb.Append("(this program does not expose its controls to accessibility tools; use app_screenshot and click by position)\n");
             else sb.Append("Refs like a12 work with app_click and app_type until the window changes.\n");
+            string dialog = AppControl.FileDialogNote(w, st.Refs, ctx.Workspace);
+            if (dialog != null)
+            {
+                if (ctx.Cfg.WorkspaceIsDefault) ctx.EnsureWorkspace();
+                sb.Append("[MinGent note] ").Append(dialog).Append('\n');
+            }
             return sb.ToString();
         }
     }
@@ -3606,6 +3815,18 @@ namespace MinGent
         public override Dictionary<string, object> Schema { get { return Obj("name", P("string", "The program's name as the Start menu shows it"), false, "reason", P("string", "One short sentence for the user: what you need the program for"), false); } }
         public override string Label(Dictionary<string, object> a) { string n = (S(a, "name") ?? "").Trim(); return n.Length == 0 ? "List the programs on this PC" : "Open " + (n.Length > 40 ? n.Substring(0, 40) + "\u2026" : n); }
 
+        static string Usable(List<AppWindow> all)
+        {
+            StringBuilder sb = new StringBuilder();
+            foreach (AppWindow w in all) if (!w.Veiled) sb.Append(w.Ref(all)).Append(": \"").Append(w.Title).Append("\" (").Append(w.Process).Append(")\n");
+            return sb.ToString();
+        }
+
+        static string StillStarting(string name)
+        {
+            return "It may still be starting: a program that starts through a launcher, such as a game store, can take a minute or more, and a launcher window may come first. MinGent hands you its windows as they show up, so look with app_read in a few seconds, and don't open " + name + " again.";
+        }
+
         public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
         {
             if (Environment.OSVersion.Platform != PlatformID.Win32NT) return ToolOutcome.Fail("app control only works on Windows");
@@ -3640,6 +3861,18 @@ namespace MinGent
                     if (string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase) || AppControl.FromEntry(x.Exe.ToLowerInvariant(), id) ||
                         (string.Equals(x.Process, kindOf, StringComparison.OrdinalIgnoreCase) && (id.IndexOf(kindOf, StringComparison.OrdinalIgnoreCase) >= 0 || name.IndexOf(kindOf, StringComparison.OrdinalIgnoreCase) >= 0)))
                         return ToolOutcome.Ok(name + " is already open, so it is the user's. " + (Others ? "Ask for it with app_access app=\"" + x.Name + "\"." : "It is off limits until they switch on \"Programs you opened yourself\" in Settings > Agent > Tools: tell them that."), name + " is already open");
+            int ago;
+            if (AppControl.Starting(id, out ago) != null)
+            {
+                List<AppWindow> cur = All(ctx);
+                for (int i = 0; i < 20 && Usable(cur).Length == 0 && !ctx.Ct.IsCancelled; i++) { ctx.Ct.Sleep(400); cur = All(ctx); }
+                string list = Usable(cur);
+                ToolOutcome again = ToolOutcome.Ok("Windows was asked to open " + name + " " + ago + " seconds ago, so MinGent doesn't open it a second time. " +
+                    (list.Length > 0 ? "Windows you may use now:\n" + list + "If none of them is " + name + ", it is still starting: look again with app_read in a few seconds." : StillStarting(name)),
+                    list.Length > 0 ? "Already opening " + name : name + " is still starting");
+                again.Untrusted = list.Length > 0;
+                return again;
+            }
             PermissionState ps = ctx.Session.Perms;
             PermissionAsk ask = new PermissionAsk();
             ask.Kind = "app";
@@ -3680,6 +3913,7 @@ namespace MinGent
                 using (Process p = Process.Start(si)) { }
             }
             catch (Exception ex) { return ToolOutcome.Fail("Windows could not open " + name + ": " + ex.Message); }
+            AppControl.Opening(id, name, now);
             List<AppWindow> all = null;
             List<AppWindow> fresh = new List<AppWindow>();
             for (int i = 0; i < 20 && fresh.Count == 0 && !ctx.Ct.IsCancelled; i++)
@@ -3693,17 +3927,17 @@ namespace MinGent
                 string admin = null;
                 foreach (KeyValuePair<IntPtr, string> x in AppControl.AdminWindows())
                     if (!raised.ContainsKey(x.Key) || x.Value.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0) { admin = x.Value; break; }
-                if (admin != null) return ToolOutcome.Ok("Windows opened " + name + " for the user. " + AppControl.AdminNote(admin), "Opened " + name + ", out of reach");
-                StringBuilder have = new StringBuilder();
-                if (all != null) foreach (AppWindow w in all) if (!w.Veiled) have.Append(w.Ref(all)).Append(": \"").Append(w.Title).Append("\" (").Append(w.Process).Append(")\n");
-                ToolOutcome late = ToolOutcome.Ok("Windows was asked to open " + name + ", but no new window of it has shown up for you. " +
-                    (have.Length > 0 ? "Windows you may use now:\n" + have : "") +
-                    "It may still be starting: look with app_read in a moment. If it is not there then, either it was already running and came to the front, which makes it the user's" +
+                if (admin != null) { AppControl.Showed(id); return ToolOutcome.Ok("Windows opened " + name + " for the user. " + AppControl.AdminNote(admin), "Opened " + name + ", out of reach"); }
+                string have = all != null ? Usable(all) : "";
+                ToolOutcome late = ToolOutcome.Ok("Windows was asked to open " + name + ", but no window of it has shown up for you yet. " +
+                    (have.Length > 0 ? "Windows you may use now:\n" + have : "") + StillStarting(name) +
+                    " If nothing comes within a few minutes, either it was already running and came to the front, which makes it the user's" +
                     (Others ? " (ask for it with app_access)" : " (off limits until they switch on \"Programs you opened yourself\" in Settings > Agent > Tools)") +
                     ", or it is a kind of program MinGent never hands to you: " + (AppControl.Unlocked ? "" : "browsers, mail, chat, ") + "password, money and remote-access programs and Windows' " + (AppControl.Unlocked ? "sign-in and security." : "own tools."), "Asked to open " + name);
                 late.Untrusted = have.Length > 0;
                 return late;
             }
+            AppControl.Showed(id);
             if (asked)
             {
                 string one = null;
@@ -3813,6 +4047,9 @@ namespace MinGent
         public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
         {
             List<AppWindow> all = All(ctx);
+            int ago;
+            if (all.Count == 0 && AppControl.Starting(null, out ago) != null)
+                for (int i = 0; i < 25 && all.Count == 0 && !ctx.Ct.IsCancelled; i++) { ctx.Ct.Sleep(400); all = All(ctx); }
             string err;
             AppWindow w = AppControl.Pick(all, S(a, "window"), ctx.Cfg.OtherApps, out err);
             if (w == null) return ToolOutcome.Fail(err);

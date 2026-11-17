@@ -163,6 +163,8 @@ namespace MinGent
 
         InputBox lmToken, customUrl, customKey, customModel, workspace, instructions, memoryBox;
         ApiKeyRow anthropicKey, openaiKey, geminiKey, openrouterKey;
+        SwitchRow geminiWeb;
+        string geminiBrowser;
         string memoryOriginal = "";
         ThemedCombo lmCtx, engineCtx, engineKv, quickKey;
         Segmented themeBox, accentBox;
@@ -361,6 +363,14 @@ namespace MinGent
 
         static string Protect(string key) { return string.IsNullOrEmpty(key) ? "" : Secret.Protect(key); }
 
+        static string HelperNote()
+        {
+            if (!GeminiHelper.SetUp) return "Not set up. Works in Brave, Chrome, Edge, Vivaldi and Opera.";
+            if (!GeminiBridge.Running) return "Set up. It runs while the switch above is on.";
+            bool good;
+            return GeminiHelper.StatusLine(out good) + ".";
+        }
+
         static string Words(int tokens) { return "about " + (tokens * 3 / 4).ToString("N0") + " words"; }
 
         static int Round(int tokens) { return Math.Max(50, (int)Math.Round(tokens / 50.0) * 50); }
@@ -500,6 +510,24 @@ namespace MinGent
             openrouterKey = KeyRow(c, "OpenRouter API key", "From openrouter.ai. One key for models from many providers.", "openrouter", "https://openrouter.ai/settings/keys", s.KeyOpenRouter);
             Place(p, c);
 
+            Section(p, GeminiWeb.Title, "Your Gemini account's models without an API key, through a small helper extension in your own browser. This is not an official Google API: it can stop working when Google changes its site, and Google's terms may not allow it, so use it at your own risk.");
+            c = NewCard(p);
+            geminiWeb = Switch(c, "Use Gemini through my browser", "The models your account has show up in the model menu. Your messages and the files the agent reads go to Google under that account.", s.GeminiWeb);
+            PillButton setUp = new PillButton(GeminiHelper.SetUp ? "Set up again..." : "Set up...", Th, false);
+            FieldRow helperRow = Row(c, "Helper extension", HelperNote(), setUp, UI.S(150));
+            setUp.Click += delegate
+            {
+                GeminiSetupDialog.Begin(this, Th, setUp, delegate (string exe)
+                {
+                    geminiBrowser = exe;
+                    geminiWeb.Checked = true;
+                    helperRow.SetNote(HelperNote());
+                    setUp.Text = "Set up again...";
+                    setUp.Invalidate();
+                });
+            };
+            Place(p, c);
+
             Section(p, "Other model servers", "Only if you already run one. The built-in engine does the same job.");
             c = NewCard(p);
             customUrl = MakeField(s.CustomUrl, false, false);
@@ -563,7 +591,7 @@ namespace MinGent
             appsOn = Switch(c, "Programs it starts itself", "Open programs from the Start menu, start the ones it builds, and read, click, type and scroll in them. A program from the Start menu, a Store app or one Windows opens for it needs your OK first, except in Full auto. " + Cap(Tokens(AgentToolbox.AppTools(true))) + "; off by itself under 24K.", s.AiApps);
             otherApps = Switch(c, "Programs you opened yourself", "The agent can ask to use a program you already have open; you decide for each one, in each chat, even in Full auto. Browsers, File Explorer, terminals and code editors are look-only, and mail and chat programs are not offered, unless \"Restricted programs\" is on. Needs \"Programs it starts itself\". " + Cap(Tokens(new AppAccessTool())) + ".", s.AiOtherApps);
             restrictedApps = Switch(c, "Restricted programs", "On: when you ask for it, the agent can also click and type in your browsers, File Explorer, terminals, code editors, mail and chat programs and Windows' own tools, after your OK for each program in each chat, even in Full auto. Password managers, money and remote-access programs, Windows' sign-in and admin prompts and the Windows Security app stay off limits either way. Needs \"Programs it starts itself\".", s.AiRestrictedApps);
-            sideBySide = Switch(c, "Put MinGent and the program side by side", "When a program the agent uses would cover MinGent, each gets half the screen until the program closes.", s.AiSideBySide);
+            sideBySide = Switch(c, "Put MinGent and the program side by side", "While the agent uses a program, MinGent and the program each get half the screen, until the program closes.", s.AiSideBySide);
             helpersOn = Switch(c, "Helper agents", "The agent hands focused tasks to helpers with a fresh context, which keeps its own context small. On a local model they run one at a time, which takes longer. " + Cap(Tokens(new DelegateTool(false))) + ".", s.AiHelpers);
             autoReview = Switch(c, "Review big changes", "When the agent changes a lot of code, a helper reviews the work before the final answer.", s.AiAutoReview);
             Place(p, c);
@@ -955,6 +983,8 @@ namespace MinGent
             s.KeyOpenAi = pOpenAi;
             s.KeyGemini = pGemini;
             s.KeyOpenRouter = pOpenRouter;
+            s.GeminiWeb = geminiWeb.Checked;
+            if (geminiBrowser != null) s.GeminiBrowser = geminiBrowser;
             s.CustomUrl = customUrl.Box.Text.Trim().TrimEnd('/');
             s.KeyCustom = pCustom;
             s.CustomModel = customModel.Box.Text.Trim();

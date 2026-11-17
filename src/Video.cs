@@ -18,7 +18,7 @@ namespace MinGent
     static class VideoFrames
     {
         public const int SheetCount = 9, CloseCount = 4, SheetWidth = 1366;
-        static readonly string[] Extensions = { ".mp4", ".m4v", ".webm", ".mov", ".ogv" };
+        public static readonly string[] Extensions = { ".mp4", ".m4v", ".webm", ".mov", ".ogv" };
 
         public static bool IsVideoFile(string path)
         {
@@ -158,10 +158,10 @@ namespace MinGent
             switch (code)
             {
                 case "none":
-                    return "There is no video on the page that is open in the browser." + (frames > 0 ? " The page has frames from other sites, and a video inside such a frame can't be reached from here: open the video's own page instead." : " Open a page with a video, or a video file, with browser_navigate first.");
+                    return "There is no video on the page that is open in the browser." + (frames > 0 ? " The page has frames from other sites, and a video inside such a frame can't be reached from here: open the video's own page instead." : " Give watch_video the video's page address or file path as video.");
                 case "empty": return "The video on this page has not loaded anything yet. Start it with browser_click, then try again.";
                 case "loading": return "The video has not loaded yet. If it does not start by itself, start it with browser_click on the video, then try again.";
-                case "broken": return "The browser can't play this video. It plays MP4, WebM and MOV files with common encodings.";
+                case "broken": return "The browser can't play this video. It plays MP4, WebM, MOV, M4V and OGV files with common encodings.";
                 case "live": return "This is a live stream, or its length is unknown, so there are no moments to pick. browser_screenshot shows what it shows right now.";
                 case "ad": return "The page is showing an ad in place of the video. Wait for it to end or skip it with browser_click, then try again.";
             }

@@ -695,7 +695,7 @@ namespace MinGent
         public MBox Box;
         public int Base;
         public const int KText = 0, KCodeSpan = 1, KCodeBlock = 2, KLine = 3, KCheck = 4, KCopy = 5, KQuoteBar = 6, KTableBorder = 7, KStrike = 8, KHeaderBand = 9, KMath = 10, KBar = 11, KSeg = 12, KDot = 13;
-        public const int RFore = 0, RDim = 1, RLink = 2, RCodeFore = 3, RAccent = 4, RError = 5, RSyntax = 100;
+        public const int RFore = 0, RDim = 1, RLink = 2, RCodeFore = 3, RAccent = 4, RError = 5, RAdded = 6, RRemoved = 7, RSyntax = 100;
     }
 
     class MdLayout
@@ -1475,6 +1475,8 @@ namespace MinGent
                 case DrawOp.RCodeFore: return th.Fore;
                 case DrawOp.RAccent: return th.Accent;
                 case DrawOp.RError: return th.HighContrast ? th.Fore : th.Error;
+                case DrawOp.RAdded: return th.HighContrast ? th.Fore : th.Dark ? Color.FromArgb(0x7E, 0xC6, 0x7E) : Color.FromArgb(0x1E, 0x7B, 0x34);
+                case DrawOp.RRemoved: return th.HighContrast ? th.Fore : th.Dark ? Color.FromArgb(0xE5, 0x8A, 0x8A) : Color.FromArgb(0xB3, 0x26, 0x1E);
                 default: return dimAll ? th.ChromeDim : th.Fore;
             }
         }
@@ -1615,8 +1617,9 @@ namespace MinGent
                             bool copied = copiedIdx == op.Tag;
                             if (hot) Glyphs.Hover(g, th, th.ButtonHover, r, UI.S(4));
                             Rectangle ic = new Rectangle(r.X + UI.S(4), r.Y, UI.S(16), r.Height);
-                            Glyphs.Draw(copied ? "check" : "copy", g, ic, th.ChromeDim);
-                            TextRenderer.DrawText(g, copied ? "Copied" : "Copy", f.Small, new Rectangle(r.X + UI.S(22), r.Y, r.Width - UI.S(22), r.Height), th.ChromeDim,
+                            int kind = Charts.CopyKind(op.Tag);
+                            Glyphs.Draw(copied ? "check" : kind == 1 ? "image" : kind == 2 ? "table" : "copy", g, ic, th.ChromeDim);
+                            TextRenderer.DrawText(g, copied ? "Copied" : op.Text ?? "Copy", f.Small, new Rectangle(r.X + UI.S(22), r.Y, r.Width - UI.S(22), r.Height), th.ChromeDim,
                                 TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.PreserveGraphicsClipping);
                             break;
                         }

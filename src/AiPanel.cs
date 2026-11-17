@@ -386,15 +386,6 @@ namespace MinGent
             try { CheckSchedule(DateTime.Now, Form.ActiveForm == null, QuietMs()); } catch { }
         }
 
-        public string TitleNote
-        {
-            get
-            {
-                if (!running || curActivity == null) return "";
-                string line = chat.StatusLine(curActivity);
-                return line.Length > 60 ? line.Substring(0, 59).TrimEnd() + "\u2026" : line;
-            }
-        }
         public string ActiveChatPath { get { return chatFile; } }
 
         static int conversations;
@@ -602,10 +593,9 @@ namespace MinGent
         {
             Graphics g = e.Graphics;
             using (SolidBrush b = new SolidBrush(th.Back)) g.FillRectangle(b, ClientRectangle);
-            string title = chatTitle ?? "";
-            if (temporary && (title.Length == 0 || EmptyLayout)) title = "Temporary chat";
+            string title = temporary ? "Temporary chat" : "";
             string full = null;
-            if (title.Length > 0 && (!EmptyLayout || temporary))
+            if (title.Length > 0)
             {
                 int right = (bTemp.Visible ? bTemp.Left : bNotes.Left) - UI.S(12);
                 int left = UI.S(20);
@@ -979,6 +969,7 @@ namespace MinGent
             k.CustomModel = settings.CustomModel;
             k.LmLoadContext = settings.LmContext;
             k.EngineContext = settings.EngineContext;
+            k.GeminiWeb = settings.GeminiWeb;
             return k;
         }
 
@@ -1157,8 +1148,9 @@ namespace MinGent
                 bool custom = !string.IsNullOrEmpty(settings.CustomUrl);
                 bool lm = cur.StartsWith("lmstudio:", StringComparison.Ordinal) || catalog.Models.Exists(delegate (ModelEntry x) { return x.Provider == "lmstudio"; }) || ModelCatalog.LmStudioInstalled();
                 bool router = cur.StartsWith("openrouter:", StringComparison.Ordinal) || !string.IsNullOrEmpty(settings.KeyOpenRouter);
-                int sections = 4 + (lm ? 1 : 0) + (router ? 1 : 0) + (custom ? 1 : 0), filled = 0;
-                foreach (string p in new string[] { "engine", "lmstudio", "anthropic", "openai", "gemini", "openrouter", "custom" })
+                bool web = settings.GeminiWeb || cur.StartsWith(GeminiWeb.Provider + ":", StringComparison.Ordinal);
+                int sections = 4 + (lm ? 1 : 0) + (router ? 1 : 0) + (custom ? 1 : 0) + (web ? 1 : 0), filled = 0;
+                foreach (string p in new string[] { "engine", "lmstudio", "anthropic", "openai", "gemini", "openrouter", GeminiWeb.Provider, "custom" })
                     foreach (ModelEntry e in catalog.Models) if (e.Provider == p) { filled++; break; }
                 int rows = (wa.Height - UI.S(120)) / UI.S(28) - sections * 2 - 4;
                 int cap = Math.Max(4, Math.Min(40, rows / Math.Max(1, filled)));
@@ -1168,6 +1160,7 @@ namespace MinGent
                 AddProviderSection(m, "openai", "OpenAI API", cur, cap);
                 AddProviderSection(m, "gemini", "Gemini (Google AI)", cur, cap);
                 if (router) AddProviderSection(m, "openrouter", "OpenRouter", cur, cap);
+                if (web) AddProviderSection(m, GeminiWeb.Provider, GeminiWeb.Title, cur, cap);
                 if (custom) AddProviderSection(m, "custom", "Custom server", cur, cap);
             }
             m.Items.Add(new ToolStripSeparator());
@@ -1188,9 +1181,10 @@ namespace MinGent
             List<ModelEntry> list = new List<ModelEntry>();
             foreach (ModelEntry e in catalog.Models) if (e.Provider == provider) list.Add(e);
             if (m.Items.Count > 0) m.Items.Add(new ToolStripSeparator());
-            bool keyless = ModelEntry.IsCloud(provider) && list.Count == 0 && catalog.State(provider).Configured == false;
+            bool helper = provider == GeminiWeb.Provider;
+            bool keyless = ModelEntry.IsCloud(provider) && !helper && list.Count == 0 && catalog.State(provider).Configured == false;
             string status = keyless ? "" : ps.Status;
-            bool showStatus = status.Length > 0 && (list.Count == 0 || provider == "lmstudio");
+            bool showStatus = status.Length > 0 && (list.Count == 0 || provider == "lmstudio" || (helper && status != "Connected"));
             bool shortStatus = showStatus && status.Length <= 30 && status.IndexOf(" - ", StringComparison.Ordinal) < 0;
             m.Items.Add(Menus.Header(title, shortStatus ? status : "", th));
             if (showStatus && !shortStatus) m.Items.Add(Menus.Hint(status, th));
@@ -1219,7 +1213,11 @@ namespace MinGent
                 List<ModelEntry> all = list;
                 m.Items.Add(Menus.Item("All " + list.Count + " models...", false, delegate { BeginInvoke(new Action(delegate { ShowAllModels(all, cur); })); }));
             }
-            if (list.Count == 0)
+            if (helper)
+            {
+                if (!ps.Configured) m.Items.Add(Menus.Item("Set up the helper...", false, delegate { host.ShowSettings("Cloud models"); }));
+            }
+            else if (list.Count == 0)
             {
                 if (ModelEntry.IsCloud(provider))
                     m.Items.Add(Menus.Item(ps.NeedsKey ? "Check the API key..." : ps.Configured ? "API key settings..." : "Add an API key...", false, delegate { host.ShowSettings("Cloud models"); }));
@@ -1332,6 +1330,28 @@ namespace MinGent
                 try { BeginInvoke(new Action(delegate { catalog = s2; UpdateModelChip(); })); } catch { }
             }
             if (ct.IsCancelled) return "stopped";
+            if (provider == GeminiWeb.Provider)
+            {
+                string wait = GeminiWeb.WaitReady(progress, ct);
+                if (wait != null) return wait;
+                if (snap.Find(r) == null || !snap.State(provider).Reachable)
+                {
+                    progress("Asking Gemini which models your account has");
+                    snap = ModelCatalog.Refresh(k, true, ct);
+                    CatalogSnapshot s4 = snap;
+                    try { BeginInvoke(new Action(delegate { catalog = s4; UpdateModelChip(); })); } catch { }
+                    if (ct.IsCancelled) return "stopped";
+                }
+                ModelEntry web = snap.Find(r);
+                if (web == null)
+                {
+                    ProviderState ws = snap.State(provider);
+                    return !string.IsNullOrEmpty(ws.Error) ? ws.Error : "Your Gemini account does not list that model right now. Pick another one in the model menu.";
+                }
+                model = web;
+                be = ModelCatalog.CreateBackend(web, k, null);
+                return null;
+            }
             ProviderState ps = snap.State(provider);
             if (provider == "lmstudio")
             {
@@ -1419,11 +1439,13 @@ namespace MinGent
             using (OpenFileDialog d = new OpenFileDialog())
             {
                 d.Title = "Attach an image, a document or a file";
-                d.Filter = "Images, documents, sound and text|*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.pdf;*.docx;*.xlsx;*.pptx;*.odt;*.ods;*.odp;*.rtf;*.epub;*.wav;*.mp3;*.m4a;*.flac;*.ogg;*.opus;*.wma;*.aac;*.aif;*.aiff;*.txt;*.md;*.cs;*.py;*.js;*.ts;*.json;*.html;*.css;*.xml;*.csv;*.log"
-                    + "|Documents (PDF, Word, Excel, PowerPoint)|*.pdf;*.docx;*.docm;*.dotx;*.xlsx;*.xlsm;*.xltx;*.pptx;*.pptm;*.ppsx;*.odt;*.ods;*.odp;*.rtf;*.epub"
-                    + "|Images|*.png;*.jpg;*.jpeg;*.gif;*.bmp"
-                    + "|Sound files|*.wav;*.wave;*.mp3;*.m4a;*.m4b;*.aac;*.flac;*.ogg;*.oga;*.opus;*.wma;*.aif;*.aiff;*.aifc;*.amr;*.mka;*.caf;*.ac3;*.mp2"
-                    + "|All files|*.*";
+                string docs = "*.pdf;*.docx;*.docm;*.dotx;*.xlsx;*.xlsm;*.xltx;*.pptx;*.pptm;*.ppsx;*.odt;*.ods;*.odp;*.rtf;*.epub";
+                string pics = "*.png;*.jpg;*.jpeg;*.gif;*.bmp";
+                string sound = "*.wav;*.wave;*.mp3;*.m4a;*.m4b;*.aac;*.flac;*.ogg;*.oga;*.opus;*.wma;*.aif;*.aiff;*.aifc;*.amr;*.mka;*.caf;*.ac3;*.mp2";
+                string video = "*" + string.Join(";*", VideoFrames.Extensions);
+                string text = "*.txt;*.md;*.cs;*.py;*.js;*.ts;*.json;*.html;*.css;*.xml;*.csv;*.log";
+                d.Filter = "Images, documents, sound, videos and text|" + pics + ";" + docs + ";" + sound + ";" + video + ";" + text
+                    + "|Documents (PDF, Word, Excel, PowerPoint)|" + docs + "|Images|" + pics + "|Sound files|" + sound + "|Videos|" + video + "|All files|*.*";
                 d.Multiselect = true;
                 if (d.ShowDialog(FindForm()) != DialogResult.OK) return;
                 AttachFiles(d.FileNames);
@@ -1958,6 +1980,7 @@ namespace MinGent
                     cfg.BrowserAllowed = browserOk;
                     cfg.TryCaptchas = settings.AiCaptcha && browserOk;
                     cfg.SideBySide = settings.AiSideBySide;
+                    AppHighlight.NewTask();
                     cfg.Sandbox = settings.AiSandbox && Sandbox.Supported;
                     cfg.OtherApps = appsOk && settings.AiOtherApps;
                     cfg.RestrictedApps = appsOk && settings.AiRestrictedApps;
@@ -2315,14 +2338,8 @@ namespace MinGent
                 }
                 catch (Exception ex) { try { Notice("Display error: " + ex.Message, 1); } catch { } }
             }
-            string note = TitleNote;
-            if (note != shownTitle && TitleNoteChanged != null) TitleNoteChanged(this, EventArgs.Empty);
-            shownTitle = note;
             CheckInbox();
         }
-
-        string shownTitle = "";
-        public event EventHandler TitleNoteChanged;
 
         void OnModelReady(ModelEntry m)
         {

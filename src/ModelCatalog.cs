@@ -21,7 +21,7 @@ namespace MinGent
         public string Ref { get { return Provider + ":" + Id; } }
         public bool Cloud { get { return IsCloud(Provider) || (Provider == "custom" && !Http.IsLoopback(ModelCatalog.CustomUrl)); } }
 
-        public static bool IsCloud(string p) { return p == "anthropic" || p == "openai" || p == "gemini" || p == "openrouter"; }
+        public static bool IsCloud(string p) { return p == "anthropic" || p == "openai" || p == "gemini" || p == "openrouter" || p == GeminiWeb.Provider; }
 
         public static string ProviderTitle(string p)
         {
@@ -33,6 +33,7 @@ namespace MinGent
                 case "openai": return "OpenAI";
                 case "gemini": return "Gemini (Google)";
                 case "openrouter": return "OpenRouter";
+                case GeminiWeb.Provider: return GeminiWeb.Title;
                 case "custom": return "Custom server";
             }
             return p;
@@ -90,6 +91,7 @@ namespace MinGent
         public string CustomUrl = "", CustomModel = "";
         public int LmLoadContext;
         public int EngineContext;
+        public bool GeminiWeb;
     }
 
     static class ModelCatalog
@@ -108,7 +110,7 @@ namespace MinGent
             CatalogSnapshot snap = new CatalogSnapshot();
             CustomUrl = k.CustomUrl ?? "";
             List<Thread> threads = new List<Thread>();
-            List<ModelEntry> lm = new List<ModelEntry>(), eng = new List<ModelEntry>(), an = new List<ModelEntry>(), oa = new List<ModelEntry>(), ge = new List<ModelEntry>(), ro = new List<ModelEntry>(), cu = new List<ModelEntry>();
+            List<ModelEntry> lm = new List<ModelEntry>(), eng = new List<ModelEntry>(), an = new List<ModelEntry>(), oa = new List<ModelEntry>(), ge = new List<ModelEntry>(), ro = new List<ModelEntry>(), cu = new List<ModelEntry>(), gw = new List<ModelEntry>();
             ProviderState sLm = snap.State("lmstudio"), sEng = snap.State("engine"), sAn = snap.State("anthropic"), sOa = snap.State("openai"), sGe = snap.State("gemini"), sOr = snap.State("openrouter"), sCu = snap.State("custom");
             threads.Add(Start(delegate { ProbeLmStudio(k, lm, sLm, ct); }));
             threads.Add(Start(delegate { ProbeEngine(k, eng, sEng); }));
@@ -125,6 +127,9 @@ namespace MinGent
             if (wOr != null) sOr.Status = wOr;
             else if (!string.IsNullOrEmpty(k.OpenRouter) && includeCloud) threads.Add(Start(delegate { ProbeOpenRouter(k.OpenRouter, ro, sOr, ct); }));
             else { sOr.Status = "Add an API key in Settings to use OpenRouter models"; }
+            ProviderState sGw = snap.State(GeminiWeb.Provider);
+            if (k.GeminiWeb && includeCloud) threads.Add(Start(delegate { GeminiWeb.Probe(gw, sGw, ct); }));
+            else if (k.GeminiWeb) gw.AddRange(GeminiWeb.Entries(GeminiWeb.Known ?? GeminiHelper.LoadModels()));
             if (!string.IsNullOrEmpty(k.CustomUrl)) threads.Add(Start(delegate { ProbeCustom(k, cu, sCu, ct); }));
             else { sCu.Status = "No custom server set"; }
             foreach (Thread t in threads) t.Join(15000);
@@ -136,6 +141,7 @@ namespace MinGent
                 snap.Models.AddRange(oa);
                 snap.Models.AddRange(ge);
                 snap.Models.AddRange(ro);
+                snap.Models.AddRange(gw);
                 snap.Models.AddRange(cu);
             }
             return snap;
@@ -876,6 +882,13 @@ namespace MinGent
                         b.Model = m.Id;
                         b.Provider = "openai";
                         b.Reasoning = m.ReasoningOptions != null;
+                        return b;
+                    }
+                case GeminiWeb.Provider:
+                    {
+                        GeminiWebBackend b = new GeminiWebBackend();
+                        b.Model = m.Id;
+                        b.Provider = GeminiWeb.Provider;
                         return b;
                     }
                 case "custom":

@@ -4436,12 +4436,13 @@ namespace MinGent
     class WatchVideoTool : BrowserTool
     {
         public override string Name { get { return "watch_video"; } }
-        public override string Description { get { return "See what happens in a video: pictures of it at moments you choose. First open the video with browser_navigate (a page with a video on it, such as a YouTube page, or a local video file), then call this. Without times you get an overview: " + VideoFrames.SheetCount + " moments spread over the video, or over the part between from and to, on one sheet with the time on each picture. With times you get up to " + VideoFrames.CloseCount + " moments as full pictures. It shows pictures only: for what is said in a YouTube video read its address with web_fetch, and for the sound of a video file use analyze_audio."; } }
+        public override string Description { get { return "See what happens in a video: pictures of it at moments you choose. Give video, a page with a video on it (such as a YouTube page) or a video file on this PC, and MinGent opens it in the built-in browser; it needs nothing installed. Without video it uses the video on the page open in the browser. Without times you get an overview: " + VideoFrames.SheetCount + " moments spread over the video, or over the part between from and to, on one sheet with the time on each picture. With times you get up to " + VideoFrames.CloseCount + " moments as full pictures. It shows pictures only: for what is said in a YouTube video read its address with web_fetch, and for the sound of a video file use analyze_audio."; } }
         public override Dictionary<string, object> Schema
         {
             get
             {
-                return Obj("times", P("string", "Moments to look at closely, separated by commas, such as \"0:30, 1:15\" (or in seconds). Leave it out for the overview."), false,
+                return Obj("video", P("string", "The video's page address or a video file's path. Leave it out for the video already open in the browser."), false,
+                           "times", P("string", "Moments to look at closely, separated by commas, such as \"0:30, 1:15\" (or in seconds). Leave it out for the overview."), false,
                            "from", P("string", "Where the overview starts, such as 2:00. Default: the start of the video."), false,
                            "to", P("string", "Where the overview ends, such as 3:30. Default: the end of the video."), false);
             }
@@ -4458,6 +4459,12 @@ namespace MinGent
             string g = Gate(ctx, null);
             if (g != null) { ToolOutcome d = ToolOutcome.Fail(g); d.Denied = true; return d; }
             if (!ctx.Cfg.Vision) return ToolOutcome.Fail("The current model cannot see pictures, so it can't watch a video. For a YouTube video, web_fetch reads what is said in it.");
+            string src = (S(a, "video") ?? "").Trim();
+            if (src.Length > 0)
+            {
+                ToolOutcome opened = new BrowserNavigateTool().Run(ctx, Json.O("url", src));
+                if (opened.Error || opened.Denied) return opened;
+            }
             ToolOutcome stale = Stale(ctx);
             if (stale != null) return stale;
             List<double> times;

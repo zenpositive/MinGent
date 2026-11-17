@@ -413,7 +413,7 @@ namespace MinGent
 
         public static bool Parallel(AgentConfig cfg)
         {
-            return cfg != null && cfg.Model != null && ModelEntry.IsCloud(cfg.Model.Provider);
+            return cfg != null && cfg.Model != null && ModelEntry.IsCloud(cfg.Model.Provider) && cfg.Model.Provider != GeminiWeb.Provider;
         }
 
         public static bool BrowserFor(string kind, ToolContext ctx)

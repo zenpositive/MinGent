@@ -129,6 +129,17 @@ namespace MinGent
                         DrawRoundF(g, p, new RectangleF(cx - 3f * u, cy - 3f * u, 9f * u, 9f * u), 1.6f * u);
                         g.DrawLines(p, new PointF[] { new PointF(cx - 6f * u, cy + 3f * u), new PointF(cx - 6f * u, cy - 6f * u), new PointF(cx + 3f * u, cy - 6f * u) });
                         break;
+                    case "image":
+                        DrawRoundF(g, p, new RectangleF(cx - 6.5f * u, cy - 5f * u, 13f * u, 10f * u), 1.6f * u);
+                        g.DrawEllipse(p, cx + 1.4f * u, cy - 3f * u, 2.4f * u, 2.4f * u);
+                        g.DrawLines(p, new PointF[] { new PointF(cx - 6f * u, cy + 3.5f * u), new PointF(cx - 2.2f * u, cy - 0.6f * u), new PointF(cx + 1f * u, cy + 2.6f * u), new PointF(cx + 2.8f * u, cy + 1f * u), new PointF(cx + 6f * u, cy + 4f * u) });
+                        break;
+                    case "table":
+                        DrawRoundF(g, p, new RectangleF(cx - 6.5f * u, cy - 5f * u, 13f * u, 10f * u), 1.6f * u);
+                        g.DrawLine(p, cx - 6.5f * u, cy - 1.6f * u, cx + 6.5f * u, cy - 1.6f * u);
+                        g.DrawLine(p, cx - 6.5f * u, cy + 1.8f * u, cx + 6.5f * u, cy + 1.8f * u);
+                        g.DrawLine(p, cx - 1.5f * u, cy - 5f * u, cx - 1.5f * u, cy + 5f * u);
+                        break;
                     case "ask":
                         DrawRoundF(g, p, new RectangleF(cx - 6.5f * u, cy - 5.5f * u, 13f * u, 9.5f * u), 3f * u);
                         g.DrawLines(p, new PointF[] { new PointF(cx - 3.5f * u, cy + 4f * u), new PointF(cx - 4.5f * u, cy + 6.8f * u), new PointF(cx - 0.5f * u, cy + 4f * u) });

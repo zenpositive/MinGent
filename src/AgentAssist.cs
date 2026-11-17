@@ -544,6 +544,7 @@ namespace MinGent
             }
             else if (tool == "watch_video")
             {
+                Rename(a, "video", ref changed, "url", "path", "file", "file_path", "filepath", "video_path", "video_url", "src", "source", "link", "address", "uri");
                 Rename(a, "times", ref changed, "time", "timestamps", "timestamp", "moments", "moment", "at", "seconds", "positions");
                 Rename(a, "from", ref changed, "start", "start_time", "begin", "from_time", "start_at");
                 Rename(a, "to", ref changed, "end", "end_time", "until", "to_time", "end_at", "stop");
