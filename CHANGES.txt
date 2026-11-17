@@ -1,6 +1,68 @@
 MinGent - what changed
 ======================
 
+Version 1.2.0
+- MinGent is no longer called a beta, and versions now go 1.2.0, 1.3.0,
+  1.4.0 and so on.
+- New, experimental: Gemini web. The models of your own Gemini account work
+  in MinGent without an API key, through a small helper extension in your
+  browser (Brave, Chrome, Edge, Vivaldi or Opera). Settings > Models > "Set
+  up" shows the three steps: open the browser's Extensions page, switch on
+  Developer mode and drag the helper's folder in. After that the models
+  your account has are in the model menu like any other, with the thinking
+  levels Gemini offers you (low, medium, high), tools and pictures, and the
+  context length of your plan. Requests run in your own Gemini tab, so your
+  Google sign-in never leaves the browser. When the browser is closed,
+  MinGent starts it minimized. It is not an official Google API: it can
+  break when Google changes its site, and Google's terms may not allow it,
+  so use it at your own risk. README.txt, MODELS, has the details.
+- The agent answers questions in the chat, with a table or list where it
+  helps, instead of writing the answer to a file and opening it in Notes.
+  It writes a file when you ask for one or the result is one: code, a
+  document, data for another program.
+- Side by side, always: when the agent works in a program, MinGent takes
+  one half of the screen and the program the other. That now covers
+  programs you opened yourself, such as your browser, also when they were
+  minimized, and it no longer depends on the program covering MinGent
+  first. Closing MinGent while it sits beside a program no longer makes it
+  start at half width the next time.
+- A window of yours that is minimized is in the agent's list of windows
+  again. On some screens it was missing, so the agent opened a second
+  window of the program instead of using the one you meant.
+- A program the agent opens that starts through a launcher, such as a game
+  from Steam, or takes long to start, is now handed to the agent when its
+  window shows up. Before, the agent couldn't see it and kept opening it
+  again. Opening a program that is still starting no longer starts it a
+  second time.
+- The window title is just MinGent, without what the agent is doing, and
+  the top of a chat no longer shows its title: the chat list already does.
+  A temporary chat still says so there.
+- The attach button's file window lists videos the agent can watch (MP4,
+  MOV, WebM and the like), and an attached video shows a film icon.
+- Watching a video takes one step: the agent gives the video's page or file
+  to its video tool, which opens it by itself. It no longer opens it in the
+  browser first or looks for other programs, such as ffmpeg, to check it.
+- Save and Open dialogs in other programs: when the agent reads one, MinGent
+  points out the file name box and its button, with the name the program
+  suggests, so the agent types the full path in the right box. It keeps the
+  suggested name, saves into the chat's folder when it needs the file
+  itself, and otherwise says where the file went.
+  Folder pickers and picking several files are explained to it the same
+  way, so it can upload files through a browser you opened yourself.
+- Charts have "Copy image" and "Copy data" instead of a Copy that gave the
+  chart's code: the picture pastes anywhere, and the data pastes as a table
+  into Excel, Word or Google Sheets, with numbers in your PC's own format.
+- A chart axis that steps by 2.5 shows 2.5 and 7.5 instead of rounding
+  them to 3 and 8.
+- The output of a step (a command's output, a file change, a helper's log)
+  can be selected with the mouse and copied, like the rest of the chat.
+- While the agent reads your message, the status line says "MinGenting".
+- Allow on clicking and typing in a program now covers that program for
+  the rest of the task. Before, every click asked again.
+- Side by side: a program that can't get as narrow as half the screen
+  keeps the width it needs and MinGent takes the rest, instead of the two
+  overlapping.
+
 Version 1.1.11 beta
 - No more projects. Every chat works in its own folder in Files, named
   after the chat, so what it makes stays together. The folder is made when

@@ -3,7 +3,7 @@
 An AI agent for Windows that works with models on your own PC. It has no dependency tree: you compile it from the source in this repository with the C# compiler that is part of Windows.
 
 - Works in your files, runs commands, searches the web and uses its own browser, and shows every step.
-- Runs models on your PC with its built-in llama.cpp engine. Claude, OpenAI, Gemini and OpenRouter work with your own key.
+- Runs models on your PC with its built-in llama.cpp engine. Claude, OpenAI, Gemini and OpenRouter work with your own key. Experimental: the models of your Gemini account work without a key, through a small helper extension in your own browser.
 - Supply chain resistant: no packages, no installer, no plugins, no telemetry. It updates only when you click Check for updates, and only to a release signed by two keys: one in the developer's TPM chip and a security key that has to be touched.
 - Asks before it installs software, also in Auto mode, unless you switch that off.
 - Offline mode, a list of the internet addresses it connects to, and one button that erases what it stored.
@@ -15,7 +15,7 @@ An AI agent for Windows that works with models on your own PC. It has no depende
 2. Extract it and double-click `Build-MinGent.bat`.
 3. Start `MinGent.exe`.
 
-Needs Windows 10 or 11. `README.txt` explains the rest. This is a beta: report problems in [Issues](https://github.com/zenpositive/MinGent/issues).
+Needs Windows 10 or 11. `README.txt` explains the rest. Report problems in [Issues](https://github.com/zenpositive/MinGent/issues).
 
 ## License
 

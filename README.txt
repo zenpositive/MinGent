@@ -25,8 +25,8 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.1.11 beta: it works, and it still has rough edges. Report
-problems at https://github.com/zenpositive/MinGent/issues.
+This is version 1.2.0. Report problems at
+https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
 Read USE AT YOUR OWN RISK at the end of this file before you let it work on
@@ -67,7 +67,8 @@ themselves. Each of those is a way in: a hijacked maintainer account or a
 look-alike package runs its code on your PC, next to your files, keys and
 sign-ins. MinGent has none of that.
 - No packages. It uses only the .NET Framework that comes with Windows. All
-  of it is in "src": about 80,000 lines of C# you can read.
+  of it is in "src": about 91,000 lines of C# you can read, and the
+  optional Gemini helper for your browser, about 300 lines of JavaScript.
 - No prebuilt programs. A release is the source code and Build-MinGent.bat,
   which compiles it with csc.exe from Windows itself.
 - No automatic updates, plugins, extensions or telemetry. A new version
@@ -94,7 +95,7 @@ sign-ins. MinGent has none of that.
   Full auto asks nothing. The check reads the command; it can't see what a
   script does once it runs.
 To check a download, compare its SHA-256 with the one on the release page.
-In PowerShell: Get-FileHash .\MinGent-1.1.8-beta.zip
+In PowerShell: Get-FileHash .\MinGent-1.2.0.zip
 
 
 YOUR OWN ICON
@@ -165,12 +166,12 @@ CHATS
   Click the line to open every step: its thoughts, the files it read, the
   exact lines it changed, the commands it ran and their output. When it is
   done the line sums it up ("Read 2 files, edited parser.py, ran 1 command
-  - 1m 14s"). The window title shows the current step too, or that the
-  agent is waiting for you, so you can see it in the taskbar.
+  - 1m 14s").
 - Charts: when numbers are easier to see than to read, the agent can draw
   a bar or line chart right in its answer ("chart the monthly totals from
-  sales.csv"). Copy on the chart gives you its data. MinGent draws the
-  chart itself; nothing is downloaded for it.
+  sales.csv"). "Copy image" puts the chart on the clipboard as a picture,
+  and "Copy data" as a table that pastes into Excel, Word or Google Sheets.
+  MinGent draws the chart itself; nothing is downloaded for it.
 - You can keep typing while it works. Messages you send then wait at the
   bottom of the chat and the agent reads them at its next step, so you can add
   details or change direction without stopping it. When it reads one, the
@@ -399,6 +400,28 @@ models..." for the full list.
   from many makers; MinGent lists those that can use tools, most popular
   first, with their prices, and the model menu's "All N models..." list has a
   search box.
+- Gemini web (experimental): the models of your own Gemini account, without
+  an API key, through a small helper extension in your browser (Brave,
+  Chrome, Edge, Vivaldi or Opera). In Settings > Models, "Set up" opens that
+  browser and shows three steps. You paste the address of its Extensions
+  page, which MinGent has copied for you, switch on Developer mode there,
+  and drag the helper's folder from MinGent onto the page. The steps are
+  yours because no program may add an extension to a browser by itself.
+  From then on the helper finds MinGent whenever both are running, and
+  MinGent starts the browser when it isn't.
+  The models your account has show up in the model menu with their thinking
+  levels, and the context length follows your plan (32K, 128K or 1M). They
+  work like any other model: tools, pictures, long chats. Requests run in a
+  Gemini tab of that browser under your own sign-in (the helper opens a
+  pinned one when none is open), so your Google cookies never leave the
+  browser. Not signed in to Gemini there, only its basic model works.
+  What to know before you use it: this is not an official Google API. It can
+  stop working when Google changes its site, tools go through text blocks
+  the model writes, which is less strict than a real API, and Google's terms
+  may not allow automated use, so it is at your own risk. The helper is
+  plain JavaScript in src\helper, about 300 lines. To remove it, turn the
+  switch off and remove "MinGent Gemini helper" on the browser's Extensions
+  page.
 - Other model servers: if you already run one, Settings > Models > Other
   model servers takes any OpenAI-compatible address (Ollama, vLLM, another
   llama.cpp...). LM Studio is found by itself once its server runs (Developer
@@ -548,7 +571,7 @@ Scheduled tasks
   minute when the chat on screen is empty). A run that was missed while
   MinGent was closed is made up for once, the next time it is open.
 - A run works like a task you start yourself. In Ask mode it waits for your
-  OK, and the window title and the taskbar button show that it is waiting.
+  OK, and the taskbar button flashes to show that it is waiting.
 - A task works in its own folder, Files\Scheduled tasks\<task name>, which
   keeps what every run makes in one place, or in a folder you choose for it.
   When a chosen folder can't be used (a drive that is not plugged in, a
@@ -571,7 +594,10 @@ Programs on your PC
 - It can open a program by its name in the Start menu, such as Calculator
   or Excel. MinGent asks first, except in Full auto. After your OK the agent
   sees that program's windows and can click and type in them until the chat
-  ends, without a second question. Browsers, terminals, File Explorer, mail
+  ends, without a second question. A program that starts through a launcher,
+  such as a game from Steam, counts too when it starts within three minutes
+  and its window or file carries the program's name.
+  Browsers, terminals, File Explorer, mail
   and chat programs and Windows' own tools (Settings, Task Manager, the
   registry editor and the like) are restricted: the agent is refused, and
   tells you about the "Restricted programs" switch (below) when you asked
@@ -669,13 +695,16 @@ Programs on your PC
   could be taken for the agent's; MinGent asks before the agent types in each
   terminal window. A Windows Terminal window the agent opened stays open
   after MinGent closes, with whatever runs in it, so close it yourself.
-- When the agent starts working in a program window that covers MinGent,
-  MinGent takes one half of the screen and the program the other, and gets its
-  old size back when the program closes (unless you moved it meanwhile). For a
-  program the agent started itself, this happens before MinGent asks you
-  anything about it, so the question isn't hidden behind the program. For a
-  program Windows opened for one of its commands, MinGent asks first, comes to
-  the front to do so, and moves the windows after you allow it.
+- When the agent starts working in a program's window, MinGent takes one
+  half of the screen and the program the other, wherever the two were, and
+  MinGent gets its old size back when the program closes (unless you moved
+  it meanwhile). A program that can't get that narrow keeps the width it
+  needs, and MinGent takes the rest. Each window is placed once per task, so
+  you can move it afterwards. For a program the agent started itself, this
+  happens before MinGent asks you anything about it, so the question isn't
+  hidden behind the program. For a program Windows opened for one of its
+  commands, or one you opened yourself, MinGent asks first, comes to the
+  front to do so, and moves the windows after you allow it.
   Settings > Agent > "Put MinGent and the program side by side" turns this
   off.
 - While it uses a program, that window has an outline in your accent color
@@ -695,7 +724,8 @@ ASK, AUTO OR FULL AUTO
   a card in the chat with Allow / Allow for this chat / Deny. Allow on a
   site in the browser covers the rest of that task, and so does Allow on
   writing into a folder outside the workspace (that folder, not the ones
-  inside it). Files the agent made in the same task, and pages it made or
+  inside it) and Allow on clicking and typing in a program or in its file
+  dialog. Files the agent made in the same task, and pages it made or
   changed in that task, need no question to delete, to give to a page on
   this PC or to run console code in.
   Auto (switch on): it works on its own and asks only before risky things
@@ -878,7 +908,8 @@ THE BROWSER
   date, description and transcript. Long pages and transcripts come in parts.
 - Watching videos: a model that can see images can also look at a video. The
   agent opens it in the browser (the video's page, such as a YouTube page, or
-  a video file on your PC: MP4, WebM or MOV) and gets pictures of it: nine
+  a video file on your PC: MP4, WebM, MOV, M4V or OGV), with nothing else
+  installed, and gets pictures of it: nine
   moments spread over the video on one sheet, each with its time, or up to
   four moments it picks as full pictures. It can do the same for a part of
   the video to look closer. The video is paused while it looks. What is said
@@ -1050,6 +1081,8 @@ Everything MinGent keeps is in the folder it runs from, next to MinGent.exe:
                             in Settings > Memory)
   Data\scheduled.json       your scheduled tasks
   Data\Browser\             the built-in browser's profile
+  Data\GeminiHelper\        the Gemini helper extension and its secret, if
+                            you set up Gemini web
   Data\engine\              the built-in engine, if you set it up
   Data\models\              models downloaded in the model library (or the
                             folder you picked in Settings > Models >
@@ -1124,7 +1157,9 @@ PRIVACY
   and the engine and models (kept unless you switch them on; they are
   downloads, not your data). Files in your other folders stay, and so does
   anything else you put in MinGent's folder. A copy that runs from a git
-  checkout keeps its program files.
+  checkout keeps its program files. If you set up the Gemini helper, its
+  folder is erased with the rest, but the browser still lists it: remove
+  "MinGent Gemini helper" on the browser's Extensions page.
 - A chat that used Claude, OpenAI, Gemini or OpenRouter was also sent to
   that provider (through OpenRouter, also to the model's maker), which keeps
   its own copy under its own rules; deleting the chat here can't reach that.
@@ -1157,10 +1192,16 @@ SECURITY / ATTACK SURFACE
   videos it reads, the sites you or it open in the browser, huggingface.co
   and its download servers when you search or download models, github.com
   and its download server when you set up, switch or update the engine or
-  install a MinGent update, and api.github.com only with "Offer newer
+  install a MinGent update, gemini.google.com through your own browser
+  when you use Gemini web, and api.github.com only with "Offer newer
   llama.cpp releases" on or when you click "Check for updates". Notes itself
   makes no network connections. Settings > Privacy > Connections shows each
   one.
+- Gemini web, off until you set it up: MinGent listens on one port on
+  127.0.0.1 only, for its helper extension. A connection has to come from a
+  browser extension and prove it knows the secret in the helper's folder,
+  and MinGent proves the same back; the secret itself is never sent. The
+  helper only calls Gemini's own addresses, from a Gemini tab.
 - The built-in engine is llama.cpp's server, pinned to one release and checked
   against SHA-256 checksums built into MinGent before it is unpacked (with
   protection against malicious archive paths). A newer release you choose to
