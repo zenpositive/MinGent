@@ -2018,7 +2018,8 @@ namespace MinGent
     class RunCoach
     {
         public int Nudges;
-        int announce, todo, verify, refusal, summary, status, limit, folded;
+        int announce, todo, verify, refusal, summary, status, limit, folded, handed;
+        bool handedNow;
         public bool AnyTool, Denied, FilesChanged, Reviewed, Listed;
         public string Beside = "";
         public string LastFamily = "";
@@ -2055,16 +2056,27 @@ namespace MinGent
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         static readonly Regex RefusalYours = new Regex(@"\b(can't|cannot|can not|unable to|not able to)\s+((directly|actually|really|currently)\s+)?(access|open|read|see|view|check|look at|edit|change|modify|write|save|delete|run|use|control|browse|search|download|install)\b[^.!?\n]{0,60}\byour\b",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        const string LimitCalls = @"(tool|function)[- ]?(call|calling|use|usage|invocation|request|access)s?";
-        const string LimitCap = "(" + LimitCalls + @"[- ]?(limit|budget|quota|cap|allowance)|tools? (limit|budget|quota|allowance)|(step|action|turn|iteration)[- ]?(limit|budget|quota|cap)|(limit|budget|quota|cap|maximum( number)?|allowance) (of|on|for) (\w+ ){0,2}" + LimitCalls + ")";
+        const string LimitCalls = @"(?:(tool|function)[- ]?(call|calling|use|usage|invocation|request|access|step|action)s?|(command|script)[- ]?calls?)";
+        const string LimitUnits = @"(steps|actions|commands|scripts)\b";
+        const string LimitCap = "(" + LimitCalls + @"[- ]?(limit|budget|quota|cap|allowance)|tools? (limit|budget|quota|allowance)|(step|action|turn|iteration|interaction)[- ]?(limit|budget|quota|cap)|my (command|script)[- ]?(limit|budget|quota|cap|allowance)|(limit|budget|quota|cap|maximum( number)?|allowance) (of|on|for) (\w+ ){0,2}" + LimitCalls + ")";
         static readonly Regex LimitClaim = new Regex(
             @"\b(hit|reach(ed|ing)?|exceed(ed|ing)?|exhaust(ed|ing)?|used? up)\b[^.!?\n]{0,40}\b" + LimitCap + @"\b" +
             @"|\b" + LimitCap + @"\b[^.!?\n]{0,40}\b(reached|hit|exceeded|exhausted|used up|spent|depleted)\b" +
             @"|((\b(ran|run|running) |(?<!\d )\b)out of|\bno (more|remaining|further|available)|n't have (any|enough)|\bnot have (any|enough)|\bhave no|\b(0|zero) remaining|\bused (up )?all( of)?|\bexhausted)\s+(\w+ ){0,2}" + LimitCalls + @"\b" +
             @"|\b" + LimitCalls + @"\s+(remaining|left|available)\b[^.!?\n]{0,20}\b(0|zero|none)\b" +
             @"|\b(no|0|zero)\s+(\w+ ){0,2}" + LimitCalls + @"\s+(remaining|left|available)\b" +
-            @"|\bno longer have\s+(\w+ ){0,2}" + LimitCalls + @"\b",
+            @"|\bno longer have\s+(\w+ ){0,2}" + LimitCalls + @"\b" +
+            @"|\b(ran|run|running) out of( (my|available|allowed))?\s+" + LimitUnits + @"(?!\s+(to|that|which|in|on|are|is|were|was|needed|required)\b)" +
+            @"|\b(used (up )?all( of)? my|exhausted (all )?my)\s+" + LimitUnits,
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex LimitMore = new Regex(@"\b(i|we)\b[^.!?\n]{0,25}?\b(cannot|can not|can't|couldn't|could not|unable to|not able to|not allowed to|not permitted to)\s+(\w+\s+){0,2}(make|use|issue|perform|run|invoke|call|execute|place|write|take)\s+((any|more|further|additional|another)\s+)+(commands|scripts|steps|actions)\b(?!\s+(that|which|for|to|like|such|needed|required|requiring|from|on|in the|you|without|until|because)\b)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex LimitTurn = new Regex(@"\b(this|per|each|one)\s+(turn|reply|response|message|session|step)\b|\b(limit|budget|quota|allowance)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex HandStep = new Regex(@"^[ \t]*(?:\d+[.)]|[-*\u2022]|step \d+[:.])[ \t]+[^\n]{0,50}?\b(?:double[- ]click|right[- ]click|click|uncheck|untick|check|tick|select|choose|pick|enter|type|press|open|toggle|drag|scroll|switch|hit|tap|apply|save)\b", RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.CultureInvariant);
+        static readonly Regex HandLeft = new Regex(@"\bI\b[^.!?\n]{0,30}\b(wasn't able to|was not able to|was unable to|am unable to|couldn't|could not|cannot|can't)\b[^.!?\n]{0,60}\b(complete|finish|click|apply|trigger|launch|press|perform|toggle|select|type|enter)\b" +
+            @"|\bstill needs? to be (clicked|pressed|applied|entered|typed|selected|checked|unchecked|toggled)\b" +
+            @"|\b(let me know|tell me|say so) (if|when|whether) you(?:'d| would)? (like|want) me to (proceed|continue|go on|finish|do (it|that|them|those|these))\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex HandFair = new Regex(@"\b(passwords?|passcode|sign(ed|ing)? in|log(ged|ging)? in|login|captcha|verification code|two[- ]factor|2fa|api keys?|tokens?|payment|paying|purchase|buy|checkout|place (your|the) order|administrator|admin|uac|permissions?|(not|never) allow(ed)?|n't allow(ed)?|off limits|declined|denied|restricted)\b|\bpay\b(?! attention)|settings\s*>\s*(agent|safety|models|general|privacy|memory)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         static readonly Regex LimitMine = new Regex(@"\b(i|i've|i'm|i'd|my|we|we've)\b|\bthis\b[^.!?\n]{0,30}\b(turn|session|reply|response|conversation|message|chat|step|stage|phase)\b|\b(currently|right now|at the moment|at this point|any ?more|any longer|no longer)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         static readonly Regex LimitOff = new Regex(@"\b(" + LimitCalls + @"|(my |all |the |any )?tools)\s+((is|are|was|were|being|has been|have been)\s+)?((currently|now|temporarily|no longer|not)\s+)*(unavailable|available|disabled|not possible|impossible|not permitted|not allowed|turned off|switched off|blocked|restricted|locked)\b",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -2204,6 +2216,7 @@ namespace MinGent
         {
             AnyTool = true;
             limit = 0;
+            handedNow = false;
             if (name == "todo_write") sinceTodo = 0;
             if (name == "todo_write" && o != null && !o.Error) Listed = true;
             if (name.StartsWith("app_", StringComparison.Ordinal)) LastFamily = "app";
@@ -2351,6 +2364,14 @@ namespace MinGent
                     }
             if (Nudges >= 4) return null;
             bool question = EndsWithQuestion(t);
+            if (!question && !WaitingOnUser && !Denied && !Helper && AnyTool && LastFamily.Length > 0 && handed < 2 && !handedNow && t.Length < 2500 && HandStep.IsMatch(t) && HandLeft.IsMatch(t) && !HandFair.IsMatch(t))
+            {
+                handed++;
+                handedNow = true;
+                Nudges++;
+                Told = "The agent stopped and left the last steps to you, so MinGent asked it to do them itself.";
+                return "[MinGent] You stopped and left steps for the user to do by hand. Your tools work right now and nothing limits them, so do those steps yourself: use the next tool now. Leave a step to the user only when no tool can do it or the user asked to do it themselves, and then say which step and why. " + Standalone;
+            }
             if (!AnyTool && refusal == 0 && t.Length > 0 && t.Length < 2500)
             {
                 int at = 0;
@@ -2429,6 +2450,7 @@ namespace MinGent
         {
             if (LimitClaim.IsMatch(sentence) && LimitMine.IsMatch(sentence)) return true;
             if (LimitCant.IsMatch(sentence)) return true;
+            if (LimitMore.IsMatch(sentence) && LimitTurn.IsMatch(sentence) && !HandFair.IsMatch(sentence)) return true;
             Match m = LimitOff.Match(sentence);
             if (!m.Success || !LimitNow.IsMatch(sentence)) return false;
             string said = m.Value.ToLowerInvariant();

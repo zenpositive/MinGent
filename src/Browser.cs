@@ -1867,14 +1867,17 @@ namespace MinGent
             }
         }
 
+        int lastRef;
+
         string Snap(CancelToken ct, out string text)
         {
             text = null;
             object v;
             int max = Math.Max(4000, Math.Min(40000, SnapshotChars));
-            string err = Js("(" + BrowserScripts.Snapshot + ")(" + max.ToString(CultureInfo.InvariantCulture) + ")", ct, out v);
+            string err = Js("(" + BrowserScripts.Snapshot + ")(" + max.ToString(CultureInfo.InvariantCulture) + ", " + lastRef.ToString(CultureInfo.InvariantCulture) + ")", ct, out v);
             if (err != null) return err;
             if (!(v is Dictionary<string, object>)) return "could not read the page";
+            lastRef = Math.Max(lastRef, Json.Int(v, "last"));
             StringBuilder sb = new StringBuilder();
             string title = Clip(Json.Str(v, "title") ?? "", 200), url = Json.Str(v, "url") ?? currentUrl;
             if (url.Length > 2000) url = url.Substring(0, 2000) + "...";
@@ -1987,7 +1990,7 @@ namespace MinGent
         {
             info = null;
             string r = NormRef(refId);
-            if (!Regex.IsMatch(r, "^e\\d{1,6}$")) return "\"" + refId + "\" is not an element ref. Use a ref like e12 from browser_read.";
+            if (!Regex.IsMatch(r, "^e\\d{1,9}$")) return "\"" + refId + "\" is not an element ref. Use a ref like e12 from browser_read.";
             object v;
             string err = Js("(" + BrowserScripts.Prep + ")(" + Json.Quote(r) + "," + (scroll ? "true" : "false") + ")", ct, out v);
             if (err != null) return err;

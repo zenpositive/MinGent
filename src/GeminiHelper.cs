@@ -844,7 +844,7 @@ namespace MinGent
                     foreach (int id in m.Steps) steps.Add(id);
                     models.Add(Json.O("id", m.Id, "hex", m.Hex, "category", m.Category, "version", m.Version, "tagline", m.Tagline, "number", m.Number, "levels", m.Levels, "steps", steps));
                 }
-                string text = Json.Write(Json.O("status", a.Status, "capacity", a.Capacity, "field", a.CapacityField, "models", models));
+                string text = Json.Write(Json.O("status", a.Status, "capacity", a.Capacity, "field", a.CapacityField, "models", models, "source", a.Source));
                 if (File.Exists(ModelsFile) && File.ReadAllText(ModelsFile) == text) return;
                 File.WriteAllText(ModelsFile, text, new UTF8Encoding(false));
             }
@@ -857,6 +857,13 @@ namespace MinGent
             {
                 if (!File.Exists(ModelsFile)) return null;
                 object o = Json.TryParse(File.ReadAllText(ModelsFile));
+                List<object> source = Json.List(o, "source");
+                GeminiAccount fresh = source != null ? GeminiProto.FromBody(source) : null;
+                if (fresh != null && fresh.Models.Count > 0)
+                {
+                    fresh.When = DateTime.MinValue;
+                    return fresh;
+                }
                 List<object> models = Json.List(o, "models");
                 if (models == null || models.Count == 0) return null;
                 GeminiAccount a = new GeminiAccount();

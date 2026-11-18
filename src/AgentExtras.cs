@@ -1062,6 +1062,7 @@ namespace MinGent
         public int Role, State;
         public string Name = "", Value = "";
         public Rectangle Rect;
+        public bool Inside;
     }
 
     static class AppControl
@@ -1183,7 +1184,7 @@ namespace MinGent
 
         const int RoleButton = 0x2B, RoleCheck = 0x2C, RoleRadio = 0x2D, RoleText = 0x2A, RoleStatic = 0x29, RoleLink = 0x1E, RoleMenuItem = 0x0C,
                   RoleCombo = 0x2E, RoleList = 0x21, RoleListItem = 0x22, RoleTab = 0x25, RoleOutlineItem = 0x24, RoleSlider = 0x33, RoleSpin = 0x34,
-                  RoleCell = 0x1D, RoleDropButton = 0x38, RoleSplitButton = 0x3E, RoleMenuBar = 0x02, RoleTitleBar = 0x01, RoleScrollBar = 0x03,
+                  RoleCell = 0x1D, RoleRow = 0x1C, RoleDropButton = 0x38, RoleSplitButton = 0x3E, RoleMenuBar = 0x02, RoleTitleBar = 0x01, RoleScrollBar = 0x03,
                   RoleGraphic = 0x28, RoleHeading = 0x14, RoleDocument = 0x0F, RoleColumnHeader = 0x19, RoleRowHeader = 0x1A, RolePageTabList = 0x3C,
                   RoleMenuPopup = 0x0B, RoleToolbar = 0x16, RoleStatusBar = 0x17, RoleOutline = 0x23, RoleTable = 0x18;
         const int StateUnavailable = 0x1, StateSelected = 0x2, StateFocused = 0x4, StatePressed = 0x8, StateChecked = 0x10, StateInvisible = 0x8000, StateProtected = 0x20000000, StateExpanded = 0x200;
@@ -2541,10 +2542,11 @@ namespace MinGent
             return bm;
         }
 
-        public static List<AppElement> Elements(AppWindow w, int max, CancelToken ct)
+        public static List<AppElement> Elements(AppWindow w, int max, CancelToken ct, out bool whole)
         {
             List<AppElement> list = new List<AppElement>();
             List<AppElement> shared = new List<AppElement>();
+            bool done = false;
             RunTimed(delegate
             {
                 object o;
@@ -2569,8 +2571,9 @@ namespace MinGent
                         else shared.InsertRange(at + 1, inner);
                     }
                 }
+                lock (shared) done = shared.Count < max && DateTime.UtcNow <= until && (ct == null || !ct.IsCancelled);
             }, 9000);
-            lock (shared) list.AddRange(shared);
+            lock (shared) { list.AddRange(shared); whole = done; }
             return list;
         }
 
@@ -2616,6 +2619,7 @@ namespace MinGent
                 }
                 catch { continue; }
                 if ((e.State & StateInvisible) != 0) continue;
+                e.Inside = later == null || e.Role == RoleListItem || e.Role == RoleOutlineItem || e.Role == RoleCell || e.Role == RoleRow;
                 try { e.Name = (e.Acc.get_accName(e.Child) ?? "").Replace('\n', ' ').Trim(); } catch { }
                 try { if (e.Role == RoleText || e.Role == RoleCombo || e.Role == RoleSlider || e.Role == RoleSpin) e.Value = (e.Acc.get_accValue(e.Child) ?? "").Replace('\n', ' '); } catch { }
                 try
@@ -3124,12 +3128,58 @@ namespace MinGent
         public static bool PasteLabel(string name) { return !string.IsNullOrEmpty(name) && PasteWords.IsMatch(name.Replace("&", "")); }
     }
 
+    class AppMark
+    {
+        public string Id;
+        public int X, Y;
+    }
+
     class AppSession
     {
         public readonly Dictionary<string, AppElement> Refs = new Dictionary<string, AppElement>();
+        public readonly Dictionary<string, Dictionary<string, AppMark>> Marks = new Dictionary<string, Dictionary<string, AppMark>>(StringComparer.Ordinal);
         public IntPtr RefsWindow = IntPtr.Zero;
         public int RefsThread;
         public int Next;
+
+        public List<string> Ids(string window, Point origin, List<AppElement> controls, List<AppElement> all)
+        {
+            Dictionary<string, int> count = new Dictionary<string, int>(StringComparer.Ordinal);
+            if (all != null)
+                foreach (AppElement e in all)
+                {
+                    if (!AppControl.Actionable(e.Role)) continue;
+                    int c;
+                    count.TryGetValue(MarkKey(e), out c);
+                    count[MarkKey(e)] = c + 1;
+                }
+            Dictionary<string, AppMark> before;
+            Marks.TryGetValue(window, out before);
+            Dictionary<string, AppMark> now = new Dictionary<string, AppMark>(StringComparer.Ordinal);
+            List<string> ids = new List<string>();
+            foreach (AppElement e in controls)
+            {
+                string key = MarkKey(e);
+                int x = e.Rect.X - origin.X, y = e.Rect.Y - origin.Y, seen;
+                bool single = !e.Inside && count.TryGetValue(key, out seen) && seen == 1;
+                AppMark m;
+                string id = single && before != null && before.TryGetValue(key, out m) && Math.Abs(m.X - x) <= 2 && Math.Abs(m.Y - y) <= 2
+                    ? m.Id : "a" + (++Next).ToString(CultureInfo.InvariantCulture);
+                if (single)
+                {
+                    AppMark mark = new AppMark();
+                    mark.Id = id;
+                    mark.X = x;
+                    mark.Y = y;
+                    now[key] = mark;
+                }
+                ids.Add(id);
+            }
+            Marks[window] = now;
+            return ids;
+        }
+
+        static string MarkKey(AppElement e) { return e.Role.ToString(CultureInfo.InvariantCulture) + "\u0001" + e.Name; }
         public IntPtr ShotWindow = IntPtr.Zero;
         public double ShotScale = 1;
         public int ShotW, ShotH;
@@ -3671,28 +3721,37 @@ namespace MinGent
                 string tt = ReadTerminal(w, header);
                 if (tt != null) return tt;
             }
-            List<AppElement> els = AppControl.Elements(w, 350, ctx.Ct);
+            bool whole;
+            List<AppElement> els = AppControl.Elements(w, 350, ctx.Ct, out whole);
             st.Refs.Clear();
             st.RefsWindow = w.Hwnd;
             StringBuilder sb = new StringBuilder();
             if (header != null) sb.Append(header).Append('\n');
             sb.Append("Window \"").Append(w.Title).Append("\" (").Append(w.Process).Append("), ").Append(w.Rect.Width).Append('x').Append(w.Rect.Height).Append(" at ").Append(w.Rect.X).Append(',').Append(w.Rect.Y).Append('\n');
-            int shown = 0;
+            List<AppElement> shown = new List<AppElement>(), controls = new List<AppElement>();
             foreach (AppElement e in els)
             {
-                string role = AppControl.RoleName(e.Role);
-                bool act = AppControl.Actionable(e.Role);
-                if (role == null && e.Name.Length == 0) continue;
-                if (!act && e.Name.Length == 0) continue;
-                if (act)
+                if (AppControl.RoleName(e.Role) == null && e.Name.Length == 0) continue;
+                if (!AppControl.Actionable(e.Role) && e.Name.Length == 0) continue;
+                shown.Add(e);
+                if (AppControl.Actionable(e.Role)) controls.Add(e);
+                if (shown.Count > 300) break;
+            }
+            List<string> ids = st.Ids(w.Hwnd.ToInt64().ToString(CultureInfo.InvariantCulture) + "/" + w.Pid.ToString(CultureInfo.InvariantCulture), w.Rect.Location, controls, whole ? els : null);
+            int next = 0;
+            foreach (AppElement e in shown)
+            {
+                if (AppControl.Actionable(e.Role))
                 {
-                    string id = "a" + (++st.Next);
+                    string id = ids[next++];
                     st.Refs[id] = e;
                     sb.Append(AppControl.Describe(e, id)).Append('\n');
+                    continue;
                 }
-                else sb.Append(role != null && role != "text" ? role + ": " : "").Append(e.Name.Length > 200 ? e.Name.Substring(0, 200) + "..." : e.Name).Append('\n');
-                if (++shown > 300) { sb.Append("(more elements not shown)\n"); break; }
+                string role = AppControl.RoleName(e.Role);
+                sb.Append(role != null && role != "text" ? role + ": " : "").Append(e.Name.Length > 200 ? e.Name.Substring(0, 200) + "..." : e.Name).Append('\n');
             }
+            if (shown.Count > 300) sb.Append("(more elements not shown)\n");
             if (els.Count == 0) sb.Append("(this program does not expose its controls to accessibility tools; use app_screenshot and click by position)\n");
             else sb.Append("Refs like a12 work with app_click and app_type until the window changes.\n");
             string dialog = AppControl.FileDialogNote(w, st.Refs, ctx.Workspace);

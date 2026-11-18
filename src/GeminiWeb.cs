@@ -68,6 +68,7 @@ namespace MinGent
         public readonly List<GeminiModel> Models = new List<GeminiModel>();
         public DateTime When = DateTime.UtcNow;
         public string For = "";
+        public List<object> Source;
 
         public int Context
         {
@@ -171,13 +172,14 @@ namespace MinGent
         public const string UploadUrl = "https://content-push.googleapis.com/upload";
         public const string Overflow = "I'm having a hard time fulfilling your request";
         public const string Trouble = "Sorry, something went wrong";
+        public const string Failed = "I encountered an error doing what you asked. Could you try again?";
 
         public static bool Troubled(string said, bool whole)
         {
             string t = (said ?? "").Trim();
             if (t.Length == 0 || t.Length > 120) return false;
-            if (t.StartsWith(Trouble, StringComparison.Ordinal)) return true;
-            return !whole && Trouble.StartsWith(t, StringComparison.Ordinal);
+            if (t.StartsWith(Trouble, StringComparison.Ordinal) || t == Failed) return true;
+            return !whole && (Trouble.StartsWith(t, StringComparison.Ordinal) || Failed.StartsWith(t, StringComparison.Ordinal));
         }
         const string Rpc = "/_/BardChatUi/data/";
         const string Form = "application/x-www-form-urlencoded;charset=utf-8";
@@ -327,42 +329,60 @@ namespace MinGent
                 List<object> p = part as List<object>;
                 if (p == null || p.Count < 3 || Json.Str(p, 1) != "otAQ7b") continue;
                 List<object> body = Json.TryParse(Json.Str(p, 2) ?? "") as List<object>;
-                if (body == null) continue;
-                GeminiAccount a = new GeminiAccount();
-                int status = Json.Int(body, 14);
-                a.Status = status == 0 ? 1000 : status;
-                a.Guest = a.Status == 1016;
-                List<object> tier = Json.List(body, 16), able = Json.List(body, 17);
-                if (Has(tier, 21)) { a.Capacity = 1; a.CapacityField = 13; }
-                else if (Has(tier, 22)) { a.Capacity = 2; a.CapacityField = 13; }
-                else if (Has(able, 115)) a.Capacity = 4;
-                else if (Has(tier, 16) || Has(able, 106)) a.Capacity = 3;
-                else if (Has(tier, 8) || Has(able, 19)) a.Capacity = 2;
-                List<object> models = Json.List(body, 15);
-                if (models != null)
-                    foreach (object o in models)
-                    {
-                        List<object> item = o as List<object>;
-                        string hex = Json.Str(item, 0);
-                        if (string.IsNullOrEmpty(hex)) continue;
-                        GeminiModel m = new GeminiModel();
-                        m.Hex = hex;
-                        Name(m, item, First(item, 1, 10), 19, 2, 12, 11);
-                        object number = Json.Get(item, 17);
-                        if (!(number is double)) number = Json.Get(item, 9);
-                        m.Number = number is double ? (int)(double)number : 1;
-                        string id = Slug(m.Category.Length > 0 ? m.Category : m.Version);
-                        if (id.Length == 0) id = hex;
-                        string unique = id;
-                        for (int n = 2; a.Find(unique) != null; n++) unique = id + "-" + n.ToString(CultureInfo.InvariantCulture);
-                        m.Id = unique;
-                        a.Models.Add(m);
-                        if (a.Guest) break;
-                    }
-                Levels(body, a);
-                return a;
+                if (body != null) return FromBody(body);
             }
             return null;
+        }
+
+        public static GeminiAccount FromBody(List<object> body)
+        {
+            GeminiAccount a = new GeminiAccount();
+            a.Source = Kept(body);
+            int status = Json.Int(body, 14);
+            a.Status = status == 0 ? 1000 : status;
+            a.Guest = a.Status == 1016;
+            List<object> tier = Json.List(body, 16), able = Json.List(body, 17);
+            if (Has(tier, 21)) { a.Capacity = 1; a.CapacityField = 13; }
+            else if (Has(tier, 22)) { a.Capacity = 2; a.CapacityField = 13; }
+            else if (Has(able, 115)) a.Capacity = 4;
+            else if (Has(tier, 16) || Has(able, 106)) a.Capacity = 3;
+            else if (Has(tier, 8) || Has(able, 19)) a.Capacity = 2;
+            List<object> models = Json.List(body, 15);
+            if (models != null)
+                foreach (object o in models)
+                {
+                    List<object> item = o as List<object>;
+                    string hex = Json.Str(item, 0);
+                    if (string.IsNullOrEmpty(hex)) continue;
+                    GeminiModel m = new GeminiModel();
+                    m.Hex = hex;
+                    Name(m, item, First(item, 1, 10), 19, 2, 12, 11);
+                    object number = Json.Get(item, 17);
+                    if (!(number is double)) number = Json.Get(item, 9);
+                    m.Number = number is double ? (int)(double)number : 1;
+                    string id = Slug(m.Category.Length > 0 ? m.Category : m.Version);
+                    if (id.Length == 0) id = hex;
+                    string unique = id;
+                    for (int n = 2; a.Find(unique) != null; n++) unique = id + "-" + n.ToString(CultureInfo.InvariantCulture);
+                    m.Id = unique;
+                    a.Models.Add(m);
+                    if (a.Guest) break;
+                }
+            Levels(body, a);
+            return a;
+        }
+
+        public static List<object> Kept(List<object> body)
+        {
+            List<object> kept = new List<object>();
+            for (int i = 0; i < body.Count; i++)
+            {
+                List<object> block = body[i] as List<object>;
+                string name = Json.Str(block, 0);
+                bool policy = name != null && name.EndsWith("_policy", StringComparison.Ordinal);
+                kept.Add(i >= 14 && i <= 17 || policy ? body[i] : null);
+            }
+            return kept;
         }
 
         static void Name(GeminiModel m, List<object> from, string category, params int[] places)
@@ -445,6 +465,13 @@ namespace MinGent
         static readonly Regex Artifact = new Regex(@"https?://googleusercontent\.com/(?:\w+/)+\d+\n*", RegexOptions.CultureInvariant);
         static readonly Regex Cite = new Regex(@"[ \t]*\[cite:\s*[\d,\s]+\]|\[cite_start\]", RegexOptions.CultureInvariant);
         static readonly Regex OwnCode = new Regex(@"```(\w+)\?code_\w+&code_event_index=\d+", RegexOptions.CultureInvariant);
+        const string Chip = @"<(?<item>(?=[A-Z])[A-Za-z]*)\b(?=[^<>]*\blabel="")(?=[^<>]*\bquery="")[^<>]*?(?:/>|>(?:[^<]*</\k<item>>)?)";
+        const string ChipGroup = @"<(?<group>(?=[A-Z])[A-Za-z]*(?:Elicitation|FollowUp|Suggestion)[A-Za-z]*Group)\b[^<>]*>";
+        static readonly Regex Chips = new Regex(ChipGroup + @"(?>(?:\s*(?>" + Chip + @"))*)\s*</\k<group>>|" + Chip, RegexOptions.CultureInvariant);
+        static readonly Regex GroupStart = new Regex(ChipGroup, RegexOptions.RightToLeft | RegexOptions.CultureInvariant);
+        static readonly Regex HalfTag = new Regex(@"\G</?(?<name>[A-Z][A-Za-z]*)?(?<rest>\s[^<>]*)?$", RegexOptions.CultureInvariant);
+        static readonly Regex CodeSpan = new Regex(@"```.*?(?:```|$)|(?<!`)(?<tick>`{1,2})(?!`)[^\n]*?(?<!`)\k<tick>(?!`)", RegexOptions.Singleline | RegexOptions.CultureInvariant);
+        static readonly string[] ChipWords = { "Elicitation", "FollowUp", "Suggestion" };
 
         public static string Clean(string text)
         {
@@ -453,6 +480,40 @@ namespace MinGent
             if (t.IndexOf("[cite", StringComparison.Ordinal) >= 0) t = Cite.Replace(t, "");
             if (t.IndexOf("code_event_index", StringComparison.Ordinal) >= 0) t = OwnCode.Replace(t, "```$1");
             return t;
+        }
+
+        public static string Unchip(string prose)
+        {
+            string t = prose ?? "";
+            if (t.IndexOf('<') < 0) return t;
+            StringBuilder sb = new StringBuilder(t.Length);
+            int at = 0;
+            foreach (Match code in CodeSpan.Matches(t))
+            {
+                sb.Append(Chips.Replace(t.Substring(at, code.Index - at), ""));
+                sb.Append(code.Value);
+                at = code.Index + code.Length;
+            }
+            sb.Append(Chips.Replace(t.Substring(at), ""));
+            return sb.ToString();
+        }
+
+        public static string HoldChip(string prose)
+        {
+            string t = prose ?? "";
+            int lt = t.LastIndexOf('<');
+            if (lt < 0) return t;
+            string seen = CodeSpan.Replace(t, delegate (Match m) { return new string(' ', m.Length); });
+            Match g = GroupStart.Match(seen);
+            if (g.Success && t.Length - g.Index < 4000 && seen.IndexOf("</" + g.Groups["group"].Value + ">", g.Index, StringComparison.Ordinal) < 0) return t.Substring(0, g.Index);
+            if (seen[lt] != '<' || t.Length - lt >= 1000) return t;
+            Match h = HalfTag.Match(t, lt);
+            if (!h.Success) return t;
+            string name = h.Groups["name"].Value, rest = h.Groups["rest"].Value;
+            bool chip = false;
+            foreach (string w in ChipWords) if (name.Contains(w) || (rest.Length == 0 && w.StartsWith(name, StringComparison.Ordinal))) chip = true;
+            if (!chip && rest.Length > 0) chip = rest.Contains("label=\"") || rest.Contains("query=\"") || rest.Contains("message=\"");
+            return chip ? t.Substring(0, lt) : t;
         }
 
         public static string Describe(int code)
@@ -616,21 +677,79 @@ namespace MinGent
 
         const string Honest = " Never claim to have looked something up or run something without a tool result in this conversation.";
 
-        public const string Nudge = "[MinGent] Reminder: files, commands and web search on this PC are reached only by writing a mingent block with one of MinGent's tools above. The block is text in your reply, not a function call, so you can always write one. Gemini's own search and code execution are off.";
+        const string Proof = " Never claim to have looked something up or run something without the console's output for it in this conversation.";
 
-        public const string Next = "(Next: another mingent block, or your answer to the user in a reply without blocks. A block is text, so you can always write one.)";
+        public const string Nudge = "[MinGent] Reminder: files, programs and web search on this PC are reached only by writing a mingent script with the console commands above. A script is text in your reply, like any code you write, so you can always write one. Gemini's own search and code execution are off.";
 
-        const string Protocol = Where + " MinGent's tools, listed under \"MinGent's tools\" below, take their place: they are real, they work, and they are the only way you can search, read, run or change anything. When the user asks for something one of them can do (for example searching the web with a search tool, or running a command with a command tool), use that tool." + Honest + "\n\n" +
-            "MinGent's tools are not function calls. You make no function call and no tool call of Gemini's anywhere in this conversation, and it makes no difference whether you have any: you use one of MinGent's tools by writing a fenced block exactly like this as the text of your reply, then you stop writing:\n\n" +
-            "```mingent\n{\"name\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}\n```\n\n" +
-            "- The block is ordinary text, so you can write one in every reply, also in a final answer, and as many as the task needs. MinGent, a program on the user's PC, reads the block from your reply, runs the tool and sends you what it returned in the next message as \"[MinGent result: name]\". Then you reply again: more blocks, or the answer.\n" +
-            "- Wherever these instructions say \"call a tool\" or \"tool call\", they mean writing this block.\n" +
-            "- Never tell the user that tools or tool calls are unavailable, used up or limited, and never answer from memory what a tool can find out. Write the block.\n" +
-            "- The block holds one JSON object: double quotes, no comments, and line breaks inside strings written as \\n.\n" +
-            "- You may write one short sentence before the block. Write nothing after it. The answer for the user goes in a reply of its own, without blocks, once the results are in.\n" +
-            "- For several independent tools at once, write several blocks one after another.\n" +
-            "- Never write a \"[MinGent result: ...]\" line yourself.\n" +
-            "- When no tool is needed, answer normally without a block.";
+        public const string Next = "(Next: another mingent script, or your answer to the user in a reply without a script.)";
+
+        const string Protocol = Where + " You work on this PC through MinGent's command console. Its commands are listed under \"Console commands\" below: they are real, they work, and they are the only way you can search, read, run or change anything. When the user asks for something a command can do (for example searching the web, or running a program), write that command." + Proof + "\n\n" +
+            "The console reads your whole reply. To do something on the PC, your reply is a script: a fenced block with one command per line, exactly like this, and then you stop writing:\n\n" +
+            "```mingent\ncommand_name {\"option\": \"value\"}\n```\n\n" +
+            "- A script is text you write, like any code you write for a user. Writing it is not a tool call or a function call and needs none, so no limit on those applies to it. You can write a script in every reply, for as long as the task takes.\n" +
+            "- Each line is a command's name, a space, and one JSON object with its options ({} when it has none): double quotes, no comments, and line breaks inside strings written as \\n.\n" +
+            "- You may write one short sentence before the script. Write nothing after it.\n" +
+            "- Several lines are several commands. The console runs them and sends each one's output in the next message as \"[Output of command_name]\". Never write such output yourself.\n" +
+            "- Never tell the user that commands, steps or actions are unavailable, used up or limited, and never give the user steps to do by hand that a command can do. Write the script.\n" +
+            "- When the work is done, or no command is needed, reply with the answer for the user, without a script.";
+
+        const string Mine = "a|an|the|this|that|these|those|another|other|any|each|every|no|one|two|several|more|your|its|which|same|next|first|right|independent|have|MinGent's|app_|browser_|browser|file|memory|search";
+        static readonly Regex Calling = new Regex(@"\b(call|calls|called|calling)((?:\s+(?:" + Mine + @")){0,3})\s+tool(s?)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex Making = new Regex(@"\bmak(e|es|ing)((?:\s+(?:" + Mine + @")){0,3})\s+tool[- ]calls?\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex ToolCalls = new Regex(@"\btool[- ]call(s?)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex ToolPart = new Regex(@"\btool(?='s\b|\s+(?:results?|outputs?|names?|errors?|tips?|runs?|says?|returns?|fails?|failed|use|usage)\b)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex ToolOf = new Regex(@"(?<=\b(?:" + Mine + @")\s+)tool(s?)\b(?![./\\_-]\w)(?!\s+(?:folder|directory|file|menu|tab|bar|box|panel|window|page)s?\b)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        const string MemoryStart = "\n# Memory\nWhat you remember about this user and PC from earlier chats:\n", MemoryEnd = "\nUse the memory tool to save";
+        static readonly string[] Theirs = { "\n# Project notes (", "\n# Skills\n", "\n# Project instructions\n", "\n# The user's instructions for you\n" };
+
+        static string Cased(string like, string word)
+        {
+            if (like.Length > 1 && char.IsUpper(like[0]) && char.IsUpper(like[1])) return word.ToUpperInvariant();
+            return like.Length > 0 && char.IsUpper(like[0]) ? char.ToUpperInvariant(word[0]) + word.Substring(1) : word;
+        }
+
+        public static string Reword(string text)
+        {
+            string t = text ?? "";
+            if (t.IndexOf("tool", StringComparison.OrdinalIgnoreCase) < 0) return t;
+            t = Making.Replace(t, delegate (Match m)
+            {
+                string end = m.Groups[1].Value.ToLowerInvariant();
+                return Cased(m.Value, end == "e" ? "write" : end == "es" ? "writes" : "writing") + m.Groups[2].Value + " command" + (m.Value.EndsWith("s", StringComparison.OrdinalIgnoreCase) ? "s" : "");
+            });
+            t = Calling.Replace(t, delegate (Match m)
+            {
+                string verb = m.Groups[1].Value.ToLowerInvariant();
+                return Cased(m.Value, verb == "call" ? "run" : verb == "calls" ? "runs" : verb == "called" ? "ran" : "running") + m.Groups[2].Value + " command" + m.Groups[3].Value;
+            });
+            t = ToolCalls.Replace(t, delegate (Match m) { return Cased(m.Value, "command") + m.Groups[1].Value.ToLowerInvariant(); });
+            t = ToolPart.Replace(t, delegate (Match m) { return Cased(m.Value, "command"); });
+            return ToolOf.Replace(t, delegate (Match m) { return char.IsUpper(m.Value[0]) ? m.Value : "command" + m.Groups[1].Value; });
+        }
+
+        public static string RewordOwn(string system)
+        {
+            string s = system ?? "";
+            int cut = s.Length;
+            foreach (string mark in Theirs)
+            {
+                int at = s.IndexOf(mark, StringComparison.Ordinal);
+                if (at >= 0 && at < cut) cut = at;
+            }
+            string own = s.Substring(0, cut), rest = s.Substring(cut);
+            int from = own.IndexOf(MemoryStart, StringComparison.Ordinal);
+            int to = from < 0 ? -1 : own.IndexOf(MemoryEnd, from + MemoryStart.Length, StringComparison.Ordinal);
+            if (to < 0) return Reword(own) + rest;
+            from += MemoryStart.Length;
+            return Reword(own.Substring(0, from)) + own.Substring(from, to - from) + Reword(own.Substring(to)) + rest;
+        }
+
+        public static string RewordNote(string note)
+        {
+            string s = note ?? "";
+            int line = s.IndexOf('\n');
+            return line < 0 ? Reword(s) : Reword(s.Substring(0, line)) + s.Substring(line);
+        }
 
         public static string Hash(string s)
         {
@@ -686,9 +805,9 @@ namespace MinGent
             StringBuilder sb = new StringBuilder();
             foreach (ToolSpec t in tools)
             {
-                sb.Append("\n## ").Append(t.Name).Append('\n').Append((t.Description ?? "").Trim()).Append('\n');
+                sb.Append("\n## ").Append(t.Name).Append('\n').Append(Reword((t.Description ?? "").Trim())).Append('\n');
                 Dictionary<string, object> props = Json.Obj(t.Schema, "properties");
-                if (props == null || props.Count == 0) { sb.Append("No arguments.\n"); continue; }
+                if (props == null || props.Count == 0) { sb.Append("No options.\n"); continue; }
                 List<object> required = Json.List(t.Schema, "required");
                 foreach (KeyValuePair<string, object> kv in props)
                 {
@@ -696,7 +815,7 @@ namespace MinGent
                     bool must = required != null && required.Contains(kv.Key);
                     sb.Append("- ").Append(kv.Key).Append(" (").Append(Kind(p)).Append(must ? ", required" : "").Append(')');
                     string about = Json.Str(p, "description");
-                    if (!string.IsNullOrEmpty(about)) sb.Append(": ").Append(about.Trim());
+                    if (!string.IsNullOrEmpty(about)) sb.Append(": ").Append(Reword(about.Trim()));
                     sb.Append('\n');
                 }
             }
@@ -705,24 +824,28 @@ namespace MinGent
 
         public static string Head(LlmRequest req)
         {
-            StringBuilder sb = new StringBuilder((req.System ?? "").Trim());
-            if (req.Tools.Count == 0) return sb.Append("\n\n# Where you are\n").Append(Where).Append(Honest).ToString();
-            return sb.Append("\n\n# How you act here\n").Append(Protocol).Append("\n\n# MinGent's tools\n").Append(Tools(req.Tools)).ToString();
+            if (req.Tools.Count == 0) return new StringBuilder((req.System ?? "").Trim()).Append("\n\n# Where you are\n").Append(Where).Append(Honest).ToString();
+            return new StringBuilder(RewordOwn((req.System ?? "").Trim())).Append("\n\n# How you work here\n").Append(Protocol).Append("\n\n# Console commands\n").Append(Tools(req.Tools)).ToString();
         }
 
         static void Render(StringBuilder sb, Msg m, bool label, GeminiPlan plan, int firstImage, ref int seen)
         {
-            if (m.Role == "tool") sb.Append("[MinGent result: ").Append(m.ToolName ?? "tool").Append(m.ToolError ? ", failed" : "").Append("]\n");
+            if (m.Role == "tool") sb.Append("[Output of ").Append(m.ToolName ?? "command").Append(m.ToolError ? ", failed" : "").Append("]\n");
             else if (m.Role == "assistant") sb.Append("[You]\n");
             else if (label) sb.Append("[User]\n");
-            sb.Append((m.Text ?? "").Trim());
-            if (m.Role == "assistant" && m.ToolCalls != null)
+            string said = (m.Text ?? "").Trim();
+            sb.Append(m.Role == "user" && said.StartsWith("[MinGent]", StringComparison.Ordinal) ? RewordNote(said) : said);
+            if (m.Role == "assistant" && m.ToolCalls != null && m.ToolCalls.Count > 0)
+            {
+                sb.Append("\n").Append(Fence);
                 foreach (ToolCall c in m.ToolCalls)
                 {
-                    string args = string.IsNullOrEmpty(c.Arguments) ? "{}" : c.Arguments.Trim();
-                    if (!args.StartsWith("{", StringComparison.Ordinal)) args = Json.Quote(args);
-                    sb.Append("\n").Append(Fence).Append("\n{\"name\": ").Append(Json.Quote(c.Name)).Append(", \"arguments\": ").Append(args).Append("}\n```");
+                    string args = string.IsNullOrEmpty(c.Arguments) ? "{}" : OneLine(c.Arguments.Trim());
+                    if (!args.StartsWith("{", StringComparison.Ordinal)) args = "{\"input\": " + Json.Quote(args) + "}";
+                    sb.Append("\n").Append(c.Name).Append(' ').Append(args);
                 }
+                sb.Append("\n```");
+            }
             if (m.Images != null)
                 foreach (ImageData image in m.Images)
                 {
@@ -767,7 +890,7 @@ namespace MinGent
                 }
             }
             string text = sb.ToString().TrimEnd();
-            if (req.NoCalls) text += "\n\n[MinGent] MinGent has switched its tools off for this one reply. Answer in plain text, without a mingent block.";
+            if (req.NoCalls) text += "\n\n[MinGent] The console is closed for this one reply. Answer in plain text, without a script.";
             else if (req.Tools.Count == 0) { }
             else if (!results) text += "\n\n" + Nudge;
             else text += "\n\n" + Next;
@@ -809,18 +932,23 @@ namespace MinGent
             if (at >= 0)
             {
                 string rest = t.Substring(at + fence);
-                Match name = NameField.Match(rest);
+                Match line = Command.Match(rest);
+                int options = line.Success ? Options(rest, line.Index + line.Length, null) : -1;
+                Match name = options >= 0 ? line : NameField.Match(rest);
                 tool = name.Success ? name.Groups[1].Value : "";
-                int a = rest.IndexOf("\"arguments\"", StringComparison.Ordinal);
-                string args = a >= 0 ? rest.Substring(a + 11).TrimStart(' ', ':', '\n', '\r') : "";
+                int a = options >= 0 ? options - 11 : rest.IndexOf("\"arguments\"", StringComparison.Ordinal);
+                string args = a >= 0 || options >= 0 ? rest.Substring(a + 11).TrimStart(' ', ':', '\n', '\r') : "";
                 argChars = args.Length;
                 head = args.Length > Quirks.HeadChars ? args.Substring(0, Quirks.HeadChars) : args;
-                return t.Substring(0, at).TrimEnd();
+                return GeminiProto.Unchip(t.Substring(0, at)).TrimEnd();
             }
             if (!final)
+            {
                 for (int k = Math.Min(Math.Max(Fence.Length, OldFence.Length) - 1, t.Length); k > 0; k--)
                     if ((k < Fence.Length && string.CompareOrdinal(t, t.Length - k, Fence, 0, k) == 0) || (k < OldFence.Length && string.CompareOrdinal(t, t.Length - k, OldFence, 0, k) == 0)) { t = t.Substring(0, t.Length - k); break; }
-            return t;
+                t = GeminiProto.HoldChip(t);
+            }
+            return GeminiProto.Unchip(t);
         }
 
         static int FenceAt(string t, int from, out int length)
@@ -905,6 +1033,64 @@ namespace MinGent
             return c;
         }
 
+        static readonly Regex Command = new Regex(@"\G\s*`?([A-Za-z_][A-Za-z0-9_.-]*)`?[ \t]*[:(]?[ \t]*", RegexOptions.CultureInvariant);
+        static readonly Regex Named = new Regex(@"\G\{\s*""(?:name|tool)""\s*:\s*""([^""\\]*)""", RegexOptions.CultureInvariant);
+
+        static int Options(string t, int after, ICollection<string> known)
+        {
+            int at = after;
+            while (at < t.Length && char.IsWhiteSpace(t[at])) at++;
+            if (at >= t.Length || t[at] != '{') return -1;
+            if (at == after) return at;
+            Match own = Named.Match(t, at);
+            return own.Success && (known == null || known.Contains(own.Groups[1].Value)) ? -1 : at;
+        }
+
+        static int Script(string t, int from, ICollection<string> known, List<ToolCall> found)
+        {
+            int pos = from;
+            while (true)
+            {
+                while (pos < t.Length && char.IsWhiteSpace(t[pos])) pos++;
+                if (pos >= t.Length) return found.Count > 0 ? pos : -1;
+                if (string.CompareOrdinal(t, pos, "```", 0, 3) == 0) return found.Count > 0 ? pos + 3 : -1;
+                string name = null;
+                int open = pos;
+                if (t[pos] != '{')
+                {
+                    Match m = Command.Match(t, pos);
+                    int after = m.Success ? m.Index + m.Length : pos;
+                    int options = m.Success ? Options(t, after, known) : -1;
+                    bool bare = m.Success && options < 0 && (after >= t.Length || t[after] == '\n' || t[after] == '\r' || string.CompareOrdinal(t, after, "```", 0, 3) == 0);
+                    if (bare && known != null && known.Contains(m.Groups[1].Value))
+                    {
+                        ToolCall alone = new ToolCall();
+                        alone.Name = m.Groups[1].Value;
+                        alone.Arguments = "{}";
+                        found.Add(alone);
+                        pos = after;
+                        continue;
+                    }
+                    if (options < 0)
+                    {
+                        int line = t.IndexOf('\n', pos), fence = t.IndexOf("```", pos, StringComparison.Ordinal);
+                        if (fence >= 0 && (line < 0 || fence < line)) { pos = fence; continue; }
+                        if (line < 0) return found.Count > 0 ? t.Length : -1;
+                        pos = line + 1;
+                        continue;
+                    }
+                    name = m.Groups[1].Value;
+                    open = options;
+                }
+                int close = ObjectEnd(t, open);
+                string json = close < 0 ? t.Substring(open) : t.Substring(open, close - open + 1);
+                ToolCall c = Call(name == null ? json : "{\"name\": " + Json.Quote(name) + ", \"arguments\": " + json + (close < 0 ? "" : "}"), close < 0);
+                if (c != null) found.Add(c);
+                if (close < 0) return t.Length;
+                pos = close + 1;
+            }
+        }
+
         public static List<ToolCall> Extract(ref string text, ICollection<string> known)
         {
             List<ToolCall> calls = new List<ToolCall>();
@@ -916,21 +1102,17 @@ namespace MinGent
                 int fence;
                 int at = FenceAt(t, pos, out fence);
                 if (at < 0) break;
-                int open = t.IndexOf('{', at + fence);
-                if (open < 0 || t.Substring(at + fence, open - at - fence).Trim().Length > 0)
+                List<ToolCall> found = new List<ToolCall>();
+                int after = Script(t, at + fence, known, found);
+                if (after < 0)
                 {
                     kept.Append(t, pos, at + fence - pos);
                     pos = at + fence;
                     continue;
                 }
-                int close = ObjectEnd(t, open);
-                int after = close < 0 ? t.Length : close + 1;
-                ToolCall c = Call(close < 0 ? t.Substring(open) : t.Substring(open, close - open + 1), close < 0);
-                int end = t.IndexOf("```", after, StringComparison.Ordinal);
-                if (end >= 0 && t.Substring(after, end - after).Trim().Length == 0) after = end + 3;
                 kept.Append(t, pos, at - pos);
                 pos = after;
-                if (c != null) calls.Add(c);
+                calls.AddRange(found);
             }
             if (calls.Count == 0) return LlmText.ExtractTextToolCalls(ref text, known);
             kept.Append(t, pos, t.Length - pos);
@@ -1349,11 +1531,11 @@ namespace MinGent
                     r.Cancelled = true;
                     return;
                 }
-                string said = GeminiProto.Clean(reply.Text);
-                bool good = err == null && status == 200 && reply.ErrorCode == 0 && reply.Any && (said.Trim().Length > 0 || reply.Thoughts.Length > 0);
+                string said = GeminiProto.Clean(reply.Text), answer = GeminiProto.Unchip(said);
+                bool good = err == null && status == 200 && reply.ErrorCode == 0 && reply.Any && (answer.Trim().Length > 0 || reply.Thoughts.Length > 0);
                 int total = GeminiPrompt.Size(req, int.MaxValue);
-                if (good && said.StartsWith(GeminiProto.Overflow, StringComparison.Ordinal) && said.Length < 200 && total / 3.6 > a.Context * 0.5) { good = false; reply.ErrorCode = -1; }
-                if (good && GeminiProto.Troubled(said, true)) { good = false; reply.ErrorCode = -2; }
+                if (good && answer.StartsWith(GeminiProto.Overflow, StringComparison.Ordinal) && answer.Length < 200 && total / 3.6 > a.Context * 0.5) { good = false; reply.ErrorCode = -1; }
+                if (good && GeminiProto.Troubled(answer, true)) { good = false; reply.ErrorCode = -2; }
                 if (!good)
                 {
                     GeminiWeb.DropThread(thread);
@@ -1380,6 +1562,7 @@ namespace MinGent
                 foreach (ToolSpec t in req.Tools) known.Add(t.Name);
                 string final = said;
                 List<ToolCall> calls = GeminiPrompt.Extract(ref final, known);
+                final = GeminiProto.Unchip(final);
                 if (req.NoCalls || req.Tools.Count == 0) calls.Clear();
                 if (calls.Count == 0 && final.Trim().Length > 0) final = final.TrimEnd() + reply.SourceList();
                 view.Update(final, reply.Thoughts, true);
