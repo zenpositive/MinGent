@@ -347,14 +347,7 @@ namespace MinGent
                         if (string.IsNullOrEmpty(hex)) continue;
                         GeminiModel m = new GeminiModel();
                         m.Hex = hex;
-                        m.Category = First(item, 1, 10);
-                        foreach (int at in new int[] { 19, 2, 12, 11 })
-                        {
-                            string said = (Json.Str(item, at) ?? "").Trim();
-                            if (said.Length == 0 || string.Equals(said, m.Category, StringComparison.OrdinalIgnoreCase) || said == m.Version) continue;
-                            if (Numbered(said) && m.Version.Length == 0) m.Version = said;
-                            else if (m.Tagline.Length == 0) m.Tagline = said;
-                        }
+                        Name(m, item, First(item, 1, 10), 19, 2, 12, 11);
                         object number = Json.Get(item, 17);
                         if (!(number is double)) number = Json.Get(item, 9);
                         m.Number = number is double ? (int)(double)number : 1;
@@ -372,6 +365,38 @@ namespace MinGent
             return null;
         }
 
+        static void Name(GeminiModel m, List<object> from, string category, params int[] places)
+        {
+            m.Category = category;
+            m.Version = "";
+            m.Tagline = "";
+            foreach (int at in places)
+            {
+                string said = (Json.Str(from, at) ?? "").Trim();
+                if (said.Length == 0 || string.Equals(said, m.Category, StringComparison.OrdinalIgnoreCase) || said == m.Version) continue;
+                if (Numbered(said) && m.Version.Length == 0) m.Version = said;
+                else if (m.Tagline.Length == 0) m.Tagline = said;
+            }
+        }
+
+        static List<object> Entry(List<object> entries, GeminiModel m, List<object> taken)
+        {
+            foreach (object x in entries)
+            {
+                List<object> e = Json.List(x, 0);
+                string category = (Json.Str(e, 4) ?? "").Trim(), version = (Json.Str(e, 5) ?? "").Trim();
+                if (e == null || category.Length == 0) continue;
+                if (taken == null)
+                {
+                    if (string.Equals(m.Category, category, StringComparison.OrdinalIgnoreCase) || (version.Length > 0 && string.Equals(m.Version, version, StringComparison.OrdinalIgnoreCase))) return x as List<object>;
+                    continue;
+                }
+                object number = Json.Get(e, 1);
+                if (number is double && (int)(double)number == m.Number && !taken.Contains(x)) return x as List<object>;
+            }
+            return null;
+        }
+
         static void Levels(List<object> body, GeminiAccount a)
         {
             foreach (object o in body)
@@ -380,29 +405,41 @@ namespace MinGent
                 string name = Json.Str(block, 0);
                 List<object> entries = Json.List(block, 1);
                 if (name == null || entries == null || !name.EndsWith("_policy", StringComparison.Ordinal)) continue;
-                foreach (object x in entries)
+                List<object> taken = new List<object>();
+                List<GeminiModel> unnamed = new List<GeminiModel>();
+                foreach (GeminiModel m in a.Models)
                 {
+                    List<object> x = Entry(entries, m, null);
+                    if (x == null) { unnamed.Add(m); continue; }
+                    taken.Add(x);
+                    Thinking(m, x);
+                }
+                foreach (GeminiModel m in unnamed)
+                {
+                    List<object> x = Entry(entries, m, taken);
+                    if (x == null) continue;
+                    taken.Add(x);
                     List<object> e = Json.List(x, 0);
-                    string category = (Json.Str(e, 4) ?? "").Trim(), version = (Json.Str(e, 5) ?? "").Trim();
-                    object levels = Json.Get(e, 15);
-                    if (e == null || category.Length == 0) continue;
-                    List<int> steps = new List<int>();
-                    List<object> named = Json.List(x, 1);
-                    if (named != null)
-                        foreach (object n in named)
-                        {
-                            object id = Json.Get(n as List<object>, 0);
-                            if (id is double && GeminiModel.StepName((int)(double)id) != null && !steps.Contains((int)(double)id)) steps.Add((int)(double)id);
-                        }
-                    foreach (GeminiModel m in a.Models)
-                        if (string.Equals(m.Category, category, StringComparison.OrdinalIgnoreCase) || (version.Length > 0 && string.Equals(m.Version, version, StringComparison.OrdinalIgnoreCase)))
-                        {
-                            m.Levels = levels is double ? (int)(double)levels : 1;
-                            m.Steps = steps;
-                        }
+                    Name(m, e, (Json.Str(e, 4) ?? "").Trim(), 5, 12);
+                    Thinking(m, x);
                 }
                 return;
             }
+        }
+
+        static void Thinking(GeminiModel m, List<object> x)
+        {
+            object levels = Json.Get(x, 0, 15);
+            List<int> steps = new List<int>();
+            List<object> named = Json.List(x, 1);
+            if (named != null)
+                foreach (object n in named)
+                {
+                    object id = Json.Get(n as List<object>, 0);
+                    if (id is double && GeminiModel.StepName((int)(double)id) != null && !steps.Contains((int)(double)id)) steps.Add((int)(double)id);
+                }
+            m.Levels = levels is double ? (int)(double)levels : 1;
+            m.Steps = steps;
         }
 
         static readonly Regex Artifact = new Regex(@"https?://googleusercontent\.com/(?:\w+/)+\d+\n*", RegexOptions.CultureInvariant);
@@ -571,22 +608,28 @@ namespace MinGent
 
     static class GeminiPrompt
     {
-        public const string Fence = "```tool_call";
+        public const string Fence = "```mingent";
+        public const string OldFence = "```tool_call";
         public const int ImageLimit = 8;
 
         const string Where = "You are running inside MinGent on the user's PC, not in the Gemini app. Gemini's own built-in features (its Google Search, code execution, image or video generation, extensions, canvas) are switched off here, so never try them.";
 
         const string Honest = " Never claim to have looked something up or run something without a tool result in this conversation.";
 
-        public const string Nudge = "[MinGent] Reminder: files, commands and web search on this PC are reached only by writing a tool_call block with one of the tools above. Gemini's own search and code execution are off.";
+        public const string Nudge = "[MinGent] Reminder: files, commands and web search on this PC are reached only by writing a mingent block with one of MinGent's tools above. The block is text in your reply, not a function call, so you can always write one. Gemini's own search and code execution are off.";
 
-        const string Protocol = Where + " The tools listed under \"Tools\" below take their place: they are real, they work, and they are the only way you can search, read, run or change anything. When the user asks for something one of them can do (for example searching the web with a search tool, or running a command with a command tool), call that tool." + Honest + "\n\n" +
-            "To call a tool, write a fenced block exactly like this, then stop writing:\n\n" +
-            "```tool_call\n{\"name\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}\n```\n\n" +
+        public const string Next = "(Next: another mingent block, or your answer to the user in a reply without blocks. A block is text, so you can always write one.)";
+
+        const string Protocol = Where + " MinGent's tools, listed under \"MinGent's tools\" below, take their place: they are real, they work, and they are the only way you can search, read, run or change anything. When the user asks for something one of them can do (for example searching the web with a search tool, or running a command with a command tool), use that tool." + Honest + "\n\n" +
+            "MinGent's tools are not function calls. You make no function call and no tool call of Gemini's anywhere in this conversation, and it makes no difference whether you have any: you use one of MinGent's tools by writing a fenced block exactly like this as the text of your reply, then you stop writing:\n\n" +
+            "```mingent\n{\"name\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}\n```\n\n" +
+            "- The block is ordinary text, so you can write one in every reply, also in a final answer, and as many as the task needs. MinGent, a program on the user's PC, reads the block from your reply, runs the tool and sends you what it returned in the next message as \"[MinGent result: name]\". Then you reply again: more blocks, or the answer.\n" +
+            "- Wherever these instructions say \"call a tool\" or \"tool call\", they mean writing this block.\n" +
+            "- Never tell the user that tools or tool calls are unavailable, used up or limited, and never answer from memory what a tool can find out. Write the block.\n" +
             "- The block holds one JSON object: double quotes, no comments, and line breaks inside strings written as \\n.\n" +
-            "- You may write one short sentence before the block. Write nothing after it.\n" +
-            "- For several independent calls at once, write several blocks one after another.\n" +
-            "- MinGent runs the tools and sends what they returned in the next message as \"[Tool result: name]\". Never write a tool result yourself.\n" +
+            "- You may write one short sentence before the block. Write nothing after it. The answer for the user goes in a reply of its own, without blocks, once the results are in.\n" +
+            "- For several independent tools at once, write several blocks one after another.\n" +
+            "- Never write a \"[MinGent result: ...]\" line yourself.\n" +
             "- When no tool is needed, answer normally without a block.";
 
         public static string Hash(string s)
@@ -664,12 +707,12 @@ namespace MinGent
         {
             StringBuilder sb = new StringBuilder((req.System ?? "").Trim());
             if (req.Tools.Count == 0) return sb.Append("\n\n# Where you are\n").Append(Where).Append(Honest).ToString();
-            return sb.Append("\n\n# How you act here\n").Append(Protocol).Append("\n\n# Tools\n").Append(Tools(req.Tools)).ToString();
+            return sb.Append("\n\n# How you act here\n").Append(Protocol).Append("\n\n# MinGent's tools\n").Append(Tools(req.Tools)).ToString();
         }
 
         static void Render(StringBuilder sb, Msg m, bool label, GeminiPlan plan, int firstImage, ref int seen)
         {
-            if (m.Role == "tool") sb.Append("[Tool result: ").Append(m.ToolName ?? "tool").Append(m.ToolError ? ", failed" : "").Append("]\n");
+            if (m.Role == "tool") sb.Append("[MinGent result: ").Append(m.ToolName ?? "tool").Append(m.ToolError ? ", failed" : "").Append("]\n");
             else if (m.Role == "assistant") sb.Append("[You]\n");
             else if (label) sb.Append("[User]\n");
             sb.Append((m.Text ?? "").Trim());
@@ -678,7 +721,7 @@ namespace MinGent
                 {
                     string args = string.IsNullOrEmpty(c.Arguments) ? "{}" : c.Arguments.Trim();
                     if (!args.StartsWith("{", StringComparison.Ordinal)) args = Json.Quote(args);
-                    sb.Append("\n```tool_call\n{\"name\": ").Append(Json.Quote(c.Name)).Append(", \"arguments\": ").Append(args).Append("}\n```");
+                    sb.Append("\n").Append(Fence).Append("\n{\"name\": ").Append(Json.Quote(c.Name)).Append(", \"arguments\": ").Append(args).Append("}\n```");
                 }
             if (m.Images != null)
                 foreach (ImageData image in m.Images)
@@ -724,10 +767,10 @@ namespace MinGent
                 }
             }
             string text = sb.ToString().TrimEnd();
-            if (req.NoCalls) text += "\n\n[MinGent] Tools are off for this reply. Answer in plain text, without a tool_call block.";
+            if (req.NoCalls) text += "\n\n[MinGent] MinGent has switched its tools off for this one reply. Answer in plain text, without a mingent block.";
             else if (req.Tools.Count == 0) { }
             else if (!results) text += "\n\n" + Nudge;
-            else text += "\n\n(Next: another tool_call block, or your answer to the user.)";
+            else text += "\n\n" + Next;
             plan.Prompt = text;
             return plan;
         }
@@ -761,10 +804,11 @@ namespace MinGent
                     if (tail.StartsWith("[cite", StringComparison.Ordinal) || "[cite".StartsWith(tail, StringComparison.Ordinal)) t = t.Substring(0, open);
                 }
             }
-            int at = t.IndexOf(Fence, StringComparison.Ordinal);
+            int fence;
+            int at = FenceAt(t, 0, out fence);
             if (at >= 0)
             {
-                string rest = t.Substring(at + Fence.Length);
+                string rest = t.Substring(at + fence);
                 Match name = NameField.Match(rest);
                 tool = name.Success ? name.Groups[1].Value : "";
                 int a = rest.IndexOf("\"arguments\"", StringComparison.Ordinal);
@@ -774,9 +818,17 @@ namespace MinGent
                 return t.Substring(0, at).TrimEnd();
             }
             if (!final)
-                for (int k = Math.Min(Fence.Length - 1, t.Length); k > 0; k--)
-                    if (string.CompareOrdinal(t, t.Length - k, Fence, 0, k) == 0) { t = t.Substring(0, t.Length - k); break; }
+                for (int k = Math.Min(Math.Max(Fence.Length, OldFence.Length) - 1, t.Length); k > 0; k--)
+                    if ((k < Fence.Length && string.CompareOrdinal(t, t.Length - k, Fence, 0, k) == 0) || (k < OldFence.Length && string.CompareOrdinal(t, t.Length - k, OldFence, 0, k) == 0)) { t = t.Substring(0, t.Length - k); break; }
             return t;
+        }
+
+        static int FenceAt(string t, int from, out int length)
+        {
+            int now = t.IndexOf(Fence, from, StringComparison.Ordinal), old = t.IndexOf(OldFence, from, StringComparison.Ordinal);
+            bool first = now >= 0 && (old < 0 || now < old);
+            length = first ? Fence.Length : OldFence.Length;
+            return first ? now : old;
         }
 
         static int ObjectEnd(string t, int open)
@@ -861,13 +913,14 @@ namespace MinGent
             int pos = 0;
             while (pos < t.Length)
             {
-                int at = t.IndexOf(Fence, pos, StringComparison.Ordinal);
+                int fence;
+                int at = FenceAt(t, pos, out fence);
                 if (at < 0) break;
-                int open = t.IndexOf('{', at + Fence.Length);
-                if (open < 0 || t.Substring(at + Fence.Length, open - at - Fence.Length).Trim().Length > 0)
+                int open = t.IndexOf('{', at + fence);
+                if (open < 0 || t.Substring(at + fence, open - at - fence).Trim().Length > 0)
                 {
-                    kept.Append(t, pos, at + Fence.Length - pos);
-                    pos = at + Fence.Length;
+                    kept.Append(t, pos, at + fence - pos);
+                    pos = at + fence;
                     continue;
                 }
                 int close = ObjectEnd(t, open);

@@ -2018,8 +2018,9 @@ namespace MinGent
     class RunCoach
     {
         public int Nudges;
-        int announce, todo, verify, refusal, summary, status;
+        int announce, todo, verify, refusal, summary, status, limit, folded;
         public bool AnyTool, Denied, FilesChanged, Reviewed, Listed;
+        public string Beside = "";
         public string LastFamily = "";
         readonly List<string> unverified = new List<string>();
         public HashSet<string> Tools = new HashSet<string>(StringComparer.Ordinal);
@@ -2053,6 +2054,22 @@ namespace MinGent
         static readonly Regex RefusalObject = new Regex(@"\b(files?|folders?|director(y|ies)|computers?|pc|systems?|internet|web|websites?|brows\w*|commands?|terminal|execut\w*|run|running|access(ing)?|disks?|programs?|apps?|applications?|screen)\b",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         static readonly Regex RefusalYours = new Regex(@"\b(can't|cannot|can not|unable to|not able to)\s+((directly|actually|really|currently)\s+)?(access|open|read|see|view|check|look at|edit|change|modify|write|save|delete|run|use|control|browse|search|download|install)\b[^.!?\n]{0,60}\byour\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        const string LimitCalls = @"(tool|function)[- ]?(call|calling|use|usage|invocation|request|access)s?";
+        const string LimitCap = "(" + LimitCalls + @"[- ]?(limit|budget|quota|cap|allowance)|tools? (limit|budget|quota|allowance)|(step|action|turn|iteration)[- ]?(limit|budget|quota|cap)|(limit|budget|quota|cap|maximum( number)?|allowance) (of|on|for) (\w+ ){0,2}" + LimitCalls + ")";
+        static readonly Regex LimitClaim = new Regex(
+            @"\b(hit|reach(ed|ing)?|exceed(ed|ing)?|exhaust(ed|ing)?|used? up)\b[^.!?\n]{0,40}\b" + LimitCap + @"\b" +
+            @"|\b" + LimitCap + @"\b[^.!?\n]{0,40}\b(reached|hit|exceeded|exhausted|used up|spent|depleted)\b" +
+            @"|((\b(ran|run|running) |(?<!\d )\b)out of|\bno (more|remaining|further|available)|n't have (any|enough)|\bnot have (any|enough)|\bhave no|\b(0|zero) remaining|\bused (up )?all( of)?|\bexhausted)\s+(\w+ ){0,2}" + LimitCalls + @"\b" +
+            @"|\b" + LimitCalls + @"\s+(remaining|left|available)\b[^.!?\n]{0,20}\b(0|zero|none)\b" +
+            @"|\b(no|0|zero)\s+(\w+ ){0,2}" + LimitCalls + @"\s+(remaining|left|available)\b" +
+            @"|\bno longer have\s+(\w+ ){0,2}" + LimitCalls + @"\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex LimitMine = new Regex(@"\b(i|i've|i'm|i'd|my|we|we've)\b|\bthis\b[^.!?\n]{0,30}\b(turn|session|reply|response|conversation|message|chat|step|stage|phase)\b|\b(currently|right now|at the moment|at this point|any ?more|any longer|no longer)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex LimitOff = new Regex(@"\b(" + LimitCalls + @"|(my |all |the |any )?tools)\s+((is|are|was|were|being|has been|have been)\s+)?((currently|now|temporarily|no longer|not)\s+)*(unavailable|available|disabled|not possible|impossible|not permitted|not allowed|turned off|switched off|blocked|restricted|locked)\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex LimitNow = new Regex(@"\bthis\b[^.!?\n]{0,30}\b(turn|session|reply|response|conversation|message|chat|step|stage|phase)\b|\b(currently|right now|at the moment|at this point|any ?more|any longer|no longer|for me)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex LimitCant = new Regex(@"\b(i|we)\b[^.!?\n]{0,25}?(\b(cannot|can not|unable to|not able to|could not|not allowed to|not permitted to)|n't)\s+(\w+\s+){0,2}(make|use|issue|perform|run|invoke|call|execute|place)\s+((any|more|further|additional|new|another)\s+)*(" + LimitCalls + @"|tools|functions)\b(?!\s+(that|which|for|to|like|such|needed|required|requiring|from|on|in the|you)\b)",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         static readonly Regex Announce = new Regex(
             @"^(now,?\s+|next,?\s+|first,?\s+|then,?\s+|okay,?\s+|ok,?\s+|alright,?\s+|great,?\s+)?(let me|let's|i'll|i will|i'm going to|i am going to|i'm now going to|i need to|i should|we need to|now i('ll| will| need to)|time to)\b(?!\s+know)",
@@ -2186,6 +2203,7 @@ namespace MinGent
         public void AfterTool(string name, Dictionary<string, object> args, ToolOutcome o)
         {
             AnyTool = true;
+            limit = 0;
             if (name == "todo_write") sinceTodo = 0;
             if (name == "todo_write" && o != null && !o.Error) Listed = true;
             if (name.StartsWith("app_", StringComparison.Ordinal)) LastFamily = "app";
@@ -2323,6 +2341,14 @@ namespace MinGent
         {
             string t = (text ?? "").Trim();
             Told = null;
+            if (limit < 3 && t.Length > 0 && t.Length < 2500)
+                foreach (string sentence in Regex.Split(t, @"(?<=[.!?\n])\s+"))
+                    if (Claims(sentence))
+                    {
+                        limit++;
+                        Told = "The agent said it could not use its tools any more. They work and MinGent sets no limit on them, so it asked the agent to carry on.";
+                        return "[MinGent] Your tools work right now and MinGent sets no limit on them: none has been reached, none are switched off, and you can use them in this very reply. If you stopped because you thought otherwise, carry on with the task and use the next tool now. If the task is done, give your final answer. " + Standalone;
+                    }
             if (Nudges >= 4) return null;
             bool question = EndsWithQuestion(t);
             if (!AnyTool && refusal == 0 && t.Length > 0 && t.Length < 2500)
@@ -2355,6 +2381,13 @@ namespace MinGent
                 Nudges++;
                 Told = "The agent wrote what it was doing but stopped, so MinGent asked it to carry on.";
                 return "[MinGent] Your message only says what you are doing, and you ended your turn without calling a tool. If you meant to continue, make the tool call now. If you are finished, give your final answer. " + Standalone;
+            }
+            if (!question && !WaitingOnUser && folded == 0 && Beside.Length >= 100 && t.Length < 160 && t.Length * 2 < Beside.Length)
+            {
+                folded++;
+                Nudges++;
+                Told = "The agent's last message left out what it had found, so MinGent asked it for the whole answer.";
+                return "[MinGent] The user sees only your last message as the answer. What you wrote next to your tool calls before it is folded away with the steps and does not count. Write the complete answer now, with the results in it.";
             }
             if (!question && !WaitingOnUser && todo == 0 && todos != null)
             {
@@ -2391,6 +2424,16 @@ namespace MinGent
         }
 
         public static bool IsQuestion(string t) { return EndsWithQuestion((t ?? "").Trim()); }
+
+        static bool Claims(string sentence)
+        {
+            if (LimitClaim.IsMatch(sentence) && LimitMine.IsMatch(sentence)) return true;
+            if (LimitCant.IsMatch(sentence)) return true;
+            Match m = LimitOff.Match(sentence);
+            if (!m.Success || !LimitNow.IsMatch(sentence)) return false;
+            string said = m.Value.ToLowerInvariant();
+            return !said.EndsWith(" available") || said.Contains(" not ") || said.Contains("no longer");
+        }
 
         static bool EndsWithQuestion(string t)
         {

@@ -1973,6 +1973,7 @@ namespace MinGent
                 Msg am = r.ToMessage();
                 pace.Stamp(am);
                 bool hasCalls = r.ToolCalls.Count > 0;
+                if (hasCalls) coach.Beside = (r.Text ?? "").Trim();
                 if (!hasCalls && r.Text.Trim().Length == 0)
                 {
                     emptyReplies++;
