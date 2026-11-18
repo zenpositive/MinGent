@@ -22,7 +22,7 @@ Double-click `Build-MinGent.bat`, or run `Build-MinGent.bat /quiet` in a script.
 
 ## Releasing
 
-1. Commit, then make the release zip from the committed files: everything under a top folder `MinGent/`, named `MinGent-<version>.zip` (for example `MinGent-1.3.0.zip`), with the same version in `src/Program.cs`.
+1. Commit, then make the release zip from the committed files: everything under a top folder `MinGent/`, named `MinGent-<version>.zip` (for example `MinGent-1.4.0.zip`), with the same version in `src/Program.cs`.
 2. On the developer's laptop, build the signer with `src\tools\Build-Signer.bat`. It builds into `%LOCALAPPDATA%\MinGent signer`, outside the repo, so nothing in the repo folder can load into it. Rebuild it only after reading what changed in `src/tools` and `src/Release.cs` since the last build, because it runs with the signing keys. Then run `"%LOCALAPPDATA%\MinGent signer\ReleaseSigner.exe" sign MinGent-<version>.zip tpm:MinGentRelease security-key` and touch the YubiKey when Windows asks. This writes `MinGent-<version>.zip.sig.txt` next to the zip.
 3. Check it against the keys the previous release pins: `ReleaseSigner.exe verify MinGent-<version>.zip <previous release zip>`.
 4. Upload the zip and the `.sig.txt` file to the GitHub release.
@@ -50,7 +50,7 @@ The TPM key is named `MinGentRelease`. It lives in that laptop's TPM, under its 
 | `Browser.cs`, `BrowserWindows.cs`, `WebView2Interop.cs` | Built-in browser on WebView2 |
 | `BrowserScripts.cs` | JavaScript the browser tools run, as C# strings |
 | `BrowserConsole.cs`, `ConsoleDrawer.cs` | The browser console: console messages from the DevTools protocol, the check on code the agent runs there, and the console under the page |
-| `GeminiWeb.cs` | Gemini web (experimental): the requests Gemini's own site makes, the prompt that carries tools as text blocks, the model provider |
+| `GeminiWeb.cs` | Gemini web (experimental): the requests Gemini's own site makes, the prompt that carries tools as console commands in a script, the model provider |
 | `GeminiHelper.cs`, `helper/` | The link to the helper extension in the user's browser (a WebSocket on 127.0.0.1), finding Chromium browsers, the setup window. `helper/` is the extension itself, embedded in MinGent.exe by `Build-MinGent.bat`. Raise the version in `helper/manifest.json` whenever its scripts change, so installed helpers reload |
 | `Net.cs`, `Eraser.cs` | Offline mode, connection list, erase everything |
 | `Http.cs`, `Json.cs` | HTTP and JSON |

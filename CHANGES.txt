@@ -1,6 +1,29 @@
 MinGent - what changed
 ======================
 
+Version 1.4.0
+- The refs the agent uses for buttons and fields (a12 in a program, e12 on
+  a web page) now stay the same while the control stays where it is.
+  Before, every click or keystroke gave them new numbers, so a model that
+  sent several steps at once had the later ones refused, and on a web page
+  that had changed an old ref could land on another element. An old ref is
+  now refused instead.
+- When a model stops and leaves you clicks it can do itself ("to finish,
+  click Set color"), MinGent asks it to do them and says so in the chat.
+  Steps that are rightly yours are left with you, such as passwords,
+  sign-ins, payments and anything you refused.
+- The reminder for a model that says it ran out of tool calls now also
+  catches the same claim about steps, actions, commands or scripts.
+- Gemini web: MinGent now presents its tools to Gemini as commands in a
+  console, written as a short script. In tests, Gemini 4 Hydrogen stopped
+  early far less often with it.
+- Gemini web: the suggestion buttons Gemini adds to its answers no longer
+  show up as raw tags in the text, and "I encountered an error doing what
+  you asked" is tried again like Gemini's other error message instead of
+  being shown as the answer.
+- Gemini web: MinGent now keeps Gemini's own model list, so after a later
+  update the model menu is right from the first start.
+
 Version 1.3.0
 - Gemini web: a model of a paid account is listed under the name Gemini's
   own menu gives it, with its thinking levels. Before, Gemini 4 Argon was

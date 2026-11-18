@@ -25,7 +25,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.3.0. Report problems at
+This is version 1.4.0. Report problems at
 https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -95,7 +95,7 @@ sign-ins. MinGent has none of that.
   Full auto asks nothing. The check reads the command; it can't see what a
   script does once it runs.
 To check a download, compare its SHA-256 with the one on the release page.
-In PowerShell: Get-FileHash .\MinGent-1.3.0.zip
+In PowerShell: Get-FileHash .\MinGent-1.4.0.zip
 
 
 YOUR OWN ICON
@@ -416,7 +416,7 @@ models..." for the full list.
   pinned one when none is open), so your Google cookies never leave the
   browser. Not signed in to Gemini there, only its basic model works.
   What to know before you use it: this is not an official Google API. It can
-  stop working when Google changes its site, tools go through text blocks
+  stop working when Google changes its site, tools go through short scripts
   the model writes, which is less strict than a real API, and Google's terms
   may not allow automated use, so it is at your own risk. The helper is
   plain JavaScript in src\helper, about 300 lines. To remove it, turn the
