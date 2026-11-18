@@ -22,7 +22,7 @@ Double-click `Build-MinGent.bat`, or run `Build-MinGent.bat /quiet` in a script.
 
 ## Releasing
 
-1. Commit, then make the release zip from the committed files: everything under a top folder `MinGent/`, named `MinGent-<version>.zip` (for example `MinGent-1.2.0.zip`), with the same version in `src/Program.cs`.
+1. Commit, then make the release zip from the committed files: everything under a top folder `MinGent/`, named `MinGent-<version>.zip` (for example `MinGent-1.3.0.zip`), with the same version in `src/Program.cs`.
 2. On the developer's laptop, build the signer with `src\tools\Build-Signer.bat`. It builds into `%LOCALAPPDATA%\MinGent signer`, outside the repo, so nothing in the repo folder can load into it. Rebuild it only after reading what changed in `src/tools` and `src/Release.cs` since the last build, because it runs with the signing keys. Then run `"%LOCALAPPDATA%\MinGent signer\ReleaseSigner.exe" sign MinGent-<version>.zip tpm:MinGentRelease security-key` and touch the YubiKey when Windows asks. This writes `MinGent-<version>.zip.sig.txt` next to the zip.
 3. Check it against the keys the previous release pins: `ReleaseSigner.exe verify MinGent-<version>.zip <previous release zip>`.
 4. Upload the zip and the `.sig.txt` file to the GitHub release.

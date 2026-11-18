@@ -1,6 +1,21 @@
 MinGent - what changed
 ======================
 
+Version 1.3.0
+- Gemini web: a model of a paid account is listed under the name Gemini's
+  own menu gives it, with its thinking levels. Before, Gemini 4 Argon was
+  listed as Gemini 4 Carbon, with "on" and "high" instead of low, medium
+  and high.
+- Gemini web: some Gemini models stopped in the middle of a task and said
+  they had run out of tool calls, or that tool calls were switched off.
+  MinGent sets no such limit. It now describes its tools to Gemini so that
+  they are not mistaken for Gemini's own, and when a model of any provider
+  stops with that claim, MinGent sends it back to work and says so in the
+  chat.
+- When a model wrote its answer next to its last step and then only said
+  the task was done, the answer was folded away with the steps. MinGent now
+  asks for the whole answer.
+
 Version 1.2.0
 - MinGent is no longer called a beta, and versions now go 1.2.0, 1.3.0,
   1.4.0 and so on.
