@@ -644,7 +644,7 @@ namespace MinGent
                 bool said = it.Kind == ChatKind.Assistant && !it.Draft && it.Text.Trim().Length > 0;
                 if (said && !it.Surfaced && (Substantial(it.Text) || Asks(i, e))) it.Surfaced = true;
                 if (said && Answer(i, e) && (it.Surfaced || !act.Running)) continue;
-                bool pinned = (it.Kind == ChatKind.Question && it.Decision >= 0 && (it.Question == null || !it.Question.Wait)) || (said && it.Surfaced);
+                bool pinned = (it.Kind == ChatKind.Question && it.Decision >= 0 && (it.Question == null || !it.Question.Wait)) || (it.Kind == ChatKind.Assistant && it.Text.Trim().Length > 0 && Asks(i, e));
                 bool member = it.Kind == ChatKind.Tool || it.Kind == ChatKind.Thinking || it.Kind == ChatKind.Assistant || (it.Kind == ChatKind.Permission && it.Decision >= 0) ||
                               (it.Kind == ChatKind.Question && it.Decision >= 0) || pinned || (it.Kind == ChatKind.Notice && it.Draft);
                 if (!member) continue;
@@ -689,10 +689,16 @@ namespace MinGent
             for (int j = i + 1; j < e; j++)
             {
                 ChatItem n = Items[j];
-                if (n.Kind == ChatKind.Notice) continue;
-                return n.Kind == ChatKind.Question && n.Decision < 0;
+                if (n.Kind == ChatKind.Notice || AskCard(n)) continue;
+                return n.Kind == ChatKind.Question;
             }
             return false;
+        }
+
+        public static bool AskCard(ChatItem n)
+        {
+            if (n.Kind != ChatKind.Tool || n.CallId == null) return false;
+            return n.CallId.EndsWith("#ask_user", StringComparison.Ordinal) || n.CallId.EndsWith("#" + PlanMode.Tool, StringComparison.Ordinal);
         }
 
         bool Answer(int i, int e)
@@ -1545,6 +1551,17 @@ namespace MinGent
             return rest.ToLowerInvariant();
         }
 
+        static string DrawnIcon(string icon)
+        {
+            switch (icon)
+            {
+                case "console": return "terminal";
+                case "app": return "cursor";
+                case "pane": return "dot";
+            }
+            return icon;
+        }
+
         static string Summary(ChatItem a)
         {
             string tail;
@@ -1555,8 +1572,8 @@ namespace MinGent
         static string SummaryHead(ChatItem a, out string tail)
         {
             tail = "";
-            HashSet<string> read = new HashSet<string>(), edit = new HashSet<string>(), gone = new HashSet<string>(), sound = new HashSet<string>();
-            int cmd = 0, search = 0, web = 0, browse = 0, list = 0, help = 0, video = 0, other = 0;
+            HashSet<string> read = new HashSet<string>(), edit = new HashSet<string>(), made = new HashSet<string>(), gone = new HashSet<string>(), sound = new HashSet<string>(), programs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            int cmd = 0, search = 0, web = 0, browse = 0, list = 0, help = 0, video = 0, app = 0, memory = 0, scheduled = 0, rescheduled = 0, other = 0;
             bool thought = false, reviewed = false;
             if (a.Members != null)
                 foreach (ChatItem m in a.Members)
@@ -1564,15 +1581,28 @@ namespace MinGent
                     if (m.Kind == ChatKind.Thinking) { thought = true; continue; }
                     if (m.Kind != ChatKind.Tool || (m.Status == 3 && m.Summary != "stopped")) continue;
                     if (m.Status == 1 && m.Under == null && m.Label == AgentSession.ReviewLabel) { reviewed = true; continue; }
+                    bool tried = m.Icon == "terminal" || m.Icon == "cursor" || m.Icon == "console" || m.Icon == "branch";
+                    if (m.Status != 1 && !tried) continue;
                     switch (m.Icon)
                     {
                         case "file": read.Add(FileKey(m.Label)); break;
-                        case "pencil": edit.Add(FileKey(m.Label)); break;
+                        case "pencil": if ((m.Summary ?? "").StartsWith("new", StringComparison.Ordinal)) made.Add(FileKey(m.Label)); else edit.Add(FileKey(m.Label)); break;
                         case "trash": gone.Add(FileKey(m.Label)); break;
                         case "terminal": cmd++; break;
                         case "search": search++; break;
                         case "globe": web++; break;
-                        case "cursor": browse++; break;
+                        case "cursor": case "console": browse++; break;
+                        case "app":
+                            app++;
+                            foreach (string verb in new string[] { "Open ", "Ask to use " })
+                                if (m.Label.StartsWith(verb, StringComparison.Ordinal)) programs.Add(m.Label.Substring(verb.Length).Trim());
+                            break;
+                        case "notes": case "pane": case "map": break;
+                        case "bookmark": if (m.Label.StartsWith("Remember:", StringComparison.Ordinal) || m.Label.StartsWith("Forget:", StringComparison.Ordinal)) memory++; break;
+                        case "history":
+                            if (m.Label.StartsWith("Schedule a task", StringComparison.Ordinal)) scheduled++;
+                            else if (!m.Label.StartsWith("List ", StringComparison.Ordinal)) rescheduled++;
+                            break;
                         case "folder": list++; break;
                         case "branch": help++; break;
                         case "wave": sound.Add(FileKey(m.Label)); break;
@@ -1581,17 +1611,28 @@ namespace MinGent
                         default: other++; break;
                     }
                 }
+            edit.ExceptWith(made);
             List<string> parts = new List<string>();
-            if (!string.IsNullOrEmpty(a.Label) && read.Count + edit.Count + gone.Count + sound.Count + cmd + search + web + browse + list + help + video + other == 0) { tail = Secs(a.Seconds); return a.Label; }
+            if (!string.IsNullOrEmpty(a.Label) && read.Count + edit.Count + made.Count + gone.Count + sound.Count + cmd + search + web + browse + list + help + video + app + memory + scheduled + rescheduled + other == 0) { tail = Secs(a.Seconds); return a.Label; }
             if (read.Count > 0) parts.Add("read " + Plural(read.Count, "file", "files"));
+            if (made.Count > 0) parts.Add("created " + Plural(made.Count, "file", "files"));
             if (edit.Count > 0) parts.Add("edited " + Plural(edit.Count, "file", "files"));
             if (gone.Count > 0) parts.Add("deleted " + Plural(gone.Count, "item", "items"));
+            if (scheduled > 0) parts.Add(scheduled == 1 ? "scheduled a task" : "scheduled " + scheduled + " tasks");
+            if (rescheduled > 0) parts.Add(rescheduled == 1 ? "changed a scheduled task" : "changed " + rescheduled + " scheduled tasks");
+            if (memory > 0) parts.Add("updated memory");
             if (sound.Count > 0) parts.Add("analyzed " + Plural(sound.Count, "sound file", "sound files"));
             if (video > 0) parts.Add("watched a video");
             if (cmd > 0) parts.Add("ran " + Plural(cmd, "command", "commands"));
             if (search > 0) parts.Add("searched " + (search == 1 ? "once" : search + " times"));
             if (web > 0) parts.Add("read " + Plural(web, "web page", "web pages"));
             if (browse > 0) parts.Add("used the browser");
+            if (app > 0)
+            {
+                string one = null;
+                foreach (string pname in programs) one = pname;
+                parts.Add(programs.Count == 1 ? "used " + one : programs.Count > 1 ? "used " + programs.Count + " programs" : "used a program");
+            }
             if (list > 0) parts.Add("looked in " + Plural(list, "folder", "folders"));
             if (help > 0) parts.Add("used " + Plural(help, "helper", "helpers"));
             if (other > 0 && parts.Count < 3) parts.Add(Plural(other, "other step", "other steps"));
@@ -1785,7 +1826,7 @@ namespace MinGent
             if (hot) Glyphs.Hover(g, th, th.TabHover, new Rectangle(x - UI.S(8), y, w + UI.S(16), rowH), UI.S(8));
             Rectangle icon = new Rectangle(x - UI.S(1), y, UI.S(16), rowH);
             if (it.Status == 0) Glyphs.Spinner(g, new Rectangle(x - UI.S(2), y + (rowH - UI.S(18)) / 2, UI.S(18), UI.S(18)), th.Accent, phase);
-            else Glyphs.Draw(it.Icon, g, icon, it.Status == 2 ? th.Error : th.ChromeDim);
+            else Glyphs.Draw(DrawnIcon(it.Icon), g, icon, it.Status == 2 ? th.Error : th.ChromeDim);
             int tx = x + UI.S(22);
             int avail = w - UI.S(22) - UI.S(22);
             int openW = 0;
@@ -1800,7 +1841,7 @@ namespace MinGent
             int lw = TextRenderer.MeasureText(g, label, f.Body, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width;
             int sw = summary.Length > 0 ? TextRenderer.MeasureText(g, summary, f.Small, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width : 0;
             bool failed = it.Status == 2;
-            int maxLabel = summary.Length == 0 ? avail : failed ? Math.Max(UI.S(60), avail - sw - UI.S(10)) : Math.Max(Math.Min(lw + UI.S(4), avail * 4 / 5), avail - sw - UI.S(10));
+            int maxLabel = summary.Length == 0 ? avail : Math.Max(Math.Min(lw + UI.S(4), failed ? avail / 2 : avail * 4 / 5), avail - sw - UI.S(10));
             Rectangle lr = new Rectangle(tx, y, Math.Min(lw + UI.S(4), maxLabel), rowH);
             TextRenderer.DrawText(g, label, f.Body, lr, labelColor, TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
             if (summary.Length > 0 && !failed && tx + avail - lr.Right - UI.S(8) < UI.S(64)) summary = "";
@@ -2351,6 +2392,79 @@ namespace MinGent
             catch { }
         }
 
+        public static List<List<List<string>>> Tables(string md)
+        {
+            List<List<List<string>>> all = new List<List<List<string>>>();
+            if (string.IsNullOrEmpty(md) || md.IndexOf('|') < 0) return all;
+            foreach (MdBlock b in Markdown.Parse(md))
+            {
+                if (b.Kind != MdKind.Table || b.Rows == null || b.Rows.Count == 0) continue;
+                List<List<string>> rows = new List<List<string>>();
+                foreach (List<string> r in b.Rows)
+                {
+                    List<string> cells = new List<string>();
+                    foreach (string c in r)
+                    {
+                        StringBuilder sb = new StringBuilder();
+                        foreach (MdRun run in Markdown.Inline(c ?? "")) sb.Append(run.Text);
+                        cells.Add(sb.ToString().Trim());
+                    }
+                    rows.Add(cells);
+                }
+                all.Add(rows);
+            }
+            return all;
+        }
+
+        public static string TablesTsv(List<List<List<string>>> tables)
+        {
+            StringBuilder sb = new StringBuilder();
+            for (int t = 0; t < tables.Count; t++)
+            {
+                if (t > 0) sb.Append("\r\n");
+                foreach (List<string> r in tables[t])
+                {
+                    for (int i = 0; i < r.Count; i++)
+                    {
+                        if (i > 0) sb.Append('\t');
+                        string c = r[i].Replace("\t", " ").Replace("\r", " ").Replace("\n", " ");
+                        sb.Append(c.IndexOf('"') >= 0 ? "\"" + c.Replace("\"", "\"\"") + "\"" : c);
+                    }
+                    sb.Append("\r\n");
+                }
+            }
+            return sb.ToString();
+        }
+
+        public static string TablesHtml(List<List<List<string>>> tables)
+        {
+            StringBuilder sb = new StringBuilder();
+            foreach (List<List<string>> rows in tables)
+            {
+                sb.Append("<table>");
+                for (int r = 0; r < rows.Count; r++)
+                {
+                    sb.Append("<tr>");
+                    foreach (string c in rows[r]) sb.Append(r == 0 ? "<th>" : "<td>").Append(System.Net.WebUtility.HtmlEncode(c)).Append(r == 0 ? "</th>" : "</td>");
+                    sb.Append("</tr>");
+                }
+                sb.Append("</table><br>");
+            }
+            return sb.ToString();
+        }
+
+        static void CopyTables(List<List<List<string>>> tables)
+        {
+            try
+            {
+                DataObject d = new DataObject();
+                d.SetText(TablesTsv(tables), TextDataFormat.UnicodeText);
+                d.SetText(HtmlClip(TablesHtml(tables)), TextDataFormat.Html);
+                Clipboard.SetDataObject(d, true);
+            }
+            catch { }
+        }
+
         static string HtmlClip(string fragment)
         {
             const string head = "Version:0.9\r\nStartHTML:{0:D10}\r\nEndHTML:{1:D10}\r\nStartFragment:{2:D10}\r\nEndFragment:{3:D10}\r\n";
@@ -2790,6 +2904,78 @@ namespace MinGent
             Invalidate();
         }
 
+        public bool Reveal(string query)
+        {
+            string q = System.Text.RegularExpressions.Regex.Replace((query ?? "").Trim(), @"\s+", " ");
+            if (q.Length < 2 || !IsHandleCreated) return false;
+            int found = -1;
+            for (int i = 0; i < Items.Count && found < 0; i++)
+                if (Said(Items[i]) && !Items[i].Hidden && FindIn(i, q)) found = i;
+            CompareInfo cmp = CultureInfo.CurrentCulture.CompareInfo;
+            for (int i = 0; i < Items.Count && found < 0; i++)
+            {
+                ChatItem it = Items[i];
+                if (!Said(it) || !it.Hidden || it.Group == null || it.Group.Expanded || cmp.IndexOf(it.Text, q, CompareOptions.IgnoreCase) < 0) continue;
+                ChatItem group = it.Group;
+                group.Expanded = true;
+                Changed(group);
+                if (!it.Hidden && FindIn(i, q)) found = i;
+                else { group.Expanded = false; Changed(group); }
+            }
+            if (found < 0) return false;
+            ChatItem f = Items[found];
+            int y = f.Top + Math.Max(0, f.MdOy) + f.Md.Ops[selA.Op].R.Y;
+            stick = false;
+            scrollY = Math.Max(0, Math.Min(Math.Max(0, contentH - ClientSize.Height), y - ClientSize.Height / 3));
+            PositionEditor();
+            Invalidate();
+            RefreshHover();
+            return true;
+        }
+
+        static bool Said(ChatItem it) { return it.Kind == ChatKind.User || it.Kind == ChatKind.Assistant; }
+
+        bool FindIn(int i, string q)
+        {
+            MdLayout L = Items[i].Md;
+            if (L == null) return false;
+            StringBuilder sb = new StringBuilder();
+            List<int> ops = new List<int>(), starts = new List<int>();
+            DrawOp prev = null;
+            for (int k = 0; k < L.Ops.Count; k++)
+            {
+                DrawOp op = L.Ops[k];
+                if (!MdRenderer.Selectable(op) || op.Text == null) continue;
+                if (sb.Length > 0) Separator(sb, prev, op);
+                ops.Add(k);
+                starts.Add(sb.Length);
+                sb.Append(op.Text);
+                prev = op;
+            }
+            for (int c = 0; c < sb.Length; c++) if (char.IsWhiteSpace(sb[c])) sb[c] = ' ';
+            string flat = sb.ToString();
+            int at = CultureInfo.CurrentCulture.CompareInfo.IndexOf(flat, q, CompareOptions.IgnoreCase);
+            if (at < 0) return false;
+            selA = PosAt(i, L, ops, starts, at, false);
+            selB = PosAt(i, L, ops, starts, Math.Min(flat.Length, at + q.Length), true);
+            hasSel = true;
+            selecting = false;
+            return true;
+        }
+
+        static SelPos PosAt(int item, MdLayout L, List<int> ops, List<int> starts, int at, bool end)
+        {
+            for (int j = ops.Count - 1; j >= 0; j--)
+            {
+                if (starts[j] > at) continue;
+                int len = L.Ops[ops[j]].Text.Length;
+                if (at <= starts[j] + len) return new SelPos(item, ops[j], at - starts[j]);
+                if (end || j + 1 >= ops.Count) return new SelPos(item, ops[j], len);
+                return new SelPos(item, ops[j + 1], 0);
+            }
+            return new SelPos(item, ops.Count > 0 ? ops[0] : 0, 0);
+        }
+
         public void SelectAll()
         {
             int first = -1, last = -1;
@@ -2899,6 +3085,9 @@ namespace MinGent
                 List<string> blocks = it.Kind == ChatKind.Assistant ? CodeOnly(it.Md) : null;
                 if (blocks != null && blocks.Count > 0)
                     m.Items.Add(Menus.Item(blocks.Count == 1 ? "Copy the code" : "Copy all code blocks", false, delegate { SetClipboard(string.Join("\n\n", blocks.ToArray())); }));
+                List<List<List<string>>> tables = it.Kind == ChatKind.Assistant ? Tables(it.Text) : null;
+                if (tables != null && tables.Count > 0)
+                    m.Items.Add(Menus.Item(tables.Count == 1 ? "Copy the table" : "Copy all tables", false, delegate { CopyTables(tables); }));
             }
             if (m.Items.Count > 0 && !(m.Items[m.Items.Count - 1] is ToolStripSeparator)) m.Items.Add(new ToolStripSeparator());
             m.Items.Add(Menus.Item("Select all", false, delegate { SelectAll(); }));

@@ -261,6 +261,7 @@ namespace MinGent
         }
         public void Usage(int used, int context) { }
         public void Hold(bool on) { }
+        public void PromoteAnswer() { }
     }
 
     class HelperJob
@@ -689,7 +690,7 @@ namespace MinGent
                 foreach (string m in more) later.Append("- ").Append(m.Length > 1000 ? m.Substring(0, 1000) + "..." : m).Append('\n');
                 sb.Append("While it worked, the user also wrote:\n").Append(later.Length > 4000 ? later.ToString(0, 4000) + "...\n" : later.ToString()).Append('\n');
             }
-            sb.Append("That assistant says it has finished. It changed these files in the workspace (").Append(workspace).Append("):\n").Append(list).Append('\n');
+            sb.Append("That assistant says it has finished. It changed these files in the workspace, ").Append(workspace).Append(":\n").Append(list).Append('\n');
             sb.Append("The changes (lines starting with + were added, - removed):\n").Append(diffs).Append('\n');
             string said = (summary ?? "").Trim();
             if (said.Length > 0)
@@ -814,7 +815,7 @@ namespace MinGent
             sb.Append("- Tool results can end with lines that start with \"[MinGent note]\". MinGent adds these after the tool runs: they say what happened and suggest a next step.\n\n");
             sb.Append("# This PC\n");
             sb.Append("- ").Append(SystemPrompt.OsName()).Append(", user ").Append(Environment.UserName).Append(".\n");
-            sb.Append("- Workspace: ").Append(cfg.Workspace).Append(". Relative paths resolve here.\n");
+            sb.Append("- Workspace, where relative paths resolve: ").Append(cfg.Workspace).Append('\n');
             if (kind != "explore") sb.Append("- ").Append(SystemInfoTool.PathLine()).Append(" Don't search the PC for other runtimes, and check a version only when it matters.\n");
             sb.Append("- ").Append(perms.Auto ? "Most actions run without asking; risky ones ask the user." : "Some actions ask the user for permission first; if the user says no, work without it.").Append('\n');
             if (cfg.Sandbox && kind != "explore") sb.Append("- Commands run in a sandbox: they can read files and use the network, but can change files only in the workspace and in MinGent's temp and cache folders. If one fails because the sandbox blocked it, run it again with outside_sandbox=true only when your task needs it; MinGent asks the user first.\n");

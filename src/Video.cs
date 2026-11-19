@@ -97,14 +97,36 @@ namespace MinGent
 
         public static string Label(double seconds)
         {
-            return YouTube.Time((int)Math.Round(Math.Max(0, seconds)) * 1000);
+            return YouTube.Time((int)Math.Round(Math.Max(0, seconds), MidpointRounding.AwayFromZero) * 1000);
+        }
+
+        static string Tenths(double seconds)
+        {
+            int tenths = (int)Math.Round(Math.Max(0, seconds) * 10, MidpointRounding.AwayFromZero);
+            string whole = YouTube.Time(tenths / 10 * 1000);
+            return tenths % 10 == 0 ? whole : whole + "." + (tenths % 10).ToString(CultureInfo.InvariantCulture);
+        }
+
+        public static string[] Stamps(List<double> times)
+        {
+            string[] l = new string[times.Count];
+            HashSet<string> seen = new HashSet<string>();
+            bool fine = false;
+            for (int i = 0; i < l.Length; i++)
+            {
+                l[i] = Label(times[i]);
+                if (!seen.Add(l[i])) fine = true;
+            }
+            List<double> sorted = new List<double>(times);
+            sorted.Sort();
+            for (int i = 1; i < sorted.Count && !fine; i++) if (sorted[i] - sorted[i - 1] < 0.95) fine = true;
+            if (fine) for (int i = 0; i < l.Length; i++) l[i] = Tenths(times[i]);
+            return l;
         }
 
         public static string Labels(List<double> times)
         {
-            List<string> l = new List<string>();
-            foreach (double t in times) l.Add(Label(t));
-            return string.Join(", ", l.ToArray());
+            return string.Join(", ", Stamps(times));
         }
 
         public static int Columns(int count) { return count <= 1 ? 1 : count <= 4 ? 2 : count <= 9 ? 3 : 4; }
@@ -137,6 +159,7 @@ namespace MinGent
             double aspect = frames[0].Height / (double)Math.Max(1, frames[0].Width);
             int ch = Math.Max(16, (int)Math.Round(cw * Math.Max(0.3, Math.Min(2.0, aspect))));
             Bitmap sheet = new Bitmap(cols * cw + gap * (cols - 1), rows * ch + gap * (rows - 1), PixelFormat.Format24bppRgb);
+            string[] stamps = Stamps(times);
             using (Graphics g = Graphics.FromImage(sheet))
             {
                 g.Clear(Color.FromArgb(24, 24, 24));
@@ -147,7 +170,7 @@ namespace MinGent
                     Rectangle cell = new Rectangle(i % cols * (cw + gap), i / cols * (ch + gap), cw, ch);
                     Rectangle at = Fit(frames[i].Size, cell);
                     g.DrawImage(frames[i], at, 0, 0, frames[i].Width, frames[i].Height, GraphicsUnit.Pixel);
-                    Stamp(g, cell, Label(times[i]), Math.Max(13f, cw / 24f));
+                    Stamp(g, cell, stamps[i], Math.Max(13f, cw / 24f));
                 }
             }
             return sheet;

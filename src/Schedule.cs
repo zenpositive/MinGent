@@ -152,6 +152,33 @@ namespace MinGent
             return null;
         }
 
+        public static string UsedBy(string folder)
+        {
+            string f = WorkFolders.Clean(folder);
+            if (f == null) return null;
+            foreach (ScheduledTask t in Load())
+            {
+                string tf = WorkFolders.Clean(t.Folder);
+                if (tf != null && AgentPaths.IsInside(tf, f)) return t.Name;
+            }
+            return null;
+        }
+
+        public static bool InChatFolders(string workRoot)
+        {
+            string root = WorkFolders.Clean(workRoot);
+            if (root == null) return false;
+            foreach (ScheduledTask t in Load())
+            {
+                string f = WorkFolders.Clean(t.Folder);
+                if (f == null || WorkFolders.Same(f, root) || !AgentPaths.IsInside(f, root)) continue;
+                bool kept = false;
+                foreach (string k in WorkFolders.Kept(root)) if (AgentPaths.IsInside(f, k)) kept = true;
+                if (!kept) return true;
+            }
+            return false;
+        }
+
         public static List<ScheduledTask> Load()
         {
             List<ScheduledTask> list = new List<ScheduledTask>();

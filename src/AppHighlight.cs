@@ -177,7 +177,7 @@ namespace MinGent
             if (cls.ToString() == "#32770") return false;
             int ex = GetWindowLong(app, -20);
             if ((ex & 0x80) != 0 || (ex & 0x8) != 0) return false;
-            if (IsIconic(app)) ShowWindow(app, 9);
+            if (IsIconic(app)) ShowWindow(app, 4);
             Rectangle appR = Visible(app), mainR = Visible(main.Handle);
             Screen scr = Screen.FromHandle(main.Handle);
             Rectangle work = scr.WorkingArea;
@@ -201,7 +201,7 @@ namespace MinGent
             Place(main.Handle, padLeft ? left : right, true);
             putBounds = main.Bounds;
             restorePending = true;
-            if (IsZoomed(app)) ShowWindow(app, 9);
+            if (IsZoomed(app)) ShowWindow(app, 4);
             bool sizable = (GetWindowLong(app, -16) & 0x40000) != 0;
             Place(app, padLeft ? right : left, sizable);
             Rectangle padAt, appAt;

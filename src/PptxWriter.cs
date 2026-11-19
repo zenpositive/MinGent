@@ -968,7 +968,7 @@ namespace MinGent
             readonly Dictionary<string, string> links = new Dictionary<string, string>(StringComparer.Ordinal);
             public readonly List<KeyValuePair<string, byte[]>> Media;
             readonly Dictionary<DocPicture, string> names;
-            readonly Dictionary<DocPicture, string> ids = new Dictionary<DocPicture, string>();
+            readonly Dictionary<DocPicture, string> ids = new Dictionary<DocPicture, string>(SamePicture.Bytes);
             public Rels(List<KeyValuePair<string, byte[]>> media, Dictionary<DocPicture, string> shared) { Media = media; names = shared; }
 
             public string Link(string url)
@@ -1501,7 +1501,7 @@ namespace MinGent
         {
             DocPackage pkg = new DocPackage();
             List<KeyValuePair<string, byte[]>> media = new List<KeyValuePair<string, byte[]>>();
-            Dictionary<DocPicture, string> mediaNames = new Dictionary<DocPicture, string>();
+            Dictionary<DocPicture, string> mediaNames = new Dictionary<DocPicture, string>(SamePicture.Bytes);
             bool anyNotes = false;
             foreach (SlideOut s in slides) if (s.Notes.Length > 0) anyNotes = true;
             StringBuilder types = new StringBuilder();

@@ -228,7 +228,7 @@ namespace MinGent
             public LayFonts Fonts;
             public double PageW, PageH, Left, Right, Top, Bottom, Width;
             public readonly List<Unit> Units = new List<Unit>();
-            public readonly Dictionary<DocPicture, string> Pictures = new Dictionary<DocPicture, string>();
+            public readonly Dictionary<DocPicture, string> Pictures = new Dictionary<DocPicture, string>(SamePicture.Bytes);
             public readonly List<DocPicture> PictureList = new List<DocPicture>();
             public DocFormulas Formulas;
             public double BodyLine;

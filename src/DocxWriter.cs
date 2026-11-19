@@ -35,7 +35,7 @@ namespace MinGent
                 return id;
             }
 
-            readonly Dictionary<DocPicture, string> images = new Dictionary<DocPicture, string>();
+            readonly Dictionary<DocPicture, string> images = new Dictionary<DocPicture, string>(SamePicture.Bytes);
 
             public string Image(DocPicture p)
             {

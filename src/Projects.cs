@@ -136,6 +136,7 @@ namespace MinGent
         public static bool Delete(string folder, string workRoot)
         {
             if (!IsOwnFolder(folder, workRoot)) return false;
+            if (Schedule.UsedBy(folder) != null) return true;
             try
             {
                 if (!Directory.Exists(folder)) return true;

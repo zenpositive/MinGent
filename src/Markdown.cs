@@ -417,6 +417,20 @@ namespace MinGent
             return j - start >= 3 ? j - i : 0;
         }
 
+        public static string Destination(string raw)
+        {
+            string url = (raw ?? "").Trim();
+            if (url.StartsWith("<", StringComparison.Ordinal))
+            {
+                int gt = url.IndexOf('>');
+                if (gt > 0) return url.Substring(1, gt - 1).Trim();
+            }
+            Match t = Regex.Match(url, "^(\\S.*?)\\s+(\"[^\"]*\"|'[^']*')$");
+            if (t.Success) return t.Groups[1].Value;
+            if (url.IndexOf(' ') > 0 && Regex.IsMatch(url, "^https?://", RegexOptions.IgnoreCase)) return url.Substring(0, url.IndexOf(' '));
+            return url;
+        }
+
         public static List<MdRun> Inline(string s)
         {
             return Inline(s, 0);
@@ -484,9 +498,7 @@ namespace MinGent
                         if (paren > close)
                         {
                             string label = s.Substring(i + 1, close - i - 1);
-                            string url = s.Substring(close + 2, paren - close - 2).Trim();
-                            int sp = url.IndexOf(' ');
-                            if (sp > 0) url = url.Substring(0, sp);
+                            string url = Destination(s.Substring(close + 2, paren - close - 2));
                             flush(style, null);
                             List<MdRun> inner = depth < 4 ? Inline(label, depth + 1) : new List<MdRun>(new MdRun[] { new MdRun(label, 0, null) });
                             foreach (MdRun r in inner) { r.Link = url; r.Style |= style; runs.Add(r); }

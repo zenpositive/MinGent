@@ -157,9 +157,10 @@ namespace MinGent
         public string Stop = "";
         public string Error;
         public int Status;
-        public bool ConnectFailed, Unauthorized, Retryable, ContextOverflow, Cancelled, Interrupted, SawEnd, EngineGone, ParseFailure, UsedWeb;
+        public bool ConnectFailed, Unauthorized, Retryable, ContextOverflow, Cancelled, Interrupted, SawEnd, EngineGone, ParseFailure, UsedWeb, NoCredit, Filtered;
         public int InputTokens, OutputTokens, HiddenReasoningTokens;
         public int CachedTokens = -1;
+        public string ServedBy, ServedNote, ServedFor;
         public bool Truncated { get { return Stop == "length"; } }
 
         public Msg ToMessage()
@@ -179,6 +180,7 @@ namespace MinGent
         void OnReasoning(string delta);
         void OnToolProgress(string name, int argChars, string head);
         void OnPromptProgress(int processed, int total, int cached);
+        void OnStatus(string text);
     }
 
     static class Quirks
@@ -213,6 +215,16 @@ namespace MinGent
             if (r.Status == 429 || r.Status == 500 || r.Status == 502 || r.Status == 503 || r.Status == 504 || r.Status == 529 ||
                 low.Contains("overloaded") || low.Contains("rate limit") || low.Contains("temporarily") || low.Contains("try again"))
                 r.Retryable = true;
+            if (low.Contains("content exists risk") || low.Contains("content management policy") || low.Contains("data_inspection_failed") || low.Contains("inappropriate content") || low.Contains("considered high risk"))
+            {
+                r.Filtered = true;
+                r.Retryable = false;
+            }
+            if (r.Status == 402 || low.Contains("insufficient balance") || low.Contains("credit balance is too low") || low.Contains("insufficient credits"))
+            {
+                r.NoCredit = true;
+                r.Retryable = false;
+            }
             if (low.Contains("context") && (low.Contains("length") || low.Contains("window") || low.Contains("exceed") || low.Contains("too long") || low.Contains("overflow") || low.Contains("maximum")))
                 r.ContextOverflow = true;
             if (low.Contains("prompt is too long") || low.Contains("n_ctx") || low.Contains("too many tokens")) r.ContextOverflow = true;
@@ -598,6 +610,7 @@ namespace MinGent
                     if (can >= 1024 && (affordable == 0 || can < affordable) && can < req.MaxTokens) { affordable = can; continue; }
                     break;
                 }
+                if (r.NoCredit || r.Filtered) break;
                 if (low.Contains("tool call arguments") && !Quirks.Has(ObjArgsKey) && HasBadArgs(req)) { Quirks.Flag(ObjArgsKey, true); continue; }
                 if (low.Contains("roles must alternate") && !Quirks.Has(AlternateKey) && UserAfterTool(req)) { Quirks.Flag(AlternateKey, true); continue; }
                 bool effortProblem = eff != null && (low.Contains("reasoning") || low.Contains("effort") || low.Contains("think"));

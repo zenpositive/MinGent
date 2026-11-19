@@ -35,6 +35,15 @@ namespace MinGent
         public int Depth;
         public bool Figure;
         public int Tint = -1;
+
+        public DocPicture Use() { return (DocPicture)MemberwiseClone(); }
+    }
+
+    sealed class SamePicture : IEqualityComparer<DocPicture>
+    {
+        public static readonly SamePicture Bytes = new SamePicture();
+        public bool Equals(DocPicture a, DocPicture b) { return ReferenceEquals(a, b) || (a != null && b != null && a.Data != null && ReferenceEquals(a.Data, b.Data) && a.Jpeg == b.Jpeg && a.Tint == b.Tint); }
+        public int GetHashCode(DocPicture p) { return p == null ? 0 : p.Data == null ? System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(p) : System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(p.Data); }
     }
 
     class DocBlock
@@ -282,6 +291,7 @@ namespace MinGent
                     DocPicture p = loader != null ? loader(src, out problem) : null;
                     if (p != null)
                     {
+                        p = p.Use();
                         p.Alt = alt;
                         pics.Add(p);
                         if (outSpans.Count > 0 && !outSpans[outSpans.Count - 1].Break && outSpans[outSpans.Count - 1].Text.EndsWith(" ") && last < s.Text.Length && s.Text[last] == ' ') last++;
@@ -517,7 +527,7 @@ namespace MinGent
                 FileInfo fi = new FileInfo(full);
                 if (!fi.Exists) { problem = "image not found: " + full; return null; }
                 if (fi.Length > MaxBytes) { problem = "image too large (over 32 MB): " + full; return null; }
-                byte[] data = File.ReadAllBytes(full);
+                byte[] data = ToolKit.ReadShared(full);
                 return FromBytes(data, Path.GetFileName(full), out problem);
             }
             catch (Exception ex) { problem = "could not read the image " + full + ": " + ex.Message; return null; }

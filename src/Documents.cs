@@ -89,12 +89,57 @@ namespace MinGent
             lock (cacheGate)
                 foreach (KeyValuePair<string, DocInfo> kv in cache)
                     if (kv.Key == key) return kv.Value;
+            byte[] data;
+            try { data = ToolKit.ReadShared(fi.FullName); }
+            catch (Exception ex) { error = "the " + KindName(path) + " could not be read (" + ex.Message + ")"; return null; }
+            DocInfo d = FromBytes(data, fi.Extension.ToLowerInvariant(), ct, out error);
+            if (d == null) return null;
+            lock (cacheGate)
+            {
+                cache.Insert(0, new KeyValuePair<string, DocInfo>(key, d));
+                if (cache.Count > 4) cache.RemoveAt(cache.Count - 1);
+            }
+            return d;
+        }
+
+        public static string ExtForType(string contentType, string fileName)
+        {
+            string t = (contentType ?? "").ToLowerInvariant();
+            int semi = t.IndexOf(';');
+            if (semi >= 0) t = t.Substring(0, semi);
+            t = t.Trim();
+            switch (t)
+            {
+                case "application/pdf": case "application/x-pdf": return ".pdf";
+                case "application/vnd.openxmlformats-officedocument.wordprocessingml.document": return ".docx";
+                case "application/vnd.ms-word.document.macroenabled.12": return ".docm";
+                case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": return ".xlsx";
+                case "application/vnd.ms-excel.sheet.macroenabled.12": return ".xlsm";
+                case "application/vnd.openxmlformats-officedocument.presentationml.presentation": return ".pptx";
+                case "application/vnd.openxmlformats-officedocument.presentationml.slideshow": return ".ppsx";
+                case "application/vnd.ms-powerpoint.presentation.macroenabled.12": return ".pptm";
+                case "application/vnd.oasis.opendocument.text": return ".odt";
+                case "application/vnd.oasis.opendocument.spreadsheet": return ".ods";
+                case "application/vnd.oasis.opendocument.presentation": return ".odp";
+                case "application/rtf": case "text/rtf": return ".rtf";
+                case "application/epub+zip": return ".epub";
+            }
+            if (t.Length == 0 || t == "application/octet-stream" || t == "binary/octet-stream" || t == "application/download" || t == "application/x-download" || t == "application/force-download")
+            {
+                string ext = "";
+                try { ext = (Path.GetExtension(fileName ?? "") ?? "").ToLowerInvariant(); } catch { }
+                if (Array.IndexOf(Exts, ext) >= 0) return ext;
+            }
+            return null;
+        }
+
+        public static DocInfo FromBytes(byte[] data, string ext, CancelToken ct, out string error)
+        {
+            error = null;
             DocInfo d = new DocInfo();
-            d.Kind = KindName(path);
+            d.Kind = KindName("x" + ext);
             try
             {
-                byte[] data = File.ReadAllBytes(fi.FullName);
-                string ext = fi.Extension.ToLowerInvariant();
                 StringBuilder sb = new StringBuilder();
                 if (ext == ".pdf")
                 {
@@ -125,11 +170,6 @@ namespace MinGent
             catch (InvalidDataException) { error = "the file is damaged or is not really " + Article(d.Kind) + d.Kind; return null; }
             catch (XmlException) { error = "the " + d.Kind + " contains XML MinGent can't read safely"; return null; }
             catch (Exception ex) { error = "the " + d.Kind + " could not be read (" + ex.Message + ")"; return null; }
-            lock (cacheGate)
-            {
-                cache.Insert(0, new KeyValuePair<string, DocInfo>(key, d));
-                if (cache.Count > 4) cache.RemoveAt(cache.Count - 1);
-            }
             return d;
         }
 
@@ -637,15 +677,19 @@ namespace MinGent
                 }
             }
             List<bool> dateStyle = new List<bool>();
+            List<int> percentStyle = new List<int>();
             XmlDocument st = Load(Entry(zip, "xl/styles.xml", b));
             if (st != null)
             {
                 Dictionary<int, bool> customDate = new Dictionary<int, bool>();
+                Dictionary<int, int> customPercent = new Dictionary<int, int>();
                 foreach (XmlNode n in st.GetElementsByTagName("*"))
                     if (n.LocalName == "numFmt")
                     {
                         int id;
-                        if (int.TryParse(Attr(n, "numFmtId") ?? "", out id)) customDate[id] = LooksDate(Attr(n, "formatCode") ?? "");
+                        if (!int.TryParse(Attr(n, "numFmtId") ?? "", out id)) continue;
+                        customDate[id] = LooksDate(Attr(n, "formatCode") ?? "");
+                        customPercent[id] = PercentPlaces(Attr(n, "formatCode") ?? "");
                     }
                 foreach (XmlNode n in st.GetElementsByTagName("*"))
                 {
@@ -658,6 +702,9 @@ namespace MinGent
                         bool isDate;
                         if (!customDate.TryGetValue(id, out isDate)) isDate = (id >= 14 && id <= 22) || (id >= 45 && id <= 47);
                         dateStyle.Add(isDate);
+                        int places;
+                        if (!customPercent.TryGetValue(id, out places)) places = id == 9 ? 0 : id == 10 ? 2 : -1;
+                        percentStyle.Add(isDate ? -1 : places);
                     }
                     break;
                 }
@@ -679,7 +726,7 @@ namespace MinGent
                 byte[] data = Entry(zip, target, b);
                 if (data == null) continue;
                 sb.Append("## Sheet: ").Append(name).Append('\n');
-                Sheet(data, shared, dateStyle, date1904, sb);
+                Sheet(data, shared, dateStyle, percentStyle, date1904, sb);
                 sb.Append('\n');
                 if (sb.Length > MaxChars) return;
             }
@@ -700,7 +747,7 @@ namespace MinGent
             return c - 1;
         }
 
-        static void Sheet(byte[] data, List<string> shared, List<bool> dateStyle, bool date1904, StringBuilder sb)
+        static void Sheet(byte[] data, List<string> shared, List<bool> dateStyle, List<int> percentStyle, bool date1904, StringBuilder sb)
         {
             const int MaxCols = 60, MaxRows = 5000;
             List<List<string>> rows = new List<List<string>>();
@@ -750,7 +797,7 @@ namespace MinGent
                             int col = cref.Length > 0 ? ColIndex(cref) : row.Count;
                             if (col >= 0 && col < MaxCols)
                             {
-                                string shown = CellText(type, val, inline, style, shared, dateStyle, date1904);
+                                string shown = CellText(type, val, inline, style, shared, dateStyle, percentStyle, date1904);
                                 if (shown.Length == 0 && !string.IsNullOrEmpty(formula)) shown = "=" + formula;
                                 while (row.Count <= col) row.Add("");
                                 row[col] = shown;
@@ -783,7 +830,7 @@ namespace MinGent
             if (rowsSeen > rows.Count) sb.Append("(").Append(rowsSeen - rows.Count).Append(" more rows not shown)\n");
         }
 
-        static string CellText(string type, string val, string inline, int style, List<string> shared, List<bool> dateStyle, bool date1904)
+        static string CellText(string type, string val, string inline, int style, List<string> shared, List<bool> dateStyle, List<int> percentStyle, bool date1904)
         {
             if (type == "inlineStr") return inline ?? "";
             if (val == null) return "";
@@ -807,7 +854,25 @@ namespace MinGent
                 }
                 catch { }
             }
+            if (style >= 0 && style < percentStyle.Count && percentStyle[style] >= 0 && double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out d) && !double.IsNaN(d) && !double.IsInfinity(d) && Math.Abs(d) < 1e13)
+                return (d * 100).ToString("F" + percentStyle[style].ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture) + "%";
             return val;
+        }
+
+        static int PercentPlaces(string code)
+        {
+            string c = code ?? "";
+            if (c.Length > 255) c = c.Substring(0, 255);
+            c = Regex.Replace(c, "\"[^\"]*\"|\\[[^\\]]*\\]|\\\\.", "");
+            int semi = c.IndexOf(';');
+            if (semi >= 0) c = c.Substring(0, semi);
+            int pct = c.IndexOf('%');
+            if (pct < 0) return -1;
+            int dot = c.LastIndexOf('.', pct);
+            if (dot < 0) return 0;
+            int places = 0;
+            for (int i = dot + 1; i < pct; i++) if (c[i] == '0' || c[i] == '#' || c[i] == '?') places++;
+            return Math.Min(places, 10);
         }
 
         const string A = "http://schemas.openxmlformats.org/drawingml/2006/main";

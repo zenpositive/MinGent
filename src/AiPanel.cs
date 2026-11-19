@@ -118,9 +118,10 @@ namespace MinGent
             bBrowser.Click += delegate { if (BrowserClicked != null) BrowserClicked(this, EventArgs.Empty); };
             bMore.Click += delegate { ShowMore(); };
             composer.ModelClicked += delegate { ShowModelMenu(); };
+            GeminiWeb.UsageChanged += OnGeminiUsage;
             todo.Visible = false;
             todo.Toggled += delegate { PerformLayout(); };
-            chat.LinkClicked += delegate (string url) { host.OpenLink(url); };
+            chat.LinkClicked += OpenChatLink;
             chat.SuggestionClicked += delegate (string text) { UseStarter(text); };
             chat.FontsChanged += delegate (float size) { settings.ChatFontSize = size; };
             chat.TypeAhead += delegate (char c) { composer.FocusInput(); composer.Box.SelectedText = c.ToString(); };
@@ -235,13 +236,38 @@ namespace MinGent
             {
                 if (running) { Notice("Stop the current task before undoing.", 1); return; }
                 int reverted, kept;
+                List<string> touched = log != null ? log.NetPaths() : new List<string>(), made = log != null ? log.CreatedFiles() : new List<string>();
                 string summary = host.UndoRun(run, log, out reverted, out kept);
+                if (reverted > 0) Undone(touched, made, kept > 0);
                 self.Undone = true;
                 self.UndoneText = kept == 0 ? null : reverted > 0 ? "Partly undone (" + kept + " kept)" : "Nothing undone (" + kept + " kept)";
                 DropUndo(self.UndoKey);
                 chat.Changed(self);
                 if (!string.IsNullOrEmpty(summary)) Notice(summary, 0);
             };
+        }
+
+        void Undone(List<string> paths, List<string> made, bool partly)
+        {
+            List<string> back = new List<string>(), binned = new List<string>();
+            foreach (string f in paths)
+            {
+                session.ReadFiles.Remove(f);
+                if (made.Exists(delegate (string m) { return string.Equals(m, f, StringComparison.OrdinalIgnoreCase); })) binned.Add(f);
+                else back.Add(f);
+            }
+            StringBuilder sb = new StringBuilder("[MinGent] The user pressed Undo on file changes you made earlier in this chat.");
+            if (back.Count > 0) sb.Append(" These files are back to how they were before: ").Append(Listed(back)).Append('.');
+            if (binned.Count > 0) sb.Append(" These files you created went to the Recycle Bin: ").Append(Listed(binned)).Append('.');
+            if (partly) sb.Append(" Files that were changed again afterwards were left as they are.");
+            sb.Append(" Read files again before you rely on what you remember of them.");
+            session.UndoNote = sb.ToString();
+        }
+
+        static string Listed(List<string> files)
+        {
+            int shown = Math.Min(files.Count, 8);
+            return string.Join(", ", files.GetRange(0, shown).ToArray()) + (files.Count > shown ? " and " + (files.Count - shown) + " more" : "");
         }
 
         void ReviveUndo(ChatItem foot, string key)
@@ -287,8 +313,21 @@ namespace MinGent
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { pump.Dispose(); tip.Dispose(); if (cancel != null) cancel.Cancel(); }
+            if (disposing) { GeminiWeb.UsageChanged -= OnGeminiUsage; pump.Dispose(); tip.Dispose(); if (cancel != null) cancel.Cancel(); }
             base.Dispose(disposing);
+        }
+
+        void OnGeminiUsage()
+        {
+            if (IsDisposed || !IsHandleCreated) return;
+            try { BeginInvoke(new Action(ShowGeminiUsage)); } catch { }
+        }
+
+        void ShowGeminiUsage()
+        {
+            if (IsDisposed) return;
+            bool web = ModelRef().StartsWith(GeminiWeb.Provider + ":", StringComparison.Ordinal);
+            composer.SetGeminiUsage(web ? GeminiWeb.LastUsage : null);
         }
 
         public TextBox InputTextBox { get { return composer.Box; } }
@@ -865,6 +904,7 @@ namespace MinGent
             it.Kind = ChatKind.Notice;
             it.Text = text;
             it.Level = level & 3;
+            if ((level & AgentSession.AfterDraft) != 0) it.Draft = true;
             if ((level & AgentSession.AfterDraft) != 0)
                 for (int i = chat.Items.Count - 1; i >= 0; i--)
                 {
@@ -891,6 +931,54 @@ namespace MinGent
             return to;
         }
 
+        static readonly System.Text.RegularExpressions.Regex BareDone = new System.Text.RegularExpressions.Regex(@"^(?:(?:the|task|work|it|its|it's|is|has|been|all|now|fully|everything|i|i'm|am|done|finished|complete|completed|set|that's|that|ok|okay|great|here|you|go|let|me|know|if|need|anything|else|any|more|changes|want|help|and|of|with|further|questions)\b[\s.!,]*)+$", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+        static bool Bare(string text)
+        {
+            string t = (text ?? "").Trim();
+            return t.Length <= 80 && BareDone.IsMatch(t);
+        }
+
+        void PromoteAnswer() { Promote(false); }
+
+        void Promote(bool earlier)
+        {
+            ChatItem fin = null, beside = null;
+            for (int i = chat.Items.Count - 1; i >= 0; i--)
+            {
+                ChatItem x = chat.Items[i];
+                if (x.Kind == ChatKind.User || x.Kind == ChatKind.Question || ChatView.AskCard(x)) return;
+                if (x.Kind != ChatKind.Assistant || x.Under != null || x.Text.Trim().Length == 0) continue;
+                if (fin == null)
+                {
+                    if (!x.Whole || x.Streaming || (earlier && (x.Draft || !Bare(x.Text)))) return;
+                    fin = x;
+                    continue;
+                }
+                if (x.Whole)
+                {
+                    if (earlier && x.Draft && Bare(x.Text)) continue;
+                    return;
+                }
+                if (x.Text.Trim().Length < 100 || (earlier && (!ChatView.Substantial(x.Text) || RunCoach.Announces(x.Text.Trim()))))
+                {
+                    if (earlier) continue;
+                    return;
+                }
+                beside = x;
+                break;
+            }
+            if (fin == null || beside == null) return;
+            string last = fin.Text.Trim();
+            if (!Bare(last)) beside.Text = beside.Text.TrimEnd() + "\n\n" + last;
+            chat.Items.Remove(beside);
+            chat.Items.Insert(chat.Items.IndexOf(fin) + 1, beside);
+            chat.Items.Remove(fin);
+            beside.Draft = false;
+            beside.Whole = true;
+            chat.Changed(beside);
+        }
+
         void KeepAnAnswer() { KeepAnAnswer(false); }
 
         void KeepAnAnswer(bool trailing)
@@ -911,6 +999,16 @@ namespace MinGent
                 draft = x;
                 break;
             }
+            if (draft == null && !trailing)
+                for (int i = chat.Items.Count - 1; i >= 0; i--)
+                {
+                    ChatItem x = chat.Items[i];
+                    if (x.Kind == ChatKind.User || x.Kind == ChatKind.Question || ChatView.AskCard(x)) break;
+                    if (x.Kind != ChatKind.Assistant || x.Under != null || !x.Draft || !ChatView.Substantial(x.Text) || RunCoach.Announces(x.Text.Trim())) continue;
+                    draft = x;
+                    draft.Whole = true;
+                    break;
+                }
             if (draft == null) return;
             int at = chat.Items.IndexOf(draft), to = WorkAfter(at), from = at;
             while (from > 0 && chat.Items[from - 1].Kind == ChatKind.Assistant && chat.Items[from - 1].Draft && chat.Items[from - 1].Whole) from--;
@@ -1040,6 +1138,7 @@ namespace MinGent
                 state = catalog == null ? 0 : 2;
             }
             modelChip.Set(name, "", state);
+            ShowGeminiUsage();
             composer.EffortText = EffortLabel();
             composer.ShowEffort = EffortOptions().Count > 0;
             composer.PerformLayout();
@@ -1532,6 +1631,77 @@ namespace MinGent
             return names[0] + ", " + names[1] + " and " + (names.Count - 2) + " more";
         }
 
+        static readonly string[] PictureExts = { ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff", ".ico" };
+
+        public static string LinkTarget(string url, string work, out string line)
+        {
+            line = "";
+            string target = (url ?? "").Trim();
+            if (target.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            {
+                Uri fu;
+                if (!Uri.TryCreate(target, UriKind.Absolute, out fu) || !fu.IsFile) return null;
+                target = fu.LocalPath;
+            }
+            System.Text.RegularExpressions.Match m = System.Text.RegularExpressions.Regex.Match(target, @"^(.*?)(:\d+)(?::\d+)?$");
+            if (m.Success && m.Groups[1].Value.Length > 2) { target = m.Groups[1].Value; line = m.Groups[2].Value; }
+            string err;
+            string full = AgentPaths.Resolve(target, work, out err);
+            if ((full == null || !(File.Exists(full) || Directory.Exists(full))) && target.IndexOf('%') >= 0)
+            {
+                string plain;
+                try { plain = Uri.UnescapeDataString(target); } catch { plain = target; }
+                string again = AgentPaths.Resolve(plain, work, out err);
+                if (again != null && (File.Exists(again) || Directory.Exists(again))) full = again;
+            }
+            return full;
+        }
+
+        static bool Binary(string path)
+        {
+            try
+            {
+                using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                {
+                    byte[] b = new byte[4096];
+                    int n = fs.Read(b, 0, b.Length);
+                    for (int i = 0; i < n; i++) if (b[i] == 0) return true;
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        void OpenChatLink(string url)
+        {
+            string u = (url ?? "").Trim();
+            if (u.Length == 0) return;
+            bool web = u.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || u.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+            bool other = !web && !u.StartsWith("file:", StringComparison.OrdinalIgnoreCase) && System.Text.RegularExpressions.Regex.IsMatch(u, @"^[a-z][a-z0-9+-]+:(?!\d)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (web || other || u.StartsWith("#", StringComparison.Ordinal)) { host.OpenLink(u); return; }
+            bool def;
+            string line;
+            string full = LinkTarget(u, WorkFolder(out def), out line);
+            if (full == null || !(File.Exists(full) || Directory.Exists(full)))
+            {
+                Notice("MinGent can't find " + (full ?? u) + ". It may have been moved or deleted.", 1);
+                return;
+            }
+            try
+            {
+                if (Directory.Exists(full)) { System.Diagnostics.Process.Start(Native.WindowsExe("explorer.exe"), "\"" + full + "\""); return; }
+                if (Array.IndexOf(PictureExts, (Path.GetExtension(full) ?? "").ToLowerInvariant()) >= 0)
+                {
+                    string err;
+                    ImageData img = ToolKit.LoadImage(full, out err);
+                    if (img != null) { ImagePreview.Show(FindForm(), th, img, Path.GetFileName(full)); return; }
+                }
+                if (DocExport.CanWrite(full) || (!Attachments.NotText(full) && !Binary(full))) { host.OpenLink(full + line); return; }
+                System.Diagnostics.Process.Start(Native.WindowsExe("explorer.exe"), "/select,\"" + full + "\"");
+            }
+            catch (Exception) { }
+        }
+
         void OpenAttachment(ChatItem item, Attachment a)
         {
             if (a == null) return;
@@ -1852,6 +2022,7 @@ namespace MinGent
             bool wsDefault;
             string wsNow = WorkFolder(out wsDefault);
             sb.Append(SystemPrompt.EnvLine(host.Editor.Tabs(false), session, wsNow, wsDefault, level)).Append("\n\n");
+            if (session.UndoNote != null) { sb.Append(session.UndoNote).Append("\n\n"); session.UndoNote = null; }
             if (!string.IsNullOrEmpty(ctxText)) sb.Append(ctxText).Append("\n\n");
             string body = Attachments.WithBlock(text, atts);
             sb.Append(body);
@@ -1942,7 +2113,8 @@ namespace MinGent
             BrowserPane browser = host.Browser;
             bool browserOk = settings.AiBrowser && browser != null && browser.Available;
             bool appsOk = settings.AiApps && AgentToolbox.AppsSupported;
-            bool memoryOn = settings.AiMemory && !temporary;
+            bool temp = temporary;
+            bool memoryOn = settings.AiMemory && !temp;
             string notes = ReadMemory(ws);
             string guide = ProjectGuide.Find(ws);
             string skillFolder = Skills.Folder(settings.DefaultWorkspace);
@@ -1991,6 +2163,7 @@ namespace MinGent
                     cfg.GuidePath = guide;
                     cfg.Skills = Skills.ForPrompt(skills, skillFolder, cfg.ContextTokens < 16000);
                     cfg.SkillsFolder = skillFolder;
+                    cfg.MemoryOff = memoryOn ? null : temp ? "this is a temporary chat" : "it is switched off in Settings > Memory";
                     cfg.RunId = run;
                     if (browserOk) browser.SnapshotChars = Math.Max(6000, Math.Min(24000, (int)(cfg.ContextTokens * 0.15 * 3.3)));
                     bool helpersOk = settings.AiHelpers;
@@ -2067,6 +2240,7 @@ namespace MinGent
             composer.Running = false;
             FinishStreaming();
             KeepAnAnswer();
+            Promote(true);
             UpdateModelChip();
             ChatItem pending = chat.PendingPermission();
             if (pending != null) chat.Resolve(pending, PermissionDecision.Deny);
@@ -2096,7 +2270,9 @@ namespace MinGent
                 bool libraryFix = error.IndexOf("model library", StringComparison.OrdinalIgnoreCase) >= 0;
                 bool settingsFix = error.IndexOf("Settings", StringComparison.Ordinal) >= 0 || error.IndexOf("API key", StringComparison.OrdinalIgnoreCase) >= 0;
                 bool modelFix = error.IndexOf("model menu", StringComparison.OrdinalIgnoreCase) >= 0 || error.IndexOf("Choose", StringComparison.Ordinal) >= 0;
+                bool freshFix = error.IndexOf("start a new chat", StringComparison.OrdinalIgnoreCase) >= 0;
                 if (libraryFix) { err.ActionLabel = "Open the model library"; err.Action = delegate { host.ShowModelLibrary(); }; }
+                else if (freshFix) { err.ActionLabel = "New chat"; err.Action = delegate { if (!running) NewChat(); }; }
                 else if (settingsFix)
                 {
                     System.Text.RegularExpressions.Match at = System.Text.RegularExpressions.Regex.Match(error, @"Settings > (General|Models|Agent|Memory|Safety|Privacy)\b");
@@ -2177,6 +2353,8 @@ namespace MinGent
             if (r.Unauthorized) return "The API key was rejected (" + r.Error + "). Check it in Settings.";
             if (r.ConnectFailed) return "Could not reach the model server. " + (r.Error ?? "") + (lmStudio ? "\nMake sure LM Studio's server is running (Developer tab)." : "");
             if (r.ContextOverflow) return "The conversation is too long for this model's context window, even after summarizing. Start a new chat, or load the model with a larger context.";
+            if (r.Filtered) return "The provider's content filter refused this request (" + r.Error + "). Something in this chat set it off, perhaps a page or file the agent read: start a new chat, or ask in other words.";
+            if (r.NoCredit) return "The provider says this account is out of credit (" + r.Error + "). Add credit on its website, then try again, or switch to another model.";
             if (r.Status == 429) return "The provider is rate-limiting requests (HTTP 429). Wait a moment and try again.";
             if (r.Status >= 500) return "The model server had a problem (HTTP " + r.Status + "): " + r.Error;
             return "The model returned an error: " + r.Error;
@@ -2218,6 +2396,7 @@ namespace MinGent
             public void Notice(string text, int kind) { Post(delegate { p.Notice(text, kind); }); }
             public void Usage(int used, int context) { Post(delegate { p.composer.SetUsage(used, context); }); }
             public void Hold(bool on) { Post(delegate { p.holdText = on; }); }
+            public void PromoteAnswer() { Post(delegate { p.PromoteAnswer(); }); }
 
             public UserAnswer AskUser(UserQuestion q, CancelToken ct)
             {
@@ -2552,15 +2731,20 @@ namespace MinGent
                 case "web_fetch": return "globe";
                 case "todo_write": return "checklist";
                 case "delegate": return "branch";
-                case "open_in_editor": return "file";
+                case "open_in_editor": return "notes";
+                case "apply_patch": return "pencil";
                 case "ask_user": return "ask";
                 case "present_plan": return "map";
                 case "analyze_audio": return "wave";
                 case "watch_video": return "film";
-                case "browser_console": return "terminal";
+                case "browser_console": return "console";
                 case "schedule_task": return "history";
+                case "close_pane": return "pane";
+                case "memory": return "bookmark";
+                case "screen_look": return "app";
             }
             if (tool.StartsWith("browser_")) return "cursor";
+            if (tool.StartsWith("app_")) return "app";
             return "dot";
         }
 
@@ -3080,8 +3264,19 @@ namespace MinGent
 
         public void OpenChat(string path)
         {
-            if (string.Equals(path, chatFile, StringComparison.OrdinalIgnoreCase)) { composer.FocusInput(); return; }
-            WhenFree("open the other chat", delegate (AiPanel p) { p.Open(path); });
+            OpenChat(path, null);
+        }
+
+        public void OpenChat(string path, string find)
+        {
+            if (string.Equals(path, chatFile, StringComparison.OrdinalIgnoreCase)) { composer.FocusInput(); ShowFound(find); return; }
+            WhenFree("open the other chat", delegate (AiPanel p) { p.Open(path); p.ShowFound(find); });
+        }
+
+        public void ShowFound(string find)
+        {
+            if (string.IsNullOrEmpty(find) || !IsHandleCreated) return;
+            BeginInvoke(new Action(delegate { chat.Reveal(find); }));
         }
 
         public void OpenArchived(string path, Action restored)
@@ -3161,8 +3356,11 @@ namespace MinGent
             List<string> notes = host.UnsavedNotes(Path.GetFileName(path));
             own = OwnOf(path);
             if (!WorkFolders.IsOwnFolder(own, FilesRoot)) own = "";
+            string task = own.Length > 0 ? Schedule.UsedBy(own) : null;
+            if (task != null) own = "";
             int made = own.Length > 0 ? WorkFolders.CountFiles(own) : 0;
-            string folder = made == 1 ? "\n\nThe file in its folder is deleted too." :
+            string folder = task != null ? "\n\nIts folder stays, because the scheduled task \u201C" + task + "\u201D works in it." :
+                            made == 1 ? "\n\nThe file in its folder is deleted too." :
                             made > 1 ? "\n\nThe " + made.ToString(CultureInfo.InvariantCulture) + " files in its folder are deleted too." :
                             made < 0 ? "\n\nIts folder is deleted too." : "";
             string body = "It is erased from this PC and can't be brought back." +
@@ -4721,6 +4919,45 @@ namespace MinGent
 
         public void ClearUsage() { SetUsage(0, 0); }
 
+        GeminiUsage geminiUsage;
+        bool hoverUsage;
+
+        public void SetGeminiUsage(GeminiUsage u)
+        {
+            if (u == geminiUsage) return;
+            bool had = geminiUsage != null;
+            geminiUsage = u;
+            if ((u != null) != had) PerformLayout();
+            Invalidate();
+        }
+
+        public GeminiUsage GeminiUsageShown { get { return geminiUsage; } }
+
+        string UsageText { get { return geminiUsage == null ? "" : Math.Round(geminiUsage.Top(DateTime.UtcNow)).ToString(CultureInfo.InvariantCulture) + "%"; } }
+
+        bool UsageLayout(out Rectangle r, out bool withText)
+        {
+            Rectangle m;
+            bool mt;
+            RowLayout(out m, out mt, out r, out withText);
+            return !r.IsEmpty;
+        }
+
+        Color LevelColor(double fraction, Color normal)
+        {
+            Color warn = th.Dark ? Color.FromArgb(0xF5, 0x9E, 0x0B) : Color.FromArgb(0xB4, 0x53, 0x09);
+            return th.HighContrast ? th.Fore : fraction >= 0.9 ? th.Error : fraction >= 0.7 ? warn : normal;
+        }
+
+        void UsageBar(Graphics g, Rectangle r, GeminiWindow w, DateTime now, Color track)
+        {
+            Glyphs.FillRound(g, track, r, r.Height / 2);
+            double f = w == null ? 0 : w.Now(now) / 100.0;
+            if (f <= 0) return;
+            int fw = Math.Max(r.Height, (int)Math.Round(r.Width * Math.Min(1.0, f)));
+            Glyphs.FillRound(g, LevelColor(f, th.ChromeDim), new Rectangle(r.X, r.Y, fw, r.Height), r.Height / 2);
+        }
+
         public int UsedTokens { get { return usedTok; } }
         public int ContextTokens { get { return ctxTok; } }
 
@@ -4749,21 +4986,34 @@ namespace MinGent
             }
         }
 
-        bool MeterLayout(out Rectangle r, out bool withText)
+        void RowLayout(out Rectangle ring, out bool ringText, out Rectangle gauge, out bool gaugeText)
         {
-            r = Rectangle.Empty;
-            withText = false;
-            if (UsageFraction < 0 || !Model.Visible) return false;
+            ring = gauge = Rectangle.Empty;
+            ringText = gaugeText = false;
+            if (!Model.Visible) return;
             Rectangle er = EffortRect;
             int limit = (er.IsEmpty ? (plan.Visible ? plan.Right : auto.Visible ? auto.Right : AttachRect.Right) : er.Right) + UI.S(6);
-            int ring = UI.S(16);
-            int tw = TextRenderer.MeasureText(PercentText, Font).Width;
-            int full = UI.S(6) + ring + UI.S(5) + tw + UI.S(6);
-            int bare = UI.S(6) + ring + UI.S(6);
-            int right = Model.Left - UI.S(2);
-            if (right - full >= limit) { r = new Rectangle(right - full, RowY, full, UI.S(30)); withText = true; return true; }
-            if (right - bare >= limit) { r = new Rectangle(right - bare, RowY, bare, UI.S(30)); return true; }
-            return false;
+            int right = Model.Left - UI.S(2), avail = right - limit;
+            int bare = UI.S(6) + UI.S(16) + UI.S(6);
+            bool hasRing = UsageFraction >= 0, hasGauge = geminiUsage != null;
+            int rt = hasRing ? TextRenderer.MeasureText(PercentText, Font).Width + UI.S(5) : 0;
+            int gt = hasGauge ? TextRenderer.MeasureText(UsageText, Font).Width + UI.S(5) : 0;
+            int need = (hasRing ? bare : 0) + (hasGauge ? bare : 0);
+            if (need > avail && hasRing) { hasRing = false; need -= bare; }
+            if (need > avail && hasGauge) { hasGauge = false; need -= bare; }
+            if (hasGauge && need + gt <= avail) { gaugeText = true; need += gt; }
+            if (hasRing && need + rt <= avail) { ringText = true; need += rt; }
+            int x = right;
+            if (hasRing) { int w = bare + (ringText ? rt : 0); x -= w; ring = new Rectangle(x, RowY, w, UI.S(30)); }
+            if (hasGauge) { int w = bare + (gaugeText ? gt : 0); x -= w; gauge = new Rectangle(x, RowY, w, UI.S(30)); }
+        }
+
+        bool MeterLayout(out Rectangle r, out bool withText)
+        {
+            Rectangle g;
+            bool gt;
+            RowLayout(out r, out withText, out g, out gt);
+            return !r.IsEmpty;
         }
 
         public Point MeterAnchor
@@ -5078,7 +5328,7 @@ namespace MinGent
             int aw = auto.PreferredWidth, pw = plan.PreferredWidth, pc = UI.S(ToggleChip.CompactWidth);
             int ew = ShowEffort && EffortText.Length > 0 ? TextRenderer.MeasureText(EffortText, Font).Width + UI.S(30) : 0;
             int room = sr.Left - UI.S(6) - (ar.Right + UI.S(6));
-            int meter = UsageFraction >= 0 ? UI.S(28) : 0;
+            int ringW = UsageFraction >= 0 ? UI.S(28) : 0, gaugeW = geminiUsage != null ? UI.S(28) : 0, meter = ringW + gaugeW;
             bool autoFits = room >= aw + UI.S(8) + UI.S(70);
             bool planFull = autoFits && room >= aw + UI.S(2) + pw + UI.S(8) + Math.Max(UI.S(70), Math.Min(Model.PreferredWidth, UI.S(130)));
             bool planFits = planFull || (autoFits && room >= aw + UI.S(2) + pc + UI.S(8) + (plan.On ? UI.S(44) : UI.S(70)));
@@ -5092,7 +5342,8 @@ namespace MinGent
             int left = !autoFits ? ar.Right + UI.S(8) : effortFits ? EffortRect.Right + UI.S(8) : planFits ? plan.Right + UI.S(8) : auto.Right + UI.S(8);
             int mw = Math.Min(Model.PreferredWidth, Math.Max(UI.S(90), (Width - UI.S(20)) / 2 - UI.S(30)));
             int space = sr.Left - UI.S(6) - left;
-            if (meter > 0 && space - meter >= Math.Min(mw, UI.S(90))) space -= meter;
+            if (gaugeW > 0 && space - gaugeW >= Math.Min(mw, UI.S(80))) space -= gaugeW;
+            if (ringW > 0 && space - ringW >= Math.Min(mw, UI.S(90))) space -= ringW;
             mw = Math.Min(mw, space);
             bool showModel = mw >= UI.S(44);
             Model.Visible = showModel;
@@ -5201,6 +5452,26 @@ namespace MinGent
                     TextRenderer.DrawText(g, PercentText, Font, new Rectangle(mr.X + UI.S(6) + ring + UI.S(5), mr.Y, mr.Width - ring - UI.S(11), mr.Height), frac >= 0.7 && !th.HighContrast ? col : th.ChromeDim,
                         TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
             }
+            Rectangle ur;
+            bool utext;
+            if (UsageLayout(out ur, out utext))
+            {
+                DateTime now = DateTime.UtcNow;
+                Color track = th.HighContrast ? th.ChromeDim : Theme.Blend(th.ChromeDim, th.InputBack, th.Dark ? 0.62 : 0.7);
+                int bw = UI.S(16), bh = Math.Max(3, UI.S(4)), gap = Math.Max(2, UI.S(3));
+                int bx = ur.X + UI.S(6), by = ur.Y + (ur.Height - bh * 2 - gap) / 2;
+                SmoothingMode usm = g.SmoothingMode;
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                UsageBar(g, new Rectangle(bx, by, bw, bh), geminiUsage.Short, now, track);
+                UsageBar(g, new Rectangle(bx, by + bh + gap, bw, bh), geminiUsage.Weekly, now, track);
+                g.SmoothingMode = usm;
+                if (utext)
+                {
+                    double top = geminiUsage.Top(now) / 100.0;
+                    TextRenderer.DrawText(g, UsageText, Font, new Rectangle(bx + bw + UI.S(5), ur.Y, ur.Width - bw - UI.S(11), ur.Height), top >= 0.7 ? LevelColor(top, th.ChromeDim) : th.ChromeDim,
+                        TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
+                }
+            }
             bool stopMode = running && Box.TextLength == 0 && attachments.Count == 0;
             bool can = stopMode || Box.TextLength > 0 || attachments.Count > 0;
             Color fill = stopMode ? th.Fore : can ? th.Accent : th.ButtonHover;
@@ -5228,12 +5499,15 @@ namespace MinGent
             Rectangle mr;
             bool mt;
             bool me = MeterLayout(out mr, out mt) && mr.Contains(e.Location);
-            if (s != hoverSend || ef != hoverEffort || at != hoverAttach || cx != hoverCtx || ti != hoverTile || rm != hoverRemove || me != hoverMeter)
+            Rectangle ur;
+            bool ut;
+            bool us = UsageLayout(out ur, out ut) && ur.Contains(e.Location);
+            if (s != hoverSend || ef != hoverEffort || at != hoverAttach || cx != hoverCtx || ti != hoverTile || rm != hoverRemove || me != hoverMeter || us != hoverUsage)
             {
-                hoverSend = s; hoverEffort = ef; hoverAttach = at; hoverCtx = cx; hoverTile = ti; hoverRemove = rm; hoverMeter = me;
-                Cursor = s || ef || at || cx || rm || me ? Cursors.Hand : ti >= 0 ? Cursors.Default : Cursors.IBeam;
+                hoverSend = s; hoverEffort = ef; hoverAttach = at; hoverCtx = cx; hoverTile = ti; hoverRemove = rm; hoverMeter = me; hoverUsage = us;
+                Cursor = s || ef || at || cx || rm || me ? Cursors.Hand : ti >= 0 || us ? Cursors.Default : Cursors.IBeam;
                 tip.Hide(this);
-                tip.SetToolTip(this, s ? (running && Box.TextLength == 0 && attachments.Count == 0 ? "Stop (Esc)" : running ? "Send to the agent while it works" : "Send (Enter)") : at ? "Attach files or images" : rm ? "Remove" : ti >= 0 ? Attachments.Tip(attachments[ti]) : me ? MeterTip : null);
+                tip.SetToolTip(this, s ? (running && Box.TextLength == 0 && attachments.Count == 0 ? "Stop (Esc)" : running ? "Send to the agent while it works" : "Send (Enter)") : at ? "Attach files or images" : rm ? "Remove" : ti >= 0 ? Attachments.Tip(attachments[ti]) : me ? MeterTip : us ? geminiUsage.Tip(DateTime.UtcNow) : null);
                 Invalidate();
             }
         }
@@ -5241,7 +5515,7 @@ namespace MinGent
         protected override void OnMouseLeave(EventArgs e)
         {
             base.OnMouseLeave(e);
-            hoverSend = hoverEffort = hoverAttach = hoverCtx = hoverMeter = hoverRemove = false;
+            hoverSend = hoverEffort = hoverAttach = hoverCtx = hoverMeter = hoverRemove = hoverUsage = false;
             hoverTile = -1;
             Invalidate();
         }

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
+using System.Text;
 using System.Windows.Forms;
 
 namespace MinGent
@@ -11,6 +12,60 @@ namespace MinGent
     {
         public string Path = "", Title = "";
         public DateTime When;
+    }
+
+    static class ChatSearch
+    {
+        static readonly object gate = new object();
+        static readonly Dictionary<string, KeyValuePair<long, string>> cache = new Dictionary<string, KeyValuePair<long, string>>(StringComparer.OrdinalIgnoreCase);
+        const int MaxText = 200000;
+
+        public static string Text(string path)
+        {
+            long stamp;
+            try { FileInfo fi = new FileInfo(path); if (!fi.Exists) return ""; stamp = fi.LastWriteTimeUtc.Ticks ^ (fi.Length << 1); }
+            catch { return ""; }
+            lock (gate)
+            {
+                KeyValuePair<long, string> hit;
+                if (cache.TryGetValue(path, out hit) && hit.Key == stamp) return hit.Value;
+            }
+            StringBuilder sb = new StringBuilder();
+            try
+            {
+                object root = Json.TryParse(File.ReadAllText(path, Encoding.UTF8));
+                List<object> items = Json.List(root, "items");
+                if (items != null)
+                    foreach (object it in items)
+                    {
+                        int k = Json.Int(it, "k");
+                        if (k != (int)ChatKind.User && k != (int)ChatKind.Assistant) continue;
+                        string t = Json.Str(it, "t") ?? "";
+                        if (sb.Length + t.Length > MaxText) { sb.Append(t, 0, Math.Max(0, MaxText - sb.Length)); break; }
+                        sb.Append(t).Append('\n');
+                    }
+            }
+            catch { }
+            string text = sb.ToString();
+            lock (gate)
+            {
+                if (cache.Count > 3000) cache.Clear();
+                cache[path] = new KeyValuePair<long, string>(stamp, text);
+            }
+            return text;
+        }
+
+        public static HashSet<string> Find(List<string> paths, string query, Func<bool> stale)
+        {
+            HashSet<string> hits = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            CompareInfo cmp = CultureInfo.CurrentCulture.CompareInfo;
+            foreach (string p in paths)
+            {
+                if (stale != null && stale()) return null;
+                if (cmp.IndexOf(Text(p), query, CompareOptions.IgnoreCase) >= 0) hits.Add(p);
+            }
+            return hits;
+        }
     }
 
     class Sidebar : Control
@@ -39,12 +94,17 @@ namespace MinGent
         Image logo;
         bool collapsed, running, listHover, archiveView, actionFocus;
         int archivedCount;
-        string activePath, filter = "";
+        string activePath, filter = "", hitsFor;
+        HashSet<string> contentHits = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int searchGen;
+        bool searching;
+        readonly Timer searchTimer = new Timer();
         int scroll, contentH, hoverRow = -1, hoverZone, pressRow = -1, pressZone, phase, focusRow = -1;
 
         public event EventHandler NewChatClicked, SettingsClicked, LibraryClicked, CollapseClicked;
         public event Action<string> OpenClicked, DeleteClicked, RenameClicked, ArchiveClicked, RestoreClicked;
         public event EventHandler ArchiveViewClicked;
+        public string Query { get { return filter.Length >= 2 ? filter : null; } }
 
         public bool ArchiveView { get { return archiveView; } }
 
@@ -58,7 +118,9 @@ namespace MinGent
             search.BorderStyle = BorderStyle.None;
             search.Font = UI.Font;
             search.Multiline = false;
-            search.TextChanged += delegate { filter = search.Text.Trim(); scroll = 0; Rebuild(); };
+            search.TextChanged += delegate { filter = search.Text.Trim(); scroll = 0; QueueSearch(); Rebuild(); };
+            searchTimer.Interval = 250;
+            searchTimer.Tick += delegate { searchTimer.Stop(); SearchContents(); };
             search.GotFocus += delegate { Invalidate(); };
             search.LostFocus += delegate { Invalidate(); };
             search.KeyDown += delegate (object s, KeyEventArgs e)
@@ -91,7 +153,7 @@ namespace MinGent
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { spinTimer.Dispose(); tip.Dispose(); if (logo != null) logo.Dispose(); }
+            if (disposing) { spinTimer.Dispose(); searchTimer.Dispose(); searchGen++; tip.Dispose(); if (logo != null) logo.Dispose(); }
             base.Dispose(disposing);
         }
 
@@ -134,6 +196,46 @@ namespace MinGent
             SetChats(list, active, isRunning, archivedCount, archiveView);
         }
 
+        void QueueSearch()
+        {
+            searchTimer.Stop();
+            searchGen++;
+            if (filter.Length < 2) { searching = false; hitsFor = null; contentHits = new HashSet<string>(StringComparer.OrdinalIgnoreCase); return; }
+            searching = hitsFor != filter;
+            searchTimer.Start();
+        }
+
+        void SearchContents()
+        {
+            string q = filter;
+            if (q.Length < 2) return;
+            int gen = ++searchGen;
+            List<string> paths = new List<string>();
+            foreach (ChatInfo c in chats) if (!string.IsNullOrEmpty(c.Path)) paths.Add(c.Path);
+            searching = hitsFor != q;
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate
+            {
+                HashSet<string> hits;
+                try { hits = ChatSearch.Find(paths, q, delegate { return gen != searchGen; }); }
+                catch { hits = new HashSet<string>(StringComparer.OrdinalIgnoreCase); }
+                if (hits == null) return;
+                try
+                {
+                    BeginInvoke(new Action(delegate
+                    {
+                        if (gen != searchGen || IsDisposed || q != filter) return;
+                        contentHits = hits;
+                        hitsFor = q;
+                        searching = false;
+                        Rebuild();
+                    }));
+                }
+                catch { }
+            });
+        }
+
+        public bool Searching { get { return searching; } }
+
         public void SetChats(List<ChatInfo> list, string active, bool isRunning, int archived, bool showingArchived)
         {
             chats.Clear();
@@ -150,6 +252,7 @@ namespace MinGent
                 if (search.IsHandleCreated) Native.SetCueBanner(search, archiveView ? "Search archived chats" : "Search chats");
             }
             SetRunning(isRunning);
+            if (filter.Length >= 2 && !searchTimer.Enabled) { searchTimer.Stop(); searchTimer.Start(); }
             Rebuild();
         }
 
@@ -251,7 +354,7 @@ namespace MinGent
             }
             foreach (ChatInfo c in chats)
             {
-                if (filter.Length > 0 && (c.Title ?? "").IndexOf(filter, StringComparison.CurrentCultureIgnoreCase) < 0) continue;
+                if (filter.Length > 0 && (c.Title ?? "").IndexOf(filter, StringComparison.CurrentCultureIgnoreCase) < 0 && !(hitsFor == filter && contentHits.Contains(c.Path))) continue;
                 string g = GroupOf(c.When);
                 if (g != last)
                 {
@@ -396,7 +499,7 @@ namespace MinGent
             g.SetClip(lr);
             if (!rows.Exists(delegate (Row x) { return x.Chat != null; }))
             {
-                string msg = filter.Length > 0 ? "No chats match \u201C" + filter + "\u201D." : archiveView ? "No archived chats." : "Your chats will show up here.";
+                string msg = filter.Length > 0 ? (searching ? "Searching your chats..." : "No chats match \u201C" + filter + "\u201D.") : archiveView ? "No archived chats." : "Your chats will show up here.";
                 int below = rows.Count > 0 ? RowRect(rows.Count - 1).Bottom - lr.Y + UI.S(4) : 0;
                 TextRenderer.DrawText(g, msg, Font, new Rectangle(UI.S(18), lr.Y + below + UI.S(4), Width - UI.S(36), UI.S(60)), th.ChromeDim, TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.PreserveGraphicsClipping);
             }

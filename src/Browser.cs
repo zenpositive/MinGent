@@ -369,7 +369,7 @@ namespace MinGent
         bool missing, pageBase;
         readonly List<object> keep = new List<object>();
 
-        volatile string currentUrl = "", currentTitle = "", goingUrl = "";
+        volatile string currentUrl = "", currentTitle = "", goingUrl = "", lastNavUrl = "";
         volatile bool loading, lastNavOk = true;
         volatile int lastNavError;
         ulong navId;
@@ -403,6 +403,8 @@ namespace MinGent
         bool shotResized;
         string notice;
         public volatile bool CaptchaMode, AgentCanSee;
+
+        string SeeAfterScroll { get { return AgentCanSee ? "Use browser_read to see new content, or browser_screenshot to see the screen." : "Use browser_read to see new content."; } }
         ICoreWebView2Settings mainSettings;
         int menuOff;
 
@@ -461,6 +463,37 @@ namespace MinGent
             };
             address.Box.GotFocus += delegate { userTouched = true; BeginInvoke(new Action(delegate { address.Box.SelectAll(); })); };
             host.GotFocus += delegate { if (ctl != null) { try { ctl.MoveFocus(0); } catch { } } };
+        }
+
+        public void ReloadIfShowing(ICollection<string> files)
+        {
+            if (wv == null || files == null || files.Count == 0) return;
+            string page, folder;
+            try
+            {
+                Uri u = new Uri(currentUrl ?? "");
+                if (!u.IsFile) return;
+                page = System.IO.Path.GetFullPath(u.LocalPath);
+                folder = System.IO.Path.GetDirectoryName(page);
+            }
+            catch { return; }
+            foreach (string f in files)
+                if (string.Equals(f, page, StringComparison.OrdinalIgnoreCase) || AgentPaths.IsInside(f, folder))
+                {
+                    try { wv.Reload(); } catch { }
+                    return;
+                }
+        }
+
+        public bool PageIsLocal(CancelToken ct)
+        {
+            if (!(currentUrl ?? "").StartsWith("file:", StringComparison.OrdinalIgnoreCase) || !ready || wv == null) return false;
+            object v;
+            lock (opLock)
+            {
+                if (Js("(" + BrowserScripts.WebUsed + ")", ct, out v) != null) return false;
+            }
+            return v is bool && !(bool)v && (currentUrl ?? "").StartsWith("file:", StringComparison.OrdinalIgnoreCase);
         }
 
         public bool Available { get { return !missing && WebView2Runtime.Find() != null; } }
@@ -578,7 +611,6 @@ namespace MinGent
         protected override void OnVisibleChanged(EventArgs e)
         {
             base.OnVisibleChanged(e);
-            if (!Visible) { agentOpened = false; userTouched = false; }
             if (ctl != null) { try { ctl.SetIsVisible(Visible ? 1 : 0); } catch { } }
             if (Visible && !ready && !creating && failure == null && IsHandleCreated) CreateView();
         }
@@ -657,7 +689,9 @@ namespace MinGent
                 if (!FrameAllowed(fu)) a.SetCancel(1);
             });
             WvResourceRequested rr = new WvResourceRequested(OnResource);
-            hold.AddRange(new object[] { sd, pr, dl, nw, fn, rr });
+            WvScriptDone watch = new WvScriptDone(delegate (int hr, string id) { });
+            hold.AddRange(new object[] { sd, pr, dl, nw, fn, rr, watch });
+            try { view.AddScriptToExecuteOnDocumentCreated(BrowserScripts.WebWatch, watch); } catch { }
             try { view.add_FrameNavigationStarting(fn, out tok); } catch { }
             try
             {
@@ -868,6 +902,7 @@ namespace MinGent
                 loading = false;
                 lastNavOk = ok != 0;
                 lastNavError = status;
+                lastNavUrl = goingUrl;
                 goingUrl = "";
                 UpdateCapture();
             }
@@ -945,12 +980,12 @@ namespace MinGent
             }
             catch { wf = null; }
             string low = uri.ToLowerInvariant();
-            bool web = low.StartsWith("http://") || low.StartsWith("https://");
+            bool web = low.StartsWith("http://") || low.StartsWith("https://") || low.StartsWith("file:");
             bool blank = uri.Length == 0 || low == "about:blank";
             if ((!web && !blank) || user == 0)
             {
                 a.SetHandled(1);
-                if (Acting) AddEvent("The page tried to open a pop-up window without a click, which was blocked.");
+                if (Acting) AddEvent(user == 0 ? "The page tried to open a pop-up window without a click, which was blocked." : "The page tried to open " + Clip(uri, 80) + " in a new window, which was blocked.");
                 return;
             }
             if ((features || blank) && popups.Count < 4 && env != null && OpenPopup(a, wf, uri)) return;
@@ -1499,6 +1534,8 @@ namespace MinGent
             pendingUrl = null;
             agentSite = userSite = "";
             consoleLog.Clear();
+            pdfUrl = pdfRead = null;
+            if (!userTouched && Visible && CloseRequested != null) CloseRequested(this, EventArgs.Empty);
             if (wv == null) return;
             resetHistory = true;
             resetNavId = 0;
@@ -1726,7 +1763,7 @@ namespace MinGent
             {
                 BeginInvoke(new Action(delegate
                 {
-                    if (ShowRequested != null) ShowRequested(this, EventArgs.Empty);
+                    ShowForAgent();
                     if (failure != null && !missing) failure = null;
                     CreateView();
                 }));
@@ -1746,16 +1783,15 @@ namespace MinGent
 
         void Reveal()
         {
-            try
-            {
-                BeginInvoke(new Action(delegate
-                {
-                    if (Visible || ShowRequested == null) return;
-                    ShowRequested(this, EventArgs.Empty);
-                    if (Visible) { agentOpened = true; userTouched = false; }
-                }));
-            }
+            try { BeginInvoke(new Action(ShowForAgent)); }
             catch { }
+        }
+
+        void ShowForAgent()
+        {
+            if (Visible || ShowRequested == null) return;
+            ShowRequested(this, EventArgs.Empty);
+            if (Visible) { agentOpened = true; userTouched = false; }
         }
 
         volatile bool agentOpened, userTouched;
@@ -1766,6 +1802,12 @@ namespace MinGent
         {
             agentOpened = false;
             userTouched = true;
+        }
+
+        public void MarkClosed()
+        {
+            agentOpened = false;
+            userTouched = false;
         }
 
         public string CloseForAgent(bool userAsked)
@@ -1833,7 +1875,10 @@ namespace MinGent
             }
             if (navStarts != startCount && !lastNavOk && !loading && !HasDownload)
             {
-                string why = WebError(lastNavError);
+                string here = null;
+                object v;
+                if (lastNavError == 9 && Js("location.href", ct, out v) == null) here = v as string;
+                string why = NavFailure(lastNavError, lastNavUrl, here);
                 if (why != null) return "the page could not be opened: " + why;
             }
             DateTime settle = DateTime.UtcNow.AddSeconds(4);
@@ -1846,6 +1891,27 @@ namespace MinGent
             }
             ct.Sleep(250);
             return null;
+        }
+
+        public static string NavFailure(int status, string asked, string here)
+        {
+            if (status == 9 && !string.IsNullOrEmpty(asked) && here != null && SameAddress(here, asked)) return null;
+            return WebError(status);
+        }
+
+        static bool SameAddress(string a, string b)
+        {
+            string x = Plain(a), y = Plain(b);
+            return x.Length > 0 && string.Equals(x, y, x.StartsWith("file:", StringComparison.OrdinalIgnoreCase) ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        }
+
+        static string Plain(string u)
+        {
+            string s = (u ?? "").Trim();
+            int hash = s.IndexOf('#');
+            if (hash >= 0) s = s.Substring(0, hash);
+            try { s = Uri.UnescapeDataString(s); } catch { }
+            return s.TrimEnd('/');
         }
 
         static string WebError(int s)
@@ -1869,11 +1935,15 @@ namespace MinGent
 
         int lastRef;
 
-        string Snap(CancelToken ct, out string text)
+        string Snap(CancelToken ct, out string text) { return Snap(ct, 1, out text); }
+
+        string Snap(CancelToken ct, int part, out string text)
         {
             text = null;
             object v;
-            int max = Math.Max(4000, Math.Min(40000, SnapshotChars));
+            int size = Math.Max(4000, Math.Min(40000, SnapshotChars));
+            part = Math.Max(1, Math.Min(MaxParts, part));
+            int max = size * part;
             string err = Js("(" + BrowserScripts.Snapshot + ")(" + max.ToString(CultureInfo.InvariantCulture) + ", " + lastRef.ToString(CultureInfo.InvariantCulture) + ")", ct, out v);
             if (err != null) return err;
             if (!(v is Dictionary<string, object>)) return "could not read the page";
@@ -1890,6 +1960,14 @@ namespace MinGent
             lastInterstitial = lastChallenge && Json.Bool(v, "interstitial");
             pageNote = null;
             pageNeedsUser = false;
+            string pdfText = null;
+            if (Json.Bool(v, "pdf") && !url.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            {
+                string why = PdfHere(url, ct, out pdfText);
+                if (why != null) pageNote = "This page is a PDF in the browser's own viewer, and MinGent could not read its text here (" + Clip(why, 120) + "). web_fetch may read it: call web_fetch with this URL. If the PDF needs this site's sign-in, ask the user to download it and give you the file.";
+            }
+            else if (Json.Bool(v, "pdf"))
+                pageNote = "This page is a PDF file on this PC in the browser's own viewer, whose text can't be read from the page. Read the file itself with read_file.";
             if (Json.Bool(v, "googleBlocked"))
             {
                 pageNote = "Google does not allow signing in from apps' built-in browsers, including this one. Next: tell the user they can use the \"Open in your browser\" button above the page, or another way to sign in.";
@@ -1924,10 +2002,15 @@ namespace MinGent
             if (Json.Bool(v, "modal")) sb.Append("Note: a dialog is open on top of the page. Deal with it first (for example accept or close it).\n");
             if (Json.Int(v, "xframes") > 0) sb.Append("Note: parts of this page are frames from other sites, which can't be read as text here").Append(AgentCanSee ? "; browser_screenshot shows them.\n" : ".\n");
             sb.Append('\n');
-            string body = Json.Str(v, "text") ?? "";
-            sb.Append(body.Trim().Length > 0 ? body.TrimEnd() : "(the page shows no text)");
+            string body = pdfText ?? Json.Str(v, "text") ?? "";
+            bool more = pdfText != null ? pdfText.Length > size * part : Json.Bool(v, "cut"), past;
+            string shown = Part(body, size, part, out past);
+            if (part > 1 && !past) sb.Append("(part ").Append(part).Append(" of the page's text)\n");
+            if (past) sb.Append("(the page's text ended before part ").Append(part).Append("; it has ").Append(Math.Max(1, (body.Length + size - 1) / size)).Append(body.Length > size ? " parts" : " part").Append(")\n");
+            else sb.Append(shown.Trim().Length > 0 ? shown.TrimEnd() : "(the page shows no text)");
             sb.Append('\n');
-            if (Json.Bool(v, "cut")) sb.Append("(the page is longer; the rest was cut to save space. Scroll or use web_fetch to read more)\n");
+            if (more && part < MaxParts) sb.Append("(the page continues: browser_read with part=").Append(part + 1).Append(" reads the next part)\n");
+            else if (more) sb.Append("(the page continues past what MinGent reads; use web_fetch for the rest)\n");
             int refs = Json.Int(v, "refs");
             if (refs > 0) sb.Append("Refs like e12 identify elements for browser_click and browser_type until the page changes.\n");
             text = sb.ToString();
@@ -1984,6 +2067,16 @@ namespace MinGent
             if (r.StartsWith("ref=")) r = r.Substring(4);
             if (r.Length > 0 && char.IsDigit(r[0])) r = "e" + r;
             return r;
+        }
+
+        public static bool WasDisabled(string err)
+        {
+            return err != null && err.StartsWith("Not done: ", StringComparison.Ordinal) && err.IndexOf(" is disabled on the page, so it takes no ", StringComparison.Ordinal) > 0;
+        }
+
+        public static string Disabled(string r, string name, string what)
+        {
+            return "Not done: " + r + (string.IsNullOrEmpty(name) ? "" : " (" + Clip(name, 60) + ")") + " is disabled on the page, so it takes no " + what + " for now. The page usually wants something else first, such as a field filled in or a box ticked: read the page for what is missing.";
         }
 
         string Prep(string refId, bool scroll, CancelToken ct, out Dictionary<string, object> info)
@@ -2356,7 +2449,9 @@ namespace MinGent
             }
         }
 
-        public string Read(CancelToken ct, out string text)
+        public string Read(CancelToken ct, out string text) { return Read(ct, 1, out text); }
+
+        public string Read(CancelToken ct, int part, out string text)
         {
             text = null;
             string err = Ensure(ct);
@@ -2365,9 +2460,45 @@ namespace MinGent
             {
                 Reveal();
                 Busy(true);
-                try { return Snap(ct, out text); }
+                try { return Snap(ct, part, out text); }
                 finally { Busy(false); }
             }
+        }
+
+        public const int MaxParts = 20;
+        const int MaxPdfBytes = 25 * 1024 * 1024;
+        string pdfUrl, pdfRead;
+
+        string PdfHere(string url, CancelToken ct, out string text)
+        {
+            text = null;
+            if (url == pdfUrl && pdfRead != null) { text = pdfRead; return null; }
+            object v;
+            string js = "(async function () { var r = await fetch(location.href, { credentials: 'include' }); if (!r.ok) return 'the site answered ' + r.status; var b = new Uint8Array(await r.arrayBuffer()); if (b.length > " + MaxPdfBytes.ToString(CultureInfo.InvariantCulture) + ") return 'it is larger than 25 MB'; var s = ''; for (var i = 0; i < b.length; i += 32768) s += String.fromCharCode.apply(null, b.subarray(i, i + 32768)); return 'pdf:' + btoa(s); })()";
+            string err = Js(js, ct, true, out v);
+            if (err != null) return err;
+            string got = v as string;
+            if (got == null || !got.StartsWith("pdf:", StringComparison.Ordinal)) return got ?? "the page gave no answer";
+            byte[] data;
+            try { data = Convert.FromBase64String(got.Substring(4)); } catch { return "the PDF came back damaged"; }
+            string derr;
+            DocInfo d = DocText.FromBytes(data, ".pdf", ct, out derr);
+            if (d == null) return derr;
+            string head = "(This page is a PDF of " + d.Pages + (d.Pages == 1 ? " page" : " pages") + ". MinGent read its text from the file:)\n";
+            text = d.NoText ? head + "(It has no text MinGent can read: it is probably scanned images, or it uses fonts that hide their characters.)\n" : head + d.Text;
+            pdfUrl = url;
+            pdfRead = text;
+            return null;
+        }
+
+        public static string Part(string body, int size, int part, out bool past)
+        {
+            past = false;
+            if (part <= 1) return body;
+            int skip = size * (part - 1);
+            if (body.Length <= skip) { past = true; return ""; }
+            int nl = body.LastIndexOf('\n', skip - 1, Math.Min(600, skip));
+            return body.Substring(nl >= 0 ? nl + 1 : skip);
         }
 
         public bool PageIsCheck { get { return pageNeedsUser && lastChallenge; } }
@@ -2662,10 +2793,13 @@ namespace MinGent
                     string name = Json.Str(info, "name") ?? "";
                     if (covered.Length > 0)
                         return r + " is hidden behind another element (" + Clip(covered, 140) + "). Close or dismiss that first, or scroll.";
+                    if (Json.Bool(info, "disabled")) return Disabled(r, name, "clicks");
                     string before = currentUrl;
                     int start = navStarts;
                     double w = Json.Num(info, "w"), h = Json.Num(info, "h");
                     bool plain = mouse.Button == "left" && mouse.Clicks == 1 && mouse.HoldMs == 0 && mouse.CdpModifiers == 0;
+                    if (plain && Json.Bool(info, "drop"))
+                        return "Not clicked: " + r + (name.Length > 0 ? " (" + Clip(name, 60) + ")" : "") + " is a drop-down list, and its options open outside the page, where you can't see or pick them. Pick one with browser_type: ref " + r + " and the option's text.";
                     bool captcha = Json.Bool(info, "captcha") || Json.Bool(info, "inCaptcha");
                     if (w < 1 || h < 1 || !Json.Bool(info, "inView"))
                     {
@@ -3179,6 +3313,7 @@ namespace MinGent
                     err = Prep(r, true, ct, out info);
                     if (err != null) return err;
                     if (FileFields.Is(info)) return FileFields.NotThisWay(r);
+                    if (Json.Bool(info, "disabled")) return Disabled(r, Json.Str(info, "name"), "typing");
                     if (Json.Bool(info, "select"))
                     {
                         err = Js("(" + BrowserScripts.Select + ")(" + Json.Quote(r) + "," + Json.Quote(text ?? "") + ")", ct, out v);
@@ -3327,7 +3462,7 @@ namespace MinGent
                         err = CdpCall("Input.dispatchMouseEvent", Json.O("type", "mouseWheel", "x", px, "y", py, "deltaX", dx, "deltaY", dy), ct, out res);
                         if (err != null) return err;
                         ct.Sleep(400);
-                        summary = "Scrolled " + dir + " by " + amount + " pixels at " + label + ". Use browser_read to see new content, or browser_screenshot to see the screen.";
+                        summary = "Scrolled " + dir + " by " + amount + " pixels at " + label + ". " + SeeAfterScroll;
                         return null;
                     }
                     if (pixels <= 0 && (dir == "up" || dir == "down")) err = Js("(" + BrowserScripts.Scroll + ")(" + Json.Quote(dir) + ")", ct, out v);
@@ -3336,7 +3471,7 @@ namespace MinGent
                     ct.Sleep(400);
                     bool moved = Json.Bool(v, "moved");
                     bool sideways = dir == "left" || dir == "right";
-                    summary = moved ? "Scrolled " + dir + "; now " + Json.Int(v, "at") + "% of the way " + (sideways ? "across" : "down") + ". Use browser_read to see new content, or browser_screenshot to see the screen."
+                    summary = moved ? "Scrolled " + dir + "; now " + Json.Int(v, "at") + "% of the way " + (sideways ? "across" : "down") + ". " + SeeAfterScroll
                                     : "The page did not scroll " + dir + " (already at the " + (dir == "up" ? "top" : dir == "down" ? "bottom" : dir == "left" ? "left edge" : "right edge") + ").";
                     return null;
                 }

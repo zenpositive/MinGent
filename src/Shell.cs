@@ -554,6 +554,7 @@ namespace MinGent
         static readonly Regex AbsPath = new Regex(
             @"(?<![\w$%~\\/.:-])((?<![a-z])[a-z]:[\\/]" + PathEnd + @"*|\\\\" + PathEnd + @"+|(\$\{?env:\w+\}?|%\w+%|\$\{?home\}?)([\\/]" + PathEnd + @"*)?|~(?=[\\/\s]|$)([\\/]" + PathEnd + @"*)?)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         static readonly Regex DotPath = new Regex(PathEnd + @"*\.\.(?=[\\/'""\s]|$)" + PathEnd + @"*", RegexOptions.CultureInvariant);
+        static readonly Regex QuotedAbs = new Regex(@"(['""])((?:[a-z]:[\\/]|\\\\)[^'""\r\n]*)\1", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
         public static string Danger(string command, string workspace)
         {
@@ -1806,7 +1807,16 @@ namespace MinGent
         {
             if (cwd == null) return "the command moves to a folder that cannot be checked";
             if (!Inside(cwd, workspace)) return "it runs outside the work folder";
-            foreach (Match m in AbsPath.Matches(c))
+            string rest = c;
+            foreach (Match q in QuotedAbs.Matches(c))
+            {
+                bool unknown;
+                string full = Full(q.Groups[2].Value, cwd, out unknown);
+                if (unknown) return "the command uses a folder that cannot be checked";
+                if (full != null && !Inside(full, workspace)) return "the command points outside the work folder";
+                rest = rest.Substring(0, q.Index) + new string(' ', q.Length) + rest.Substring(q.Index + q.Length);
+            }
+            foreach (Match m in AbsPath.Matches(rest))
             {
                 bool unknown;
                 string full = Full(m.Value, cwd, out unknown);

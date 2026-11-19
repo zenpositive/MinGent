@@ -136,13 +136,18 @@ namespace MinGent
             if (hi <= lo) hi = lo + step;
         }
 
-        public static string Num(double v, double step)
+        public static string Num(double v, double step) { return Num(v, step, v); }
+
+        public static string Num(double v, double step, double top)
         {
-            double a = Math.Abs(v);
-            if (a >= 1e12) return (v / 1e12).ToString("0.##", CultureInfo.InvariantCulture) + "T";
-            if (a >= 1e9) return (v / 1e9).ToString("0.##", CultureInfo.InvariantCulture) + "B";
-            if (a >= 1e6) return (v / 1e6).ToString("0.##", CultureInfo.InvariantCulture) + "M";
-            if (a >= 1e4) return (v / 1e3).ToString("0.##", CultureInfo.InvariantCulture) + "K";
+            double a = Math.Abs(top);
+            double unit = a >= 1e12 ? 1e12 : a >= 1e9 ? 1e9 : a >= 1e6 ? 1e6 : a >= 1e4 ? 1e3 : 1;
+            if (unit > 1) return v == 0 ? "0" : Plain(v / unit, step / unit) + (unit == 1e12 ? "T" : unit == 1e9 ? "B" : unit == 1e6 ? "M" : "K");
+            return Plain(v, step);
+        }
+
+        static string Plain(double v, double step)
+        {
             int places = step >= 1 ? (Math.Abs(step - Math.Round(step)) > 1e-6 ? 1 : 0) : Math.Min(6, (int)Math.Ceiling(-Math.Log10(step) - 1e-9));
             if (step >= 1 && places == 1) return v.ToString("0.#", CultureInfo.InvariantCulture);
             if (step > 0 && step < 1 && Math.Abs(step * Math.Pow(10, places) - Math.Round(step * Math.Pow(10, places))) > 1e-6) places = Math.Min(6, places + 1);
@@ -317,13 +322,14 @@ namespace MinGent
             List<double> ticks = new List<double>();
             for (double t = lo; t <= hi + step * 0.001 && ticks.Count < 12; t += step) ticks.Add(Math.Abs(t) < step * 1e-9 ? 0 : t);
             int labelW = 0;
-            foreach (double t in ticks) labelW = Math.Max(labelW, f.Width(g, Num(t, step), f.Small));
+            double scale = Math.Max(Math.Abs(lo), Math.Abs(hi));
+            foreach (double t in ticks) labelW = Math.Max(labelW, f.Width(g, Num(t, step, scale), f.Small));
             int left = pad + labelW + UI.S(8), plotW = Math.Max(UI.S(40), width - left - pad), plotH = UI.S(170), plotTop = y + f.SmallLineH / 2;
             foreach (double t in ticks)
             {
                 int ty = plotTop + (int)Math.Round((hi - t) / (hi - lo) * plotH);
                 Mark(L, t == 0 ? DrawOp.KTableBorder : DrawOp.KLine, t == 0 ? 1 : 0, left, ty, plotW, 1, 0);
-                string label = Num(t, step);
+                string label = Num(t, step, scale);
                 Text(L, label, f.Small, DrawOp.RDim, left - UI.S(8) - f.Width(g, label, f.Small), ty - f.SmallLineH / 2, labelW, f.SmallLineH);
             }
             double floor = Math.Max(lo, Math.Min(hi, 0));

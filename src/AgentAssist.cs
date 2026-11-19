@@ -2022,6 +2022,8 @@ namespace MinGent
         bool handedNow;
         public bool AnyTool, Denied, FilesChanged, Reviewed, Listed;
         public string Beside = "";
+        public string Said = "";
+        public bool BesideShown, Promote;
         public string LastFamily = "";
         readonly List<string> unverified = new List<string>();
         public HashSet<string> Tools = new HashSet<string>(StringComparer.Ordinal);
@@ -2352,8 +2354,16 @@ namespace MinGent
 
         public string EndOfTurn(string text, List<TodoItem> todos)
         {
+            string note = Ends(text, todos);
+            if (note != null && Promote) { Promote = false; folded--; }
+            return note;
+        }
+
+        string Ends(string text, List<TodoItem> todos)
+        {
             string t = (text ?? "").Trim();
             Told = null;
+            Promote = false;
             if (limit < 3 && t.Length > 0 && t.Length < 2500)
                 foreach (string sentence in Regex.Split(t, @"(?<=[.!?\n])\s+"))
                     if (Claims(sentence))
@@ -2403,7 +2413,15 @@ namespace MinGent
                 Told = "The agent wrote what it was doing but stopped, so MinGent asked it to carry on.";
                 return "[MinGent] Your message only says what you are doing, and you ended your turn without calling a tool. If you meant to continue, make the tool call now. If you are finished, give your final answer. " + Standalone;
             }
-            if (!question && !WaitingOnUser && folded == 0 && Beside.Length >= 100 && t.Length < 160 && t.Length * 2 < Beside.Length)
+            string best = Beside.Length >= 100 ? Beside : Said;
+            bool folds = !WaitingOnUser && folded == 0 && best.Length >= 100 && t.Length < 160 && t.Length * 2 < best.Length && !Announces(best) && !StatusWords.StatusOnly(best);
+            if (folds && best == Beside && BesideShown && t.Length > 0)
+            {
+                folded++;
+                Promote = true;
+                t = Beside + "\n\n" + t;
+            }
+            if (folds && !question && folded == 0)
             {
                 folded++;
                 Nudges++;
@@ -2465,7 +2483,7 @@ namespace MinGent
             return last.EndsWith("?") || last.EndsWith("?**") || last.EndsWith("?*");
         }
 
-        static bool Announces(string t)
+        public static bool Announces(string t)
         {
             if (t.Length == 0) return false;
             string tail = t.Length > 400 ? t.Substring(t.Length - 400) : t;
@@ -2493,6 +2511,7 @@ namespace MinGent
 
         readonly Dictionary<string, Entry> seen = new Dictionary<string, Entry>(StringComparer.Ordinal);
         public int World;
+        public bool Vision = true;
 
         static readonly HashSet<string> Reads = new HashSet<string>(StringComparer.Ordinal) {
             "read_file", "list_directory", "find_files", "search_text", "web_fetch", "web_search", "system_info", "analyze_audio" };
@@ -2557,7 +2576,7 @@ namespace MinGent
             if (same < 2) return null;
             string extra = name == "command_status" ? " If the command is still working, give it more time between checks (wait_seconds can be up to 60)."
                          : Live.Contains(name) ? " Nothing on the page or in the program has changed in between."
-                         : AppActions.Contains(name) ? " The window's controls read the same each time. If the program draws its own picture, like a game, check what changed with app_screenshot." : "";
+                         : AppActions.Contains(name) ? " The window's controls read the same each time." + (Vision ? " If the program draws its own picture, like a game, check what changed with app_screenshot." : " If the program draws its own picture, like a game, its controls can't show what changed: try another way, or ask the user.") : "";
             return "This returned exactly the same result as your previous " + same + " identical calls." + extra;
         }
 
@@ -2583,7 +2602,21 @@ namespace MinGent
         public override string Name { get { return "apply_patch"; } }
         public override string Description { get { return "Apply a patch in the \"*** Begin Patch\" format or as a unified diff (--- a/file, +++ b/file, @@ hunks) to files in the workspace."; } }
         public override Dictionary<string, object> Schema { get { return Obj("input", P("string", "The patch text"), true); } }
-        public override string Label(Dictionary<string, object> a) { return "Apply a patch"; }
+        public override string Label(Dictionary<string, object> a)
+        {
+            List<string> files = new List<string>();
+            foreach (Match m in PatchFile.Matches(S(a, "input") ?? ""))
+            {
+                string f = m.Groups[1].Value.Trim();
+                if (f.Length > 0 && f != "/dev/null" && !files.Contains(f)) files.Add(f);
+            }
+            if (files.Count == 0) return "Apply a patch";
+            string first = files[0].Replace('\\', '/');
+            first = first.Substring(first.LastIndexOf('/') + 1);
+            return "Patch " + first + (files.Count == 1 ? "" : " and " + (files.Count - 1) + (files.Count == 2 ? " more file" : " more files"));
+        }
+
+        static readonly Regex PatchFile = new Regex(@"^(?:\*\*\* (?:Update|Add|Delete) File: |\+\+\+ (?:b/)?)(.+?)\s*$", RegexOptions.Multiline | RegexOptions.CultureInvariant);
 
         class FileOp
         {

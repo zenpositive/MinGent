@@ -163,7 +163,7 @@ namespace MinGent
         {
             string cmd = (line ?? "").Trim();
             bool guard = ps.WebGuard && ps.Tainted;
-            string web = guard ? "This chat has read web content (" + ps.TaintSource + "), so commands need your OK in case a page tried to slip in instructions." : "";
+            string web = guard ? ps.HasRead + " (" + ps.TaintSource + "), so commands need your OK in case " + ps.Planter + " tried to slip in instructions." : "";
             string act = key == null ? null : char.ToUpperInvariant(key[0]) + key.Substring(1);
             string then = key == null ? "" : "Keys and clicks other than plain typing can run or change what is on the command line, so MinGent checks it first. ";
             PermissionAsk a = new PermissionAsk();

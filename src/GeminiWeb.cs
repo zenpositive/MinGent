@@ -60,6 +60,101 @@ namespace MinGent
         }
     }
 
+    class GeminiWindow
+    {
+        public double Percent;
+        public DateTime Resets = DateTime.MinValue;
+
+        public double Now(DateTime utc) { return Resets != DateTime.MinValue && Resets <= utc ? 0 : Math.Max(0, Math.Min(100, Percent)); }
+    }
+
+    class GeminiUsage
+    {
+        public GeminiWindow Short, Weekly;
+        public DateTime When;
+        public string For = "";
+
+        public double Top(DateTime utc) { return Math.Max(Short != null ? Short.Now(utc) : 0, Weekly != null ? Weekly.Now(utc) : 0); }
+
+        public GeminiWindow Tightest(DateTime utc)
+        {
+            if (Short == null) return Weekly;
+            if (Weekly == null) return Short;
+            return Weekly.Now(utc) > Short.Now(utc) ? Weekly : Short;
+        }
+
+        public static GeminiUsage From(List<object> rows, DateTime utc)
+        {
+            if (rows == null) return null;
+            Dictionary<double, GeminiWindow> byUnit = new Dictionary<double, GeminiWindow>();
+            foreach (object o in rows)
+            {
+                List<object> row = o as List<object>;
+                if (row == null || !(Json.Get(row, 0, 1) is double) || (double)Json.Get(row, 0, 1) != 2) continue;
+                object pct = Json.Get(row, 2), sec = Json.Get(row, 3, 0), unit = Json.Get(row, 1);
+                if (!(pct is double)) continue;
+                GeminiWindow w = new GeminiWindow();
+                w.Percent = (double)pct;
+                if (sec is double && (double)sec > 0) w.Resets = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds((double)sec);
+                byUnit[unit is double ? (double)unit : -1] = w;
+            }
+            if (byUnit.Count == 0) return null;
+            List<double> units = new List<double>(byUnit.Keys);
+            units.Sort(delegate (double x, double y) { return byUnit[x].Resets.CompareTo(byUnit[y].Resets); });
+            GeminiUsage u = new GeminiUsage();
+            u.When = utc;
+            double learned;
+            lock (learnGate) learned = weeklyUnit;
+            double only = units[0], last = units[units.Count - 1];
+            if (units.Count == 1)
+            {
+                if (Far(byUnit[only], utc) || (!double.IsNaN(learned) && only == learned)) u.Weekly = byUnit[only];
+                else u.Short = byUnit[only];
+                return u;
+            }
+            double weekly = last;
+            if (Far(byUnit[last], utc) && !Far(byUnit[only], utc)) lock (learnGate) weeklyUnit = last;
+            else if (!double.IsNaN(learned) && byUnit.ContainsKey(learned)) weekly = learned;
+            u.Weekly = byUnit[weekly];
+            foreach (double k in units) if (k != weekly) { u.Short = byUnit[k]; break; }
+            return u;
+        }
+
+        static readonly object learnGate = new object();
+        static double weeklyUnit = double.NaN;
+
+        static bool Far(GeminiWindow w, DateTime utc) { return w.Resets != DateTime.MinValue && (w.Resets - utc).TotalHours > 5.5; }
+
+        public static string Until(DateTime resets, DateTime utc)
+        {
+            if (resets == DateTime.MinValue) return "";
+            TimeSpan left = resets - utc;
+            if (left.TotalMinutes < 1) return "now";
+            if (left.TotalHours < 24)
+            {
+                int mins = (int)Math.Ceiling(left.TotalMinutes), h = mins / 60, m = mins % 60;
+                return "in " + (h > 0 ? h.ToString(CultureInfo.InvariantCulture) + " h" + (m > 0 ? " " : "") : "") + (m > 0 || h == 0 ? m.ToString(CultureInfo.InvariantCulture) + " min" : "");
+            }
+            return resets.ToLocalTime().ToString("ddd HH:mm", CultureInfo.InvariantCulture);
+        }
+
+        public static string Line(string name, GeminiWindow w, DateTime utc)
+        {
+            if (w == null) return null;
+            string when = Until(w.Resets, utc);
+            return name + ": " + Math.Round(w.Now(utc)).ToString(CultureInfo.InvariantCulture) + "% used" + (when.Length == 0 ? "" : when == "now" ? ", resets now" : ", resets " + when);
+        }
+
+        public string Tip(DateTime utc)
+        {
+            StringBuilder sb = new StringBuilder("Gemini usage");
+            string a = Line("5-hour limit", Short, utc), b = Line("Weekly limit", Weekly, utc);
+            if (a != null) sb.Append('\n').Append(a);
+            if (b != null) sb.Append('\n').Append(b);
+            return sb.ToString();
+        }
+    }
+
     class GeminiAccount
     {
         public int Status = 1000;
@@ -221,6 +316,27 @@ namespace MinGent
             c.Headers["x-goog-ext-73010989-jspb"] = "[0]";
             c.Body = "at=" + Enc(s.At) + "&f.req=" + Enc("[[[\"otAQ7b\",\"[]\",null,\"generic\"]]]");
             return c;
+        }
+
+        public static GeminiCall Quota(GeminiSession s)
+        {
+            GeminiCall c = Status(s);
+            c.Url = c.Url.Replace("rpcids=otAQ7b", "rpcids=qpEbW");
+            c.Body = "at=" + Enc(s.At) + "&f.req=" + Enc("[[[\"qpEbW\",\"[[[1,2]]]\",null,\"generic\"]]]");
+            return c;
+        }
+
+        public static GeminiUsage ParseQuota(string text, DateTime utc)
+        {
+            foreach (object part in new GeminiFrames().Feed(text))
+            {
+                List<object> p = part as List<object>;
+                if (p == null || p.Count < 3 || Json.Str(p, 1) != "qpEbW") continue;
+                List<object> body = Json.TryParse(Json.Str(p, 2) ?? "") as List<object>;
+                GeminiUsage u = GeminiUsage.From(Json.List(body, 0), utc);
+                if (u != null) return u;
+            }
+            return null;
         }
 
         public static GeminiCall Generate(GeminiSession s, GeminiAccount a, GeminiModel m, string prompt, List<object> files, List<object> meta, int level)
@@ -434,15 +550,17 @@ namespace MinGent
                     taken.Add(x);
                     Thinking(m, x);
                 }
+                List<GeminiModel> locked = new List<GeminiModel>();
                 foreach (GeminiModel m in unnamed)
                 {
                     List<object> x = Entry(entries, m, taken);
-                    if (x == null) continue;
+                    if (x == null) { locked.Add(m); continue; }
                     taken.Add(x);
                     List<object> e = Json.List(x, 0);
                     Name(m, e, (Json.Str(e, 4) ?? "").Trim(), 5, 12);
                     Thinking(m, x);
                 }
+                if (taken.Count > 0) foreach (GeminiModel m in locked) a.Models.Remove(m);
                 return;
             }
         }
@@ -576,7 +694,7 @@ namespace MinGent
 
     class GeminiReply
     {
-        public string Text = "", Thoughts = "", Cid = "", Rid = "", Rcid = "", Context;
+        public string Text = "", Thoughts = "", Cid = "", Rid = "", Rcid = "", Context, Served;
         public bool Any, Complete, UsedWeb;
         public int ErrorCode;
         public readonly List<string[]> Sources = new List<string[]>();
@@ -598,6 +716,8 @@ namespace MinGent
             if (!string.IsNullOrEmpty(rid)) Rid = rid;
             string context = GeminiProto.Field(b, 25) as string;
             if (context != null) Context = context;
+            string served = GeminiProto.Field(b, 39) as string;
+            if (!string.IsNullOrEmpty(served) && served.Length <= 64) Served = served;
             List<object> cand = Json.List(b, 4, 0);
             string rcid = Json.Str(cand, 0);
             if (string.IsNullOrEmpty(rcid)) return;
@@ -1176,13 +1296,120 @@ namespace MinGent
         public static void Forget()
         {
             lock (gate) { account = null; threads.Clear(); uploads.Clear(); }
+            lock (usageGate) usageAsked = DateTime.MinValue;
+            if (LastUsage != null) SetUsage(null);
         }
 
         public static GeminiAccount Known { get { lock (gate) return account; } }
 
         public static void Remember(GeminiAccount a) { lock (gate) account = a; }
 
+        public static int QuietLimitMs = 600000, QuietShowSeconds = 15;
+
+        static readonly object usageGate = new object();
+        static GeminiUsage usage;
+        static bool usageBusy;
+        static DateTime usageAsked = DateTime.MinValue;
+        public static event Action UsageChanged;
+
+        public static GeminiUsage LastUsage { get { lock (usageGate) return usage; } }
+
+        static void SetUsage(GeminiUsage u)
+        {
+            lock (usageGate) usage = u;
+            Action h = UsageChanged;
+            if (h != null) try { h(); } catch { }
+        }
+
+        public static void CheckUsage(IGeminiTransport tr, GeminiSession s, GeminiAccount a, int delayMs) { CheckUsage(tr, s, a, delayMs, false); }
+
+        public static void CheckUsage(IGeminiTransport tr, GeminiSession s, GeminiAccount a, int delayMs, bool force)
+        {
+            if (tr == null || s == null || a == null || a.Guest || !Enabled) return;
+            string who = GeminiPrompt.Hash(s.At);
+            Thread t = new Thread(delegate ()
+            {
+                if (delayMs > 0) Thread.Sleep(delayMs);
+                lock (usageGate)
+                {
+                    if (usageBusy || (!force && usage != null && usage.For == who && (DateTime.UtcNow - usageAsked).TotalSeconds < 10)) return;
+                    usageBusy = true;
+                    usageAsked = DateTime.UtcNow;
+                }
+                try
+                {
+                    int status;
+                    StringBuilder text = new StringBuilder();
+                    string err = Collect(tr, GeminiProto.Quota(s), null, 20000, null, delegate (string x) { text.Append(x); }, out status);
+                    GeminiUsage got = err == null && status == 200 ? GeminiProto.ParseQuota(text.ToString(), DateTime.UtcNow) : null;
+                    if (got != null && Enabled) { got.For = who; SetUsage(got); }
+                }
+                catch { }
+                finally { lock (usageGate) { usageBusy = false; usageAsked = DateTime.UtcNow; } }
+            });
+            t.IsBackground = true;
+            t.Start();
+        }
+
+        public static string ResetNote(DateTime utc)
+        {
+            GeminiUsage u = LastUsage;
+            GeminiWindow w = u != null ? u.Tightest(utc) : null;
+            if (w == null || w.Now(utc) < 90 || w.Resets <= utc || (utc - u.When).TotalHours > 5) return null;
+            return "Your " + (w == u.Weekly ? "weekly" : "5-hour") + " Gemini limit resets " + GeminiUsage.Until(w.Resets, utc);
+        }
+
+        public static string UsageNote(DateTime utc)
+        {
+            GeminiUsage u = LastUsage;
+            GeminiWindow w = u != null ? u.Tightest(utc) : null;
+            if (w == null || (utc - u.When).TotalHours > 5) return null;
+            string when = GeminiUsage.Until(w.Resets, utc);
+            return "Your " + (w == u.Weekly ? "weekly" : "5-hour") + " Gemini limit is " + Math.Round(w.Now(utc)).ToString(CultureInfo.InvariantCulture) + "% used" + (when.Length == 0 ? "" : " and resets " + when);
+        }
+
+        public static string Waiting(string model, bool started, TimeSpan total, TimeSpan quiet)
+        {
+            return started ? "Waiting for " + model + ": nothing new for " + Span(quiet) + " (" + Span(total) + " in all)" : model + " is thinking (" + Span(total) + ")";
+        }
+
+        static string Span(TimeSpan t)
+        {
+            int s = Math.Max(0, (int)t.TotalSeconds);
+            if (s < 60) return s.ToString(CultureInfo.InvariantCulture) + " s";
+            int min = s / 60, rest = s % 60 / 15 * 15;
+            return min.ToString(CultureInfo.InvariantCulture) + " min" + (rest > 0 ? " " + rest.ToString(CultureInfo.InvariantCulture) + " s" : "");
+        }
+
+        public static void Answered(GeminiAccount a, GeminiModel m, string served, LlmResult r)
+        {
+            if (string.IsNullOrEmpty(served) || m == null || (a != null && a.Guest) || string.Equals(m.Id, "auto", StringComparison.OrdinalIgnoreCase) || string.Equals(m.Category, "Auto", StringComparison.OrdinalIgnoreCase)) return;
+            r.ServedFor = m.Hex.ToLowerInvariant();
+            if (string.Equals(served, m.Hex, StringComparison.OrdinalIgnoreCase))
+            {
+                r.ServedBy = "";
+                r.ServedNote = m.Display + " is answering again.";
+                return;
+            }
+            string other = null;
+            if (a != null) foreach (GeminiModel x in a.Models) if (string.Equals(x.Hex, served, StringComparison.OrdinalIgnoreCase)) other = x.Display;
+            r.ServedBy = served.ToLowerInvariant();
+            string head = "Gemini answered with " + (other ?? "another model") + " instead of " + m.Display + ".";
+            DateTime now = DateTime.UtcNow;
+            string note = UsageNote(now);
+            GeminiUsage u = LastUsage;
+            r.ServedNote = note == null ? head + " Google can do this near the usage limit or when the model is busy."
+                : head + " " + note + (u.Top(now) >= 95 ? ". Google does this when the limit is reached." : ". Google also does this when a model is busy.");
+        }
+
+        public const string Silence = "Gemini sent nothing for 10 minutes, so MinGent stopped waiting. Gemini web may be stuck: send your message again, or pick another model.";
+
         public static string Collect(IGeminiTransport tr, GeminiCall call, GeminiFile file, int idleMs, CancelToken ct, Action<string> onText, out int status)
+        {
+            return Collect(tr, call, file, idleMs, ct, onText, null, out status);
+        }
+
+        public static string Collect(IGeminiTransport tr, GeminiCall call, GeminiFile file, int idleMs, CancelToken ct, Action<string> onText, Action<TimeSpan> quiet, out int status)
         {
             status = 0;
             GeminiJob job = tr.Start(call.Url, call.Headers, call.Body, file);
@@ -1195,7 +1422,8 @@ namespace MinGent
                     GeminiChunk c;
                     if (!job.Take(200, out c))
                     {
-                        if ((DateTime.UtcNow - last).TotalMilliseconds > idleMs) return "Gemini stopped answering. Try again.";
+                        if ((DateTime.UtcNow - last).TotalMilliseconds > idleMs) return quiet != null ? Silence : "Gemini stopped answering. Try again.";
+                        if (quiet != null) quiet(DateTime.UtcNow - last);
                         continue;
                     }
                     last = DateTime.UtcNow;
@@ -1243,6 +1471,9 @@ namespace MinGent
                 if (account != null && account.For != who) { threads.Clear(); uploads.Clear(); }
                 account = got;
             }
+            GeminiUsage known = LastUsage;
+            if (known != null && known.For != who) SetUsage(null);
+            CheckUsage(tr, s, got, 0);
             GeminiHelper.SaveModels(got);
             a = got;
             return null;
@@ -1373,10 +1604,15 @@ namespace MinGent
 
         public static string Reach(CancelToken ct)
         {
+            return Reach(delegate (string s) { }, ct);
+        }
+
+        public static string Reach(Action<string> progress, CancelToken ct)
+        {
             IGeminiTransport tr = Transport;
             if (tr != null && tr.Connected) return null;
             if (!Enabled || !GeminiHelper.SetUp) return null;
-            return WaitReady(delegate (string s) { }, ct);
+            return WaitReady(progress, ct);
         }
 
         public static string WaitReady(Action<string> progress, CancelToken ct)
@@ -1419,12 +1655,23 @@ namespace MinGent
             bool mine = false;
             try
             {
+                DateTime asked = DateTime.UtcNow;
+                bool told = false;
                 while (!mine)
                 {
                     Monitor.TryEnter(GeminiWeb.Turn, 200, ref mine);
                     if (!mine && ct.IsCancelled) { r.Cancelled = true; break; }
+                    if (!mine && !told && sink != null && (DateTime.UtcNow - asked).TotalSeconds >= 2)
+                    {
+                        told = true;
+                        sink.OnStatus("Waiting for Gemini web: another chat or helper is using it, one request at a time");
+                    }
                 }
-                if (mine) Run(req, sink, ct, r);
+                if (mine)
+                {
+                    if (told) sink.OnStatus("Thinking");
+                    Run(req, sink, ct, r);
+                }
             }
             catch (Exception ex)
             {
@@ -1471,15 +1718,17 @@ namespace MinGent
 
         void Run(LlmRequest req, IStreamSink sink, CancelToken ct, LlmResult r)
         {
-            string unreachable = GeminiWeb.Reach(ct);
+            bool reaching = false;
+            string unreachable = GeminiWeb.Reach(delegate (string s) { if (sink != null) { reaching = true; sink.OnStatus(s); } }, ct);
             if (unreachable != null)
             {
                 if (ct.IsCancelled) r.Cancelled = true;
                 else r.Error = unreachable;
                 return;
             }
+            if (reaching) sink.OnStatus("Thinking");
             IGeminiTransport tr = GeminiWeb.Transport;
-            bool fresh = false, reload = false, reloaded = false, plain = false;
+            bool fresh = false, reload = false, reloaded = false, plain = false, showing = false;
             int troubles = 0;
             List<string> sig = GeminiPrompt.Sig(req.Messages);
             string shape = GeminiPrompt.Hash(req.System) + GeminiPrompt.Hash(GeminiPrompt.Tools(req.Tools));
@@ -1515,11 +1764,22 @@ namespace MinGent
                 GeminiFrames frames = new GeminiFrames();
                 GeminiView view = new GeminiView(sink, req.ShowThinking);
                 int status;
-                err = GeminiWeb.Collect(tr, GeminiProto.Generate(s, a, m, plan.Prompt, files, thread != null ? thread.Meta : null, level), null, 240000, ct, delegate (string text)
+                DateTime sent = DateTime.UtcNow;
+                int shownWait = 0;
+                err = GeminiWeb.Collect(tr, GeminiProto.Generate(s, a, m, plan.Prompt, files, thread != null ? thread.Meta : null, level), null, GeminiWeb.QuietLimitMs, ct, delegate (string text)
                 {
                     bool any = false;
                     foreach (object part in frames.Feed(text)) { reply.Feed(part); any = true; }
                     if (any && reply.Any) view.Update(reply.Text, reply.Thoughts, false);
+                    if (any && showing) { showing = false; sink.OnStatus("Thinking"); }
+                }, delegate (TimeSpan quiet)
+                {
+                    if (sink == null || quiet.TotalSeconds < GeminiWeb.QuietShowSeconds) return;
+                    int whole = (int)(DateTime.UtcNow - sent).TotalSeconds / GeminiWeb.QuietShowSeconds;
+                    if (whole == shownWait) return;
+                    shownWait = whole;
+                    showing = true;
+                    sink.OnStatus(GeminiWeb.Waiting(m.Display, reply.Any, DateTime.UtcNow - sent, quiet));
                 }, out status);
                 r.Status = status;
                 if (ct.IsCancelled)
@@ -1539,6 +1799,7 @@ namespace MinGent
                 if (!good)
                 {
                     GeminiWeb.DropThread(thread);
+                    if (err == GeminiWeb.Silence) { r.Error = err; return; }
                     if (reply.ErrorCode == -1) { r.Error = "The conversation is too long for this Gemini model (context length exceeded)."; return; }
                     if (view.Emitted) { r.Error = err ?? "Gemini's reply was cut off. Try again."; r.Interrupted = true; r.Retryable = true; return; }
                     if (thread != null) { fresh = true; continue; }
@@ -1551,7 +1812,13 @@ namespace MinGent
                     }
                     if ((status == 400 || status == 401 || status == 403) && !reloaded) { reloaded = true; reload = true; continue; }
                     if (reply.ErrorCode == 1052 && extended) { plain = true; Quirks.Flag(quirk, true); continue; }
-                    if (reply.ErrorCode != 0) r.Error = GeminiProto.Describe(reply.ErrorCode);
+                    if (reply.ErrorCode != 0)
+                    {
+                        r.Error = GeminiProto.Describe(reply.ErrorCode);
+                        string left = reply.ErrorCode == 1037 ? GeminiWeb.ResetNote(DateTime.UtcNow) : null;
+                        if (left != null) r.Error += " " + left + ".";
+                        if (reply.ErrorCode == 1037) GeminiWeb.CheckUsage(tr, s, a, 0, true);
+                    }
                     else if (err != null) r.Error = err;
                     else if (status != 200 && status != 0) r.Error = "Gemini refused the request (HTTP " + status.ToString(CultureInfo.InvariantCulture) + "). Check that you are signed in at gemini.google.com in " + GeminiHelper.BrowserName + ".";
                     else if (frames.Garbage) r.Error = "Gemini's answer could not be read. Its site may have changed and MinGent needs an update.";
@@ -1572,6 +1839,8 @@ namespace MinGent
                 r.Stop = calls.Count > 0 ? "tool_calls" : "stop";
                 r.SawEnd = reply.Complete;
                 r.UsedWeb = reply.UsedWeb;
+                GeminiWeb.Answered(a, m, reply.Served, r);
+                GeminiWeb.CheckUsage(tr, s, a, 2500);
                 r.InputTokens = Math.Max(1, (int)(total / 3.6));
                 r.CachedTokens = covered > 0 ? Math.Min(r.InputTokens, (int)(GeminiPrompt.Size(req, covered) / 3.6)) : 0;
                 if (!string.IsNullOrEmpty(reply.Cid)) GeminiWeb.SaveThread(thread, key, sig, reply.Meta());

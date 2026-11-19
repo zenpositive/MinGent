@@ -22,6 +22,16 @@ namespace MinGent
 
     static class ToolKit
     {
+        public static byte[] ReadShared(string path)
+        {
+            using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            using (MemoryStream ms = new MemoryStream())
+            {
+                fs.CopyTo(ms);
+                return ms.ToArray();
+            }
+        }
+
         public static readonly HashSet<string> SkipDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
             ".git", ".svn", ".hg", ".vs", ".idea", "node_modules", "bin", "obj", "dist", "build", "out", "target",
             "__pycache__", ".venv", "venv", ".next", ".nuxt", "packages", ".gradle", "coverage", ".cache", ".mypy_cache", ".pytest_cache", ".tox" };
@@ -85,7 +95,7 @@ namespace MinGent
                 FileInfo fi = new FileInfo(full);
                 if (!fi.Exists) { error = "file not found: " + full; return null; }
                 if (fi.Length > 8L * 1024 * 1024) { error = "the file is too large to read as text (" + ModelCatalog.Size(fi.Length) + ")"; return null; }
-                byte[] b = File.ReadAllBytes(full);
+                byte[] b = ReadShared(full);
                 if (LooksBinary(b)) { error = "this is a binary file (" + ModelCatalog.Size(fi.Length) + "), not text"; return null; }
                 string text = Document.Decode(b, out enc);
                 string e;
@@ -1643,7 +1653,7 @@ namespace MinGent
                 ask.High = true;
                 ask.Category = "";
                 ask.Reason = terminal ? "It opens a terminal window, and MinGent can't sandbox what gets typed into it." : "The agent asked to run it without the sandbox, so it can change files outside the work folder, other programs and settings.";
-                if (ps.WebGuard && ps.Tainted) ask.Reason += " This chat has read web content (" + ps.TaintSource + "), so make sure a page didn't slip in this request.";
+                if (ps.WebGuard && ps.Tainted) ask.Reason += " " + ps.HasRead + " (" + ps.TaintSource + "), so make sure " + ps.Planter + " didn't slip in this request.";
             }
             else if (!ps.Auto)
             {
@@ -1653,7 +1663,7 @@ namespace MinGent
             else if (ps.WebGuard && ps.Tainted && !plainWait)
             {
                 ask = new PermissionAsk();
-                ask.Reason = "This chat has read web content (" + ps.TaintSource + "), so commands need your OK in case a page tried to slip in instructions.";
+                ask.Reason = ps.HasRead + " (" + ps.TaintSource + "), so commands need your OK in case " + ps.Planter + " tried to slip in instructions.";
             }
             else if (Sandboxed && !plainWait && !ps.Full && Sandbox.Unprotected != null)
             {
@@ -1926,7 +1936,7 @@ namespace MinGent
             a.Title = title;
             a.Detail = text.Length > 600 ? text.Substring(0, 600) + "..." : text;
             a.Where = where;
-            a.Reason = "This chat has read web content. Long text, or text that looks like a password or key, sent to a website could carry your data out.";
+            a.Reason = ps.HasRead + ". Long text, or text that looks like a password or key, sent to a website could carry your data out.";
             return ctx.Approve(a) ? null : "The user did not allow sending this text.";
         }
 
@@ -1950,7 +1960,7 @@ namespace MinGent
             a.AllowRemember = false;
             a.Title = "Open an address that carries a lot of data";
             a.Detail = url.Length > 600 ? url.Substring(0, 600) + "..." : url;
-            a.Reason = "This chat has read web content. A long address, or one holding something like a password or key, could send your data to a website.";
+            a.Reason = ps.HasRead + ". A long address, or one holding something like a password or key, could send your data to a website.";
             return ctx.Approve(a) ? null : "The user did not allow opening this address.";
         }
     }
@@ -2101,7 +2111,7 @@ namespace MinGent
         }
     }
 
-    class WebFetchTool : AgentTool
+    partial class WebFetchTool : AgentTool
     {
         readonly bool browserFallback;
         public WebFetchTool() : this(false) { }
@@ -2111,7 +2121,7 @@ namespace MinGent
         {
             get
             {
-                return "Download a web page (http or https) and return its readable text. Faster than the browser for reading documentation or articles. " +
+                return "Download a web page (http or https) and return its readable text; a PDF, Word, Excel or PowerPoint file on the web too. Faster than the browser for reading documentation or articles. " +
                        "Sites with bot protection and pages that need JavaScript don't work here" + (browserFallback ? ": open those with browser_navigate." : ".") +
                        " For a YouTube video it returns the title, channel, date, description and the transcript. Long pages and transcripts come in parts: ask for the next one with part.";
             }
@@ -2324,8 +2334,20 @@ namespace MinGent
                     text = PartText(pages, part, part > 1 ? head : "", out pnote);
                 }
             }
+            if (!ok && text != null && text.IndexOf(": it is not a text page (image/", StringComparison.Ordinal) > 0)
+            {
+                if (!ctx.Cfg.Vision) { ToolOutcome blind = ToolOutcome.Fail(url + " is a picture, and the current model can't see pictures."); blind.Untrusted = true; return blind; }
+                string perr;
+                ImageData pic = Web.Picture(url, ctx.Ct, local, out perr);
+                if (pic == null) { ToolOutcome pf = ToolOutcome.Fail("Could not open the picture at " + url + ": " + perr + "."); pf.Untrusted = true; return pf; }
+                ToolOutcome po = ToolOutcome.Ok("Picture: " + url + " (shown below)", "Looked at a picture from " + Host(url));
+                po.Images = new List<ImageData>(new ImageData[] { pic });
+                po.Untrusted = true;
+                return po;
+            }
             string summary;
-            if (ok) summary = "Read " + Host(url) + (block == "js" ? " (almost no text)" : "") + (part > 1 ? " (part " + part + ")" : "");
+            string kind = ok && text.StartsWith("Document: ", StringComparison.Ordinal) ? DocKind(text) : null;
+            if (ok) summary = "Read " + (kind != null ? Article(kind) + kind + " from " : "") + Host(url) + (block == "js" ? " (almost no text)" : "") + (part > 1 ? " (part " + part + ")" : "");
             else if (block == "bot") summary = "Blocked by bot protection";
             else if (block == "limited") summary = "Too many requests (HTTP 429)";
             else if (block == "refused") summary = "Refused (HTTP 403)";
@@ -2341,9 +2363,24 @@ namespace MinGent
         }
     }
 
+    partial class WebFetchTool
+    {
+        static string DocKind(string text)
+        {
+            int nl = text.IndexOf('\n');
+            if (nl < 0) return null;
+            string line = text.Substring(nl + 1);
+            foreach (string k in new string[] { "PDF", "Word document", "Excel workbook", "PowerPoint presentation", "OpenDocument text", "OpenDocument spreadsheet", "OpenDocument presentation", "RTF document", "EPUB book" })
+                if (line.StartsWith(k, StringComparison.Ordinal)) return k;
+            return null;
+        }
+
+        static string Article(string kind) { return "AEIOU".IndexOf(kind[0]) >= 0 || kind.StartsWith("RTF", StringComparison.Ordinal) ? "an " : "a "; }
+    }
+
     class WebResult
     {
-        public string Body, Error, Block;
+        public string Body, Error, Block, Document;
         public string Type = "", Title = "";
         public int Status;
         public bool Offline;
@@ -3201,6 +3238,56 @@ namespace MinGent
 
         public static string Fetch(string url, CancelToken ct, out bool ok, out string block, out int status) { return Fetch(url, ct, false, out ok, out block, out status); }
 
+        const int MaxPictureBytes = 20 * 1024 * 1024;
+
+        public static ImageData Picture(string url, CancelToken ct, bool stayLocal, out string error)
+        {
+            error = null;
+            string off = Net.Check(url);
+            if (off != null) { error = off; return null; }
+            HttpWebRequest req = null;
+            Action abort = null;
+            try
+            {
+                req = (HttpWebRequest)WebRequest.Create(url);
+                req.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36";
+                req.Accept = "image/png,image/jpeg,image/gif,image/bmp,image/*;q=0.8";
+                req.Timeout = req.ReadWriteTimeout = 25000;
+                req.AllowAutoRedirect = !stayLocal;
+                if (Net.IsLocal(url)) req.Proxy = null;
+                HttpWebRequest captured = req;
+                abort = delegate { try { captured.Abort(); } catch { } };
+                if (ct != null) ct.Register(abort);
+                using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+                using (Stream s = resp.GetResponseStream())
+                {
+                    string type = (resp.ContentType ?? "").ToLowerInvariant();
+                    if (!type.StartsWith("image/", StringComparison.Ordinal)) { error = "it is not a picture (" + resp.ContentType + ")"; return null; }
+                    MemoryStream ms = new MemoryStream();
+                    byte[] buf = new byte[65536];
+                    int n;
+                    while ((n = s.Read(buf, 0, buf.Length)) > 0)
+                    {
+                        ms.Write(buf, 0, n);
+                        if (ms.Length > MaxPictureBytes) { error = "the picture is larger than 20 MB"; return null; }
+                    }
+                    ms.Position = 0;
+                    try { using (Image img = Image.FromStream(ms)) return ImageTools.Encode(img, 1568); }
+                    catch { error = "MinGent can't open this kind of picture (" + resp.ContentType + "). Open it with browser_navigate and look at it there"; return null; }
+                }
+            }
+            catch (WebException wex)
+            {
+                if (ct != null && ct.IsCancelled) { error = "stopped"; return null; }
+                HttpResult r = new HttpResult();
+                Http.ReadError(r, wex);
+                error = r.Error ?? wex.Message;
+                return null;
+            }
+            catch (Exception ex) { error = ex.Message; return null; }
+            finally { if (ct != null && abort != null) ct.Unregister(abort); }
+        }
+
         public static string Fetch(string url, CancelToken ct, bool stayLocal, out bool ok, out string block, out int status)
         {
             ok = false;
@@ -3224,6 +3311,7 @@ namespace MinGent
             }
             if (w.Block == "bot") return "Could not read " + u.AbsoluteUri + ": " + host + " showed a bot-protection page" + (w.Title.Length > 0 ? " (\"" + w.Title + "\")" : "") + " instead of the content.";
             string body = w.Body;
+            if (w.Document != null) { ok = true; return "Document: " + u.AbsoluteUri + "\n" + body.Trim(); }
             bool html = w.Type.IndexOf("html", StringComparison.OrdinalIgnoreCase) >= 0 || body.TrimStart().StartsWith("<");
             string text = html ? HtmlToText(body) : body;
             if (html && text.Trim().Length < 200) block = "js";
@@ -3271,7 +3359,11 @@ namespace MinGent
                     w.Type = resp.ContentType ?? "";
                     foreach (string k in resp.Headers.AllKeys) w.Headers[k] = resp.Headers[k];
                     string lt = w.Type.ToLowerInvariant();
-                    if (lt.Length > 0 && lt.IndexOf("text", StringComparison.Ordinal) < 0 && lt.IndexOf("json", StringComparison.Ordinal) < 0 && lt.IndexOf("xml", StringComparison.Ordinal) < 0 && lt.IndexOf("javascript", StringComparison.Ordinal) < 0)
+                    string fileName = FileNameOf(resp.Headers["Content-Disposition"], resp.ResponseUri ?? new Uri(url));
+                    string docExt = DocText.ExtForType(lt, fileName);
+                    if (docExt != null) ReadDocument(w, s, docExt, ct);
+                    else if (lt.Length > 0 && lt.IndexOf("text", StringComparison.Ordinal) < 0 && lt.IndexOf("json", StringComparison.Ordinal) < 0 && lt.IndexOf("xml", StringComparison.Ordinal) < 0 && lt.IndexOf("javascript", StringComparison.Ordinal) < 0 &&
+                             lt.IndexOf("yaml", StringComparison.Ordinal) < 0 && lt.IndexOf("toml", StringComparison.Ordinal) < 0 && lt.IndexOf("csv", StringComparison.Ordinal) < 0 && !(Untyped(lt) && TextName(fileName)))
                         w.Error = "it is not a text page (" + w.Type + ")";
                     else
                     {
@@ -3313,6 +3405,57 @@ namespace MinGent
             catch (Exception ex) { w.Error = ex.Message; }
             finally { if (ct != null && abort != null) ct.Unregister(abort); }
             return w;
+        }
+
+        const int MaxDocBytes = 64 * 1024 * 1024;
+
+        static bool Untyped(string type)
+        {
+            string t = type ?? "";
+            int semi = t.IndexOf(';');
+            if (semi >= 0) t = t.Substring(0, semi);
+            t = t.Trim();
+            return t == "application/octet-stream" || t == "binary/octet-stream" || t == "application/x-download" || t == "application/download" || t == "application/force-download";
+        }
+
+        static readonly string[] TextExts = { ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".xml", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".log", ".html", ".htm", ".css", ".js", ".mjs", ".ts", ".py", ".cs", ".java", ".go", ".rs", ".c", ".h", ".cpp", ".hpp", ".rb", ".php", ".ps1", ".bat", ".cmd", ".sh", ".sql", ".srt", ".vtt", ".tex", ".bib", ".svg" };
+
+        static bool TextName(string name)
+        {
+            string ext = "";
+            try { ext = (Path.GetExtension(name ?? "") ?? "").ToLowerInvariant(); } catch { }
+            return Array.IndexOf(TextExts, ext) >= 0;
+        }
+
+        static string FileNameOf(string disposition, Uri at)
+        {
+            if (!string.IsNullOrEmpty(disposition))
+            {
+                Match m = Regex.Match(disposition, @"filename\*=(?:UTF-8'')?""?([^"";]+)", RegexOptions.IgnoreCase);
+                if (!m.Success) m = Regex.Match(disposition, @"filename=""?([^"";]+)", RegexOptions.IgnoreCase);
+                if (m.Success) { try { return Uri.UnescapeDataString(m.Groups[1].Value.Trim()); } catch { return m.Groups[1].Value.Trim(); } }
+            }
+            try { return Uri.UnescapeDataString(at.AbsolutePath); } catch { return at.AbsolutePath; }
+        }
+
+        static void ReadDocument(WebResult w, Stream s, string ext, CancelToken ct)
+        {
+            MemoryStream ms = new MemoryStream();
+            byte[] buf = new byte[65536];
+            int n;
+            while ((n = s.Read(buf, 0, buf.Length)) > 0)
+            {
+                ms.Write(buf, 0, n);
+                if (ms.Length > MaxDocBytes) { w.Error = "the " + DocText.KindName("x" + ext) + " is larger than " + (MaxDocBytes / (1024 * 1024)) + " MB, which is more than web_fetch reads"; return; }
+                if (ct != null && ct.IsCancelled) { w.Error = "stopped"; return; }
+            }
+            string err;
+            DocInfo d = DocText.FromBytes(ms.ToArray(), ext, ct, out err);
+            if (d == null) { w.Error = err; return; }
+            w.Document = d.Kind;
+            string head = d.Kind + (d.Pages > 0 ? ", " + d.Pages + (d.Pages == 1 ? " page" : " pages") : "");
+            if (d.NoText) w.Body = head + ". " + (d.Kind == "PDF" ? "It has no text MinGent can read: it is probably scanned images (MinGent does not read text out of pictures), or it uses fonts that hide their characters." : "It has no text.");
+            else w.Body = head + ":\n\n" + d.Text + (d.Cut ? "\n...(the document is very long; MinGent read the first " + DocText.MaxChars.ToString("N0", CultureInfo.InvariantCulture) + " characters)" : "");
         }
 
         static readonly TimeSpan PageTime = TimeSpan.FromSeconds(3), ScanTime = TimeSpan.FromSeconds(1);
@@ -3419,7 +3562,31 @@ namespace MinGent
 
     abstract class BrowserTool : AgentTool
     {
+        protected static bool OwnPage(ToolContext ctx, string url)
+        {
+            Uri u;
+            if (ctx.Changes == null || !Uri.TryCreate(url ?? "", UriKind.Absolute, out u) || !u.IsFile) return false;
+            try { return ctx.Changes.Recorded(Path.GetFullPath(u.LocalPath)); } catch { return false; }
+        }
+
+        protected static bool OwnControl(ToolContext ctx, string kind)
+        {
+            string k = kind ?? "";
+            if (k.StartsWith("a payment box", StringComparison.Ordinal) || k.StartsWith("a CAPTCHA", StringComparison.Ordinal) || k == "a spot MinGent could not check") return false;
+            return OwnPage(ctx, ctx.Browser.CurrentUrl);
+        }
+
         protected string Gate(ToolContext ctx, string targetUrl) { return SiteGate(ctx, targetUrl); }
+
+        public static bool LocalOnly(ToolContext ctx)
+        {
+            IBrowserBridge b = ctx.Browser;
+            Uri u;
+            if (b == null || !Uri.TryCreate(b.CurrentUrl ?? "", UriKind.Absolute, out u) || !u.IsFile) return false;
+            string full;
+            try { full = Path.GetFullPath(u.LocalPath); } catch { return false; }
+            return !AgentPaths.Foreign(full) && b.PageIsLocal(ctx.Ct);
+        }
 
         public static string LocalOnly(ToolContext ctx, string url)
         {
@@ -3743,7 +3910,8 @@ namespace MinGent
                 string said = ctx.Browser.CloseForAgent(false);
                 return ToolOutcome.Ok(said, said.StartsWith("Closed", StringComparison.Ordinal) ? "Closed" : said.IndexOf("stays open", StringComparison.Ordinal) >= 0 ? "Left open for the user" : "Already closed");
             }
-            bool nav = special == "back" || special == "forward" || special == "reload";
+            if (special == "about:blank") url = special;
+            bool nav = special == "back" || special == "forward" || special == "reload" || special == "about:blank";
             string gateUrl = nav ? null : url;
             if (!nav)
             {
@@ -3813,9 +3981,9 @@ namespace MinGent
     class BrowserReadTool : BrowserTool
     {
         public override string Name { get { return "browser_read"; } }
-        public override string Description { get { return "Read the page open in the browser: its text and a numbered list of interactive elements (links, buttons, fields) with refs like e12 for browser_click and browser_type."; } }
-        public override Dictionary<string, object> Schema { get { return Obj(); } }
-        public override string Label(Dictionary<string, object> a) { return "Read the page"; }
+        public override string Description { get { return "Read the page open in the browser: its text and a numbered list of interactive elements (links, buttons, fields) with refs like e12 for browser_click and browser_type. A long page comes in parts: ask for the next one with part."; } }
+        public override Dictionary<string, object> Schema { get { return Obj("part", P("integer", "Which part of a long page to read: 1, 2, 3... (default 1)"), false); } }
+        public override string Label(Dictionary<string, object> a) { int p = I(a, "part", 1); return p > 1 ? "Read the page (part " + p + ")" : "Read the page"; }
         public override bool Untrusted { get { return true; } }
 
         public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
@@ -3823,10 +3991,12 @@ namespace MinGent
             string g = Gate(ctx, null);
             if (g != null) { ToolOutcome d = ToolOutcome.Fail(g); d.Denied = true; return d; }
             string text;
-            string err = ctx.Browser.Read(ctx.Ct, out text);
+            int part = Math.Max(1, I(a, "part", 1));
+            BrowserPane pane = ctx.Browser as BrowserPane;
+            string err = part > 1 && pane != null ? pane.Read(ctx.Ct, part, out text) : ctx.Browser.Read(ctx.Ct, out text);
             Looked(ctx);
             if (err == null) ctx.Session.BrowserMovedTo = null;
-            return PageNotes(ctx, Result(err, FrameHint(ctx, text), "Read the page", true));
+            return PageNotes(ctx, Result(err, FrameHint(ctx, text), part > 1 ? "Read the page (part " + part + ")" : "Read the page", true));
         }
     }
 
@@ -3940,7 +4110,7 @@ namespace MinGent
                 return ClickMany(ctx, many, pm);
             }
             bool pos = byPosition && r.Length == 0 && a != null && a.ContainsKey("x") && a.ContainsKey("y");
-            if (r.Length == 0 && !pos) return ToolOutcome.Fail(byPosition ? "give ref (like e12, from browser_read), or x and y (pixels in the last browser_screenshot)" : "ref is required");
+            if (r.Length == 0 && !pos) return ToolOutcome.Fail((byPosition ? "give ref (like e12, from browser_read), or x and y (pixels in the last browser_screenshot)." : "ref is required.") + Sent(a));
             string merr;
             MouseSpec mouse = MouseSpec.From(S(a, "button"), B(a, "right", false), B(a, "double", false), I(a, "clicks", 1), S(a, "modifiers"), I(a, "hold_ms", 0), out merr);
             if (mouse == null) return ToolOutcome.Fail(merr);
@@ -3962,7 +4132,7 @@ namespace MinGent
                     string stop = CaptchaTurn(ctx, pkind);
                     if (stop != null) return ToolOutcome.Fail(stop);
                 }
-                if (psens && !(captcha && ctx.Cfg.TryCaptchas))
+                if (psens && !(captcha && ctx.Cfg.TryCaptchas) && !OwnControl(ctx, pkind))
                 {
                     PermissionAsk pask = new PermissionAsk();
                     pask.Kind = "browser";
@@ -3993,7 +4163,7 @@ namespace MinGent
                 string stop = CaptchaTurn(ctx, kind);
                 if (stop != null) return ToolOutcome.Fail(stop);
             }
-            if (sensitive && !(isCaptcha && ctx.Cfg.TryCaptchas))
+            if (sensitive && !(isCaptcha && ctx.Cfg.TryCaptchas) && !OwnControl(ctx, kind))
             {
                 PermissionAsk ask = new PermissionAsk();
                 ask.Kind = "browser";
@@ -4009,6 +4179,7 @@ namespace MinGent
             string err = ctx.Browser.ClickElement(r, mouse, ctx.Ct, out summary);
             if (isCaptcha && err == null && kind.StartsWith("a CAPTCHA box", StringComparison.Ordinal)) ctx.Session.CaptchaSubmitted = true;
             ToolOutcome ro = Act(ctx, err, FrameHint(ctx, summary), mouse.Describe() + " " + r);
+            if (ro.Error && BrowserPane.WasDisabled(err)) ro.Summary = "Disabled, not clicked";
             if (isCaptcha) LookAfterCaptcha(ctx, ro, true);
             return ro;
         }
@@ -4037,7 +4208,7 @@ namespace MinGent
         {
             string r = (S(a, "ref") ?? "").Trim();
             bool pos = byPosition && r.Length == 0 && a != null && a.ContainsKey("x") && a.ContainsKey("y");
-            if (r.Length == 0 && !pos) return ToolOutcome.Fail(byPosition ? "give ref (like e12), or x and y from the last browser_screenshot" : "ref is required");
+            if (r.Length == 0 && !pos) return ToolOutcome.Fail((byPosition ? "give ref (like e12), or x and y from the last browser_screenshot." : "ref is required.") + Sent(a));
             ToolOutcome stale = Stale(ctx);
             if (stale != null) return stale;
             string g = Gate(ctx, null);
@@ -4085,7 +4256,7 @@ namespace MinGent
             string r = (S(a, "ref") ?? "").Trim(), t = (S(a, "to_ref") ?? "").Trim();
             bool fromPos = byPosition && r.Length == 0 && a != null && a.ContainsKey("x") && a.ContainsKey("y");
             bool toPos = byPosition && t.Length == 0 && a != null && a.ContainsKey("to_x") && a.ContainsKey("to_y");
-            if (r.Length == 0 && !fromPos) return ToolOutcome.Fail("give the start: ref" + (byPosition ? " or x and y" : ""));
+            if (r.Length == 0 && !fromPos) return ToolOutcome.Fail("give the start: ref" + (byPosition ? " or x and y." : ".") + Sent(a));
             if (t.Length == 0 && !toPos) return ToolOutcome.Fail("give the end: to_ref" + (byPosition ? " or to_x and to_y" : ""));
             ToolOutcome stale = Stale(ctx);
             if (stale != null) return stale;
@@ -4106,7 +4277,7 @@ namespace MinGent
                     string stop = CaptchaTurn(ctx, kind);
                     if (stop != null) return ToolOutcome.Fail(stop);
                 }
-                if (sensitive && !(dragCaptcha && ctx.Cfg.TryCaptchas))
+                if (sensitive && !(dragCaptcha && ctx.Cfg.TryCaptchas) && !OwnControl(ctx, kind))
                 {
                     PermissionAsk ask = new PermissionAsk();
                     ask.Kind = "browser";
@@ -4133,7 +4304,7 @@ namespace MinGent
                     string stop = CaptchaTurn(ctx, pkind);
                     if (stop != null) return ToolOutcome.Fail(stop);
                 }
-                if (psens && !(posCaptcha && ctx.Cfg.TryCaptchas))
+                if (psens && !(posCaptcha && ctx.Cfg.TryCaptchas) && !OwnControl(ctx, pkind))
                 {
                     PermissionAsk pask = new PermissionAsk();
                     pask.Kind = "browser";
@@ -4158,7 +4329,7 @@ namespace MinGent
     class BrowserTypeTool : BrowserTool
     {
         public override string Name { get { return "browser_type"; } }
-        public override string Description { get { return "Type text into a field in the browser by its ref from browser_read. Without a ref it types wherever the keyboard focus is (for editors, games and canvases: click them first). clear (default true) replaces the current value; submit=true presses Enter afterwards."; } }
+        public override string Description { get { return "Type text into a field in the browser by its ref from browser_read. It also sets drop-down lists (give the option's text), sliders (a number) and date, time and colour fields (such as 2026-12-24) in one step. Without a ref it types wherever the keyboard focus is (for editors, games and canvases: click them first). clear (default true) replaces the current value; submit=true presses Enter afterwards."; } }
         public override Dictionary<string, object> Schema
         {
             get
@@ -4218,6 +4389,7 @@ namespace MinGent
             string err = ctx.Browser.TypeText(r, text, submit, B(a, "clear", true), ctx.Ct, out summary);
             if (answer && err == null) ctx.Session.CaptchaSubmitted = true;
             ToolOutcome o = Act(ctx, err, FrameHint(ctx, summary), r.Length > 0 ? "Typed into " + r : "Typed in the page");
+            if (o.Error && BrowserPane.WasDisabled(err)) o.Summary = "Disabled, nothing typed";
             if (answer && ctx.Cfg.TryCaptchas && submit) LookAfterCaptcha(ctx, o, false);
             return o;
         }
@@ -4496,12 +4668,13 @@ namespace MinGent
             }
             List<Bitmap> frames = new List<Bitmap>();
             List<double> got = new List<double>();
+            string[] asked = VideoFrames.Stamps(times);
             try
             {
                 for (int i = 0; i < times.Count; i++)
                 {
                     if (ctx.Ct.IsCancelled) return ToolOutcome.Fail("Stopped.");
-                    ctx.Ui.Phase("Looking at the video at " + VideoFrames.Label(times[i]) + (times.Count > 1 ? " (" + (i + 1) + " of " + times.Count + ")" : ""));
+                    ctx.Ui.Phase("Looking at the video at " + asked[i] + (times.Count > 1 ? " (" + (i + 1) + " of " + times.Count + ")" : ""));
                     Bitmap frame;
                     VideoShot at;
                     err = ctx.Browser.VideoFrame(times[i], ctx.Ct, out frame, out at);
@@ -4524,15 +4697,17 @@ namespace MinGent
                     using (Bitmap sheet = VideoFrames.Sheet(frames, got, VideoFrames.SheetWidth)) pictures.Add(ImageTools.Encode(sheet, VideoFrames.SheetWidth));
                 }
                 string name = info.Title.Length > 0 ? info.Title : VideoFrames.NameOf(ctx.Browser.CurrentUrl);
+                string[] stamps = VideoFrames.Stamps(got);
+                string seen = string.Join(", ", stamps);
                 StringBuilder sb = new StringBuilder();
                 sb.Append("Video \"").Append(name).Append("\" on ").Append(ctx.Browser.CurrentUrl).Append(": ").Append(VideoFrames.Label(info.Duration)).Append(" long");
                 if (info.Width > 0 && info.Height > 0) sb.Append(", ").Append(info.Width).Append(" x ").Append(info.Height);
                 sb.Append(".\n");
-                if (close) sb.Append(frames.Count == 1 ? "The picture shows it at " : "The pictures show it at ").Append(VideoFrames.Labels(got)).Append(frames.Count == 1 ? "." : ", in this order.");
-                else sb.Append("The sheet shows ").Append(frames.Count).Append(" moments from ").Append(VideoFrames.Label(from)).Append(" to ").Append(VideoFrames.Label(to)).Append(", left to right and top to bottom, each with its time in the corner: ").Append(VideoFrames.Labels(got)).Append(". For a closer look, call watch_video with times, or with from and to around the part you need.");
+                if (close) sb.Append(frames.Count == 1 ? "The picture shows it at " : "The pictures show it at ").Append(seen).Append(frames.Count == 1 ? "." : ", in this order.");
+                else sb.Append("The sheet shows ").Append(frames.Count).Append(" moments from ").Append(VideoFrames.Label(from)).Append(" to ").Append(VideoFrames.Label(to)).Append(", left to right and top to bottom, each with its time in the corner: ").Append(seen).Append(". For a closer look, call watch_video with times, or with from and to around the part you need.");
                 if (frames.Count < times.Count) sb.Append("\nThe other moments could not be shown: ").Append(err);
-                sb.Append("\nThe video is paused at ").Append(VideoFrames.Label(got[got.Count - 1])).Append(".");
-                ToolOutcome o = ToolOutcome.Ok(sb.ToString(), close ? (frames.Count == 1 ? "Looked at " + VideoFrames.Label(got[0]) : "Looked at " + frames.Count + " moments") : "Watched " + VideoFrames.Label(from) + " to " + VideoFrames.Label(to));
+                sb.Append("\nThe video is paused at ").Append(stamps[stamps.Length - 1]).Append(".");
+                ToolOutcome o = ToolOutcome.Ok(sb.ToString(), close ? (frames.Count == 1 ? "Looked at " + stamps[0] : "Looked at " + frames.Count + " moments") : "Watched " + VideoFrames.Label(from) + " to " + VideoFrames.Label(to));
                 o.Images = pictures;
                 o.Untrusted = true;
                 return o;
@@ -4619,19 +4794,14 @@ namespace MinGent
                 r.Summary = "Not run";
                 return r;
             }
-            if (!OwnPage(ctx, url) && !ctx.Approve(Ask(ctx, url, code, S(a, "description")))) { ToolOutcome d = ToolOutcome.Fail("The user did not allow running this code."); d.Denied = true; return d; }
+            PermissionState ps = ctx.Session.Perms;
+            bool quiet = OwnPage(ctx, url) || (ps.Auto && !(ps.WebGuard && ps.Tainted) && LocalOnly(ctx));
+            if (!quiet && !ctx.Approve(Ask(ctx, url, code, S(a, "description")))) { ToolOutcome d = ToolOutcome.Fail("The user did not allow running this code."); d.Denied = true; return d; }
             string result;
             string e2 = ctx.Browser.ConsoleRun(code, url, ctx.Ct, out result);
             ToolOutcome o = Result(e2, result, "Ran code in the console", true);
             o.Detail = code + "\n\n" + (e2 ?? result ?? "");
             return o;
-        }
-
-        static bool OwnPage(ToolContext ctx, string url)
-        {
-            Uri u;
-            if (ctx.Changes == null || !Uri.TryCreate(url ?? "", UriKind.Absolute, out u) || !u.IsFile) return false;
-            try { return ctx.Changes.Recorded(Path.GetFullPath(u.LocalPath)); } catch { return false; }
         }
 
         static string CaptchaRefusal(ToolContext ctx, string code)
@@ -5005,7 +5175,9 @@ namespace MinGent
                 if (sl != null) sl.Others = true;
             }
             if (at < 0) return;
-            tools.Insert(at + 1, new AppAccessTool());
+            AppAccessTool access = new AppAccessTool();
+            access.Blind = ((AppTool)tools[at]).Blind;
+            tools.Insert(at + 1, access);
         }
 
         public static void UseSandbox(List<AgentTool> tools, bool on)
@@ -5110,6 +5282,7 @@ namespace MinGent
             l.Add(new AppScrollTool());
             l.Add(new AppHoverTool());
             l.Add(new AppDragTool());
+            foreach (AgentTool t in l) if (t is AppTool) ((AppTool)t).Blind = !vision;
             return l;
         }
 

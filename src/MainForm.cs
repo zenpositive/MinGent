@@ -1107,6 +1107,7 @@ namespace MinGent
             if (shell.BrowserOn != show)
             {
                 browser.Visible = show;
+                if (!show) browser.MarkClosed();
                 shell.BrowserOn = show;
                 settings.BrowserVisible = show;
                 shell.PerformLayout();
@@ -1152,6 +1153,7 @@ namespace MinGent
                     return;
                 }
                 BringFront(holder);
+                holder.ShowFound(sidebar.Query);
                 RefreshSidebar();
                 return;
             }
@@ -1161,7 +1163,7 @@ namespace MinGent
                 RefreshSidebar();
                 return;
             }
-            aiPanel.OpenChat(path);
+            aiPanel.OpenChat(path, sidebar.Query);
             RefreshSidebar();
         }
 
@@ -1206,7 +1208,7 @@ namespace MinGent
             b.ConsoleHeight = settings.BrowserConsoleHeight > 0 ? UI.S(settings.BrowserConsoleHeight) : 0;
             b.ConsoleHeightChanged += delegate (int h) { settings.BrowserConsoleHeight = (int)Math.Round(h / UI.Scale); };
             b.ShowRequested += delegate { if (b == browser) ShowBrowser(true, false); else Park(b); };
-            b.CloseRequested += delegate { if (b == browser) ShowBrowser(false, false); else b.Visible = false; };
+            b.CloseRequested += delegate { if (b == browser) ShowBrowser(false, false); else { b.Visible = false; b.MarkClosed(); } };
             return b;
         }
 
@@ -1312,8 +1314,9 @@ namespace MinGent
                 }
                 if (now.Parent != shell) { now.Visible = false; now.Parent = shell; }
                 shell.Browser = now;
-                if (parked) show = true;
+                show = parked;
                 now.Visible = show;
+                if (!show) now.MarkClosed();
                 shell.BrowserOn = show;
                 settings.BrowserVisible = show;
                 now.ParentMoved();
@@ -1416,12 +1419,12 @@ namespace MinGent
             return true;
         }
 
-        const string DeleteAllText = "Delete all chats?\n\nThey're erased from this PC, archived ones too, and can't be brought back. Each chat's own folder in Files goes with it; other folders the agent worked in stay. What the agent remembered from them is forgotten; facts you added yourself in Settings > Memory stay.";
-
         string DeleteAllPrompt()
         {
             List<string> unsaved = UnsavedNotes(null);
-            return DeleteAllText + (unsaved.Count > 0 ? "\n\nTheir notes close too, and unsaved changes in " + AiPanel.NoteNames(unsaved) + " are lost." : "");
+            return "Delete all chats?\n\nThey're erased from this PC, archived ones too, and can't be brought back. Each chat's own folder in Files goes with it; other folders the agent worked in stay" +
+                   (Schedule.InChatFolders(settings.DefaultWorkspace) ? ", and so does a chat's folder that a scheduled task works in" : "") +
+                   ". What the agent remembered from them is forgotten; facts you added yourself in Settings > Memory stay." + (unsaved.Count > 0 ? "\n\nTheir notes close too, and unsaved changes in " + AiPanel.NoteNames(unsaved) + " are lost." : "");
         }
 
         bool AskErase(IWin32Window owner, out bool downloads, out bool outputs)
@@ -1831,6 +1834,11 @@ namespace MinGent
 
         public int RunChangeCount(int runId, RunChangeLog log)
         {
+            return RunPaths(runId, log).Count;
+        }
+
+        public HashSet<string> RunPaths(int runId, RunChangeLog log)
+        {
             HashSet<string> files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             RunTabs rt;
             if (runTabs.TryGetValue(runId, out rt))
@@ -1839,7 +1847,7 @@ namespace MinGent
             {
                 foreach (string f in log.NetPaths()) files.Add(f);
             }
-            return files.Count;
+            return files;
         }
 
         public string UndoRun(int runId, RunChangeLog log, out int reverted, out int keptCount)
@@ -3806,7 +3814,13 @@ namespace MinGent
         public void RunStarted(int runId) { main.RunStarted(runId); }
         public void RunEnded() { if (Pane != null) Pane.AgentRunEnded(); }
         public int RunChangeCount(int runId, RunChangeLog log) { return main.RunChangeCount(runId, log); }
-        public string UndoRun(int runId, RunChangeLog log, out int reverted, out int kept) { return main.UndoRun(runId, log, out reverted, out kept); }
+        public string UndoRun(int runId, RunChangeLog log, out int reverted, out int kept)
+        {
+            HashSet<string> touched = main.RunPaths(runId, log);
+            string said = main.UndoRun(runId, log, out reverted, out kept);
+            if (Pane != null && reverted > 0) Pane.ReloadIfShowing(touched);
+            return said;
+        }
         public void ShowSettings() { main.ShowSettings(); }
         public void ShowSettings(string page) { main.ShowSettings(page); }
         public void ShowModelLibrary() { main.ShowModelLibrary(); }
