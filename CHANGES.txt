@@ -1,6 +1,262 @@
 MinGent - what changed
 ======================
 
+Version 1.5.0
+- Gemini web: when Gemini answers with another model than the one you
+  picked, the chat says which one, and says so again when your model is
+  back. Google can do this near the usage limit or when a model is busy.
+- Gemini web: a model that thinks for a long time, such as Gemini 4 Argon,
+  now gets up to 10 minutes. Before, MinGent stopped waiting after 4
+  minutes and quietly sent the request again, up to 4 times, so a long
+  think could look like it never ended. While it waits, the status line
+  says how long the model has been thinking, and when it stops waiting it
+  says so in the chat.
+- Gemini web: the model menu shows the models your Gemini plan includes,
+  as Gemini's own menu does. Gemini also lists models from higher plans,
+  such as 4 Carbon on a Pro plan, and MinGent showed those too.
+- Gemini web: a chat waiting while another chat or a helper uses Gemini
+  now says so, instead of seeming to think.
+- Gemini web: an icon next to the context ring shows how much of Gemini's
+  usage limits you have used: two small bars for the 5-hour and the weekly
+  limit, and the higher percentage. Hovering it shows when each one resets.
+  The notice about another model answering, and the message when a limit
+  is reached, say the same.
+- Watching a video file on this PC works. The built-in browser reported
+  every video file as "could not be opened" even while it showed the
+  video, so the agent gave up on it.
+- The final answer is the only text you need to read: everything the agent
+  writes while it works stays in the steps. A longer text no longer stays
+  in the open once the next step starts.
+- When a model wrote its answer next to its last step and then only said
+  it was done, the steps showed a "Done." that wasn't the end, MinGent asked
+  the model again, and the answer could show up twice. Now that answer
+  becomes the final answer, and the model isn't asked again.
+- When a model clicks without saying where, the error now says what it
+  sent, so it can correct the call instead of repeating it.
+- Watching a short video, or moments less than a second apart, showed
+  the same time on two pictures (0:10, 0:10, 0:12, 0:12). Each picture now
+  has its own time, with tenths of a second where whole seconds can't tell
+  them apart.
+- On a page the agent made or changed in the same task, a button whose
+  label sounds like paying, such as "Delete: Buy milk" on a to-do list it
+  built, no longer asks for your OK. Payment boxes from other sites inside
+  such a page still ask.
+- A command that named a path with spaces in quotes, such as a file in the
+  chat's own folder, could be called "outside the work folder" and ask in
+  Auto mode. The whole path is checked now.
+- When a run was stopped or ended without an answer, a short note the agent
+  wrote on the way ("...I'll write the story now.") could show as if it
+  were the answer. It stays inside the steps now.
+- The line that sums up the steps counts what happened: code run in a web
+  page's console is browser use, not commands; showing a file in Notes is
+  not reading it; steps in a program name the program ("Used Calculator");
+  new files count as created, not edited, and patches as edited files;
+  saving to memory or scheduling a task is named first instead of counted
+  as "other steps"; and a step that failed, such as an edit that didn't
+  apply or a page that couldn't be read, is no longer counted as done.
+- A Word, PowerPoint or PDF file that used the same picture twice gave
+  both the second one's caption. Each keeps its own now, and the picture is
+  still stored once.
+- Percentages in Excel workbooks the agent reads show as they do in Excel
+  (27.5%), not as the number behind them (0.275).
+- The agent was told its work folder as "<folder> (this chat's own
+  folder)". Chat folders are named after the first message, so a model
+  could take the note for part of the folder's name and use a path that
+  doesn't exist, in commands and in its answer. The note now comes before
+  the path.
+- A chart's axis mixed units, such as 5000 next to 10K and 15K, or 500K
+  next to 1M. Every number on an axis now uses the same unit.
+- In a temporary chat, or with memory switched off, the agent is now told
+  so. Asked to remember something, it says memory is off instead of
+  looking for another place to keep it, such as MinGent's own memory file.
+- When the agent asks to read a file in MinGent's Data folder, the question
+  now says what the folder holds: chats, memory, settings with saved API
+  keys and the browser's sign-ins.
+- Fewer questions for work on pages from files on this PC. Such a page now
+  counts as web content only when it loads something from the web (pictures,
+  data, frames, live connections) or sits in Downloads or a temporary folder,
+  the same rule as reading the file itself. Before, testing a page the agent
+  had just built in the browser made Auto ask before every later command and
+  download. In Auto, console code on such a page no longer asks either,
+  unless the chat has read web content.
+- When the agent opens a program or you allow it to use one, MinGent and the
+  program go side by side right away. Before, that waited for the agent's
+  next step in the program.
+- Clicking a drop-down list in a page opened a menu outside the page that
+  the agent can't see, so it guessed with key presses. It is now told to
+  pick the option with browser_type, which also sets sliders and date
+  fields in one step.
+- A button on a web page that shows only an icon, such as a close X, a
+  bin or a magnifying glass, and has no label of its own, is now named
+  after its icon ("icon: close"). Before, the agent saw a row of buttons
+  without names and had to guess which one closes or deletes.
+- With a model that can't see pictures, reading a program's window now
+  says where each control and the large areas of the window are, so the
+  agent can click and drag by position, for example to draw in Paint. Such
+  a model had no way to point at anything without a name. The program and
+  browser tools also no longer tell it to take screenshots, which it can't;
+  when it asks for one anyway, it is told why there is none and what reads
+  the window or page instead.
+- A link meant to open in a new tab on a page from this PC was blocked. It
+  opens in the browser pane, as links on websites already did.
+- After Undo, the agent is told which files went back and which went to
+  the Recycle Bin. Before, it went on from the undone version: asked about a
+  change you had just undone, it described it as still there.
+- Undo reloads the browser pane when it shows a page the undo changed back,
+  so the page matches its files again. Before, it kept showing the undone
+  version until you reloaded it.
+- A scheduled task could work in a chat's own folder, and deleting that
+  chat deleted the folder, so the task stopped running. The folder now
+  stays while a task works in it, and the delete question says so. A task
+  set up from a chat that hasn't made any files gets its own folder.
+- A new chat no longer starts with an empty browser pane. When the agent
+  had opened the pane, it stayed open and blank after a new chat, another
+  chat or a temporary chat began, and took room from the chat, most of all
+  with MinGent beside a program. It now closes unless you have been using
+  it. A chat started while another one works no longer opens a blank pane
+  either, and going back to a chat shows its pane only if it was open there.
+- The agent could not close a browser pane it had opened itself: when it
+  was the first use of the browser since MinGent started, or after the
+  chat had worked in the background, it was told you had opened the pane,
+  so the pane stayed.
+- When the account with a model's provider is out of credit, such as
+  DeepSeek's "Insufficient Balance", the chat now says so and what to do
+  about it, instead of only "The model returned an error".
+- When a provider's content filter refuses a request, such as DeepSeek's
+  "Content Exists Risk", the chat says so and its button starts a new chat,
+  since asking again in the same chat meets the same filter. MinGent no
+  longer sends such a request a second time, nor one refused for lack of
+  credit. The message that a conversation is too long for the model gets
+  the New chat button too, in place of "Try again".
+- Typing into a program's field that already held text put the new text
+  where the click landed, in the middle of the field: a box that kept the
+  last search, such as Notepad's Find, ended up with both mixed together.
+  The typed text now replaces what a one-line field holds and goes at the
+  end of a larger text area, and the agent can choose the other way. The
+  same goes for a box you can type into or pick from, such as a font size:
+  "24" no longer turns 11 into 1124.
+- Reading a program's window showed only the first 100 characters of a
+  text field, so the agent couldn't read a document open in a program, or
+  check what it had written there, unless it could take a screenshot.
+  app_read now shows the whole text of a long field, with its lines, up to
+  4,000 characters a field.
+- The agent can read a PDF, Word, Excel or PowerPoint file on the web,
+  such as a paper on arXiv or a report a site links to. web_fetch said "it
+  is not a text page" for them, and the browser shows a PDF in a viewer
+  whose text can't be read from the page, so asked to sum up a PDF from a
+  link, the agent couldn't. Reading a PDF open in the browser now gives its
+  text too, also one behind the site's sign-in.
+- web_fetch also reads YAML and TOML files, and a text file a server sends
+  without a type, such as a Markdown file in cloud storage. With a model
+  that can see pictures, a link to a picture shows the picture. It called
+  all of these "not a text page".
+- A right-click menu, or another menu a program opens, now comes back with
+  the click that opened it, with its items for the agent to click or Escape
+  to close it. Before, the agent saw only the window under the menu, so it
+  couldn't pick anything from a right-click menu.
+- When a step in a program opens another window next to the one the agent
+  works in, such as a colour palette that drops down from a toolbar or a
+  new document window, the step says so and names the window, so the agent
+  can read it. Before, it didn't know the window was there.
+- A link to a file in the agent's answer works when the path has spaces,
+  as every chat's own folder does ("Files\Plan a trip\..."). Before, the
+  link stopped at the first space, so clicking it did nothing. A link to a
+  folder now opens the folder, a picture opens larger, a file Notes can't
+  show opens its folder, and a file that is gone says so. The agent now
+  links the files it made or changed in its answer, so they open with a
+  click.
+- The agent can read all of a long page in the browser, such as a long
+  article or a thread behind a sign-in, part by part. Before, it got only
+  the start: the page was cut and it was told to scroll, which didn't
+  change what it read.
+- Searching the chat list finds chats by what you and the agent wrote in
+  them, not only by their titles. Opening a chat from the search scrolls
+  to the first place the words come up and selects them, also in the
+  agent's steps.
+- An answer with a table has "Copy the table" in its right-click menu. The
+  table pastes as a table into Excel, Word or Google Sheets, instead of as
+  Markdown text in a single column.
+- In a program's list with more items than the agent is shown at once,
+  such as a long playlist or file list, reading the window after scrolling
+  now lists the items in view. Before, it always listed the first items, so
+  the agent couldn't reach the rest by scrolling.
+- Clicking an item in a program's list or tree, such as a file, a song or
+  a folder in a file dialog's side pane, now clicks it once where it is.
+  Before, MinGent used the item's own default action, which for many lists
+  is a double-click, so the item opened, and for folders it only folded
+  them open or shut.
+- A click, drag or hover aimed at a control that is out of view in a
+  program, such as a field further down a long form, went to whatever else
+  was at that place on the screen. The agent is now told to scroll it into
+  view first. Typing into such a field still works when the field takes
+  the keyboard focus, and a control half in view is clicked where it shows.
+- Clicking a button that is greyed out, such as Next before a form is
+  filled in, did nothing without a word, in a program or on a web page,
+  and neither did typing into a greyed-out field. The agent is now told
+  the control is disabled and that the program or page wants something
+  else first.
+- The agent can read and search a file another program is still writing,
+  such as a server's or a game's log. Windows refused it as "being used by
+  another process", so the agent couldn't look at the log of something
+  running.
+- Reading a program with a big window, such as a music player or a chat
+  app, could leave out controls without saying so, most often the ones at
+  the bottom, like a player's play button. MinGent stopped after a fixed
+  number of elements, and many of them were empty frames. Now only controls
+  and labels count, the ones in view are listed first, and the agent is
+  told when there are more, which app_read lists with part=2.
+- A program window that shows no controls the first time it is read, such
+  as one still starting or one built on web pages that makes its controls
+  only once something asks for them, is read again a moment later, and a
+  start-up screen that closed in the meantime is reported as closed. Before,
+  the agent was told right away that the program has no controls it can
+  read, and fell back on screenshots.
+- Opening a program that shows a start-up screen first, such as an office
+  program or a game launcher, hands the agent the main window once it is
+  up, and that window goes side by side with MinGent. Before, the agent got
+  the start-up screen, which closed a moment later.
+- When a program stops responding for a while, for example while it saves
+  or exports, reading it or taking its screenshot waits up to 15 seconds
+  for it to answer, and then says it is still busy. Before, reading it took
+  up to 9 seconds and then said the program has no controls the agent can
+  read, and the agent ran commands just to wait, each asking for your OK.
+- Looking at the whole screen while a program was busy left that program
+  out and said none of the agent's windows was on the screen. The busy
+  window now shows as a marked blank box, and the agent is told why.
+- A minimized program window is brought back when the agent reads it,
+  without taking the keyboard from what you are doing. Before, the agent
+  saw a tiny window far off the screen, every control in it counted as
+  out of view, and clicks on it were refused for that reason.
+- Putting a minimized or maximized program next to MinGent, which happens
+  at the agent's first step in it for each request, no longer makes that
+  program the active window. Before, typing meant for MinGent could land
+  in the program.
+- A click or typing in a program finds the control where it is at that
+  moment. Before, a control that moved after the agent read the window,
+  such as a file in a dialog that was still loading, was looked for where
+  it had been, so the step could miss it or call it out of sight.
+- Reading a classic Windows program, such as a dialog or a settings
+  window, listed most buttons, fields and labels two to four times, once
+  for the control and again for the window holding it. Each is listed once
+  now, so a long window fits more controls in one read.
+- Steps in a program name what the agent clicked or typed into, such as
+  Click the "Play" button, as steps in the browser already did, instead of
+  an internal number like a12.
+- A failed step keeps enough of its title to show what was tried. Before,
+  a long error left only "Click th..." next to it. A click or typing turned
+  down because the control is disabled says just that: "Disabled, not
+  clicked".
+- After the agent reads a program's window, its questions say so. Before,
+  they said the chat had read web content and that a page could have
+  slipped in instructions.
+- Stop also stops the agent in the middle of typing into a program. Before,
+  a long text went on being typed for up to half a minute after Stop.
+- Reading a program without naming a window now takes one the agent
+  started itself before one that Windows only opened for it, such as a
+  program another chat opened. When the picked window isn't allowed, the
+  agent is shown the other windows instead of only "The user did not
+  allow this", which made it think its own program had vanished.
+
 Version 1.4.0
 - The refs the agent uses for buttons and fields (a12 in a program, e12 on
   a web page) now stay the same while the control stays where it is.

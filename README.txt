@@ -25,7 +25,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.4.0. Report problems at
+This is version 1.5.0. Report problems at
 https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -67,7 +67,7 @@ themselves. Each of those is a way in: a hijacked maintainer account or a
 look-alike package runs its code on your PC, next to your files, keys and
 sign-ins. MinGent has none of that.
 - No packages. It uses only the .NET Framework that comes with Windows. All
-  of it is in "src": about 91,000 lines of C# you can read, and the
+  of it is in "src": about 93,000 lines of C# you can read, and the
   optional Gemini helper for your browser, about 300 lines of JavaScript.
 - No prebuilt programs. A release is the source code and Build-MinGent.bat,
   which compiles it with csc.exe from Windows itself.
@@ -95,7 +95,7 @@ sign-ins. MinGent has none of that.
   Full auto asks nothing. The check reads the command; it can't see what a
   script does once it runs.
 To check a download, compare its SHA-256 with the one on the release page.
-In PowerShell: Get-FileHash .\MinGent-1.4.0.zip
+In PowerShell: Get-FileHash .\MinGent-1.5.0.zip
 
 
 YOUR OWN ICON
@@ -118,9 +118,11 @@ part of MinGent.exe.
 THE WINDOW
 ----------
 - Left: your chats, grouped by Today, Yesterday, Previous 7 days and so on,
-  with a search box, New chat, Models (the model library) and Settings. The
-  button at the top folds the list into a narrow rail; it does that by itself
-  when the window gets too narrow.
+  with a search box (it finds chats by their titles and by what you and the
+  agent wrote in them, and a chat you open from it shows where the words
+  come up), New chat, Models (the model library) and Settings. The button at
+  the top folds the list into a narrow rail; it does that by itself when the
+  window gets too narrow.
 - Each chat's "..." button has Rename, Archive and Delete. Archived chats
   leave the list but stay on your PC; "Archived chats" at the bottom of the
   list shows them, and opening one moves it back. Deleting a chat deletes
@@ -187,7 +189,9 @@ CHATS
   offers a plan, type there what to change.
 - Select any text in the chat with the mouse and copy it (Ctrl+C), or use the
   Copy button under an answer or a code block. Right-click for "Copy the whole
-  conversation". Error messages and notices can be selected and copied too,
+  conversation", or on an answer with a table for "Copy the table", which
+  pastes into Excel, Word or Google Sheets as a table. Error messages and
+  notices can be selected and copied too,
   and error dialogs have a Copy button.
 - Bigger jobs get a plan, shown as a checklist above the message box. While
   the agent works, the step it is on shows next to its status; click the
@@ -209,7 +213,8 @@ CHATS
 - Documents: attach a PDF, Word, Excel, PowerPoint, OpenDocument, RTF or EPUB
   file with + (or name it in your message) and the agent reads its text -
   PDFs page by page, spreadsheets as tables, slides with their speaker notes.
-  Scanned PDFs that are only pictures can't be read.
+  It reads such files from a web link too. Scanned PDFs that are only
+  pictures can't be read.
 - Sound files: attach or name a WAV, MP3, M4A, FLAC, WMA or other sound file,
   or a video, and the agent measures its sound: loudness, peaks and clipping,
   silences and background noise, stereo, frequency balance, the strongest
@@ -409,8 +414,9 @@ models..." for the full list.
   yours because no program may add an extension to a browser by itself.
   From then on the helper finds MinGent whenever both are running, and
   MinGent starts the browser when it isn't.
-  The models your account has show up in the model menu with their thinking
-  levels, and the context length follows your plan (32K, 128K or 1M). They
+  The models your plan includes show up in the model menu with their
+  thinking levels, read from your account each time, so new models appear by
+  themselves. The context length follows your plan (32K, 128K or 1M). They
   work like any other model: tools, pictures, long chats. Requests run in a
   Gemini tab of that browser under your own sign-in (the helper opens a
   pinned one when none is open), so your Google cookies never leave the
@@ -476,7 +482,9 @@ Made for local models
   and doesn't ask again for 30 minutes. Google hides each result's address
   behind its own link, so MinGent looks up the real address and the agent gets
   normal links it can read and cite. Reading a page from its address stays a
-  direct download, without the browser. Searches use the built-in browser's
+  direct download, without the browser; it also reads PDF, Word, Excel and
+  PowerPoint files, and shows a picture to models that can see pictures. A
+  long page in the browser is read in parts. Searches use the built-in browser's
   own sign-ins: if you signed in to Google there, they show up in that
   account's search history like your own. When the browser is off, searches go
   to DuckDuckGo, DuckDuckGo Lite and Bing directly. Results that have nothing
@@ -727,7 +735,8 @@ ASK, AUTO OR FULL AUTO
   inside it) and Allow on clicking and typing in a program or in its file
   dialog. Files the agent made in the same task, and pages it made or
   changed in that task, need no question to delete, to give to a page on
-  this PC or to run console code in.
+  this PC, to run console code in or to click a button there whose label
+  sounds like paying.
   Auto (switch on): it works on its own and asks only before risky things
   (see below).
   Full auto (red): it asks nothing at all. It warns you the first time and
@@ -762,7 +771,10 @@ ASK, AUTO OR FULL AUTO
   Auto is for work you trust and Full auto for work you can afford to lose;
   use Ask when in doubt.
 - Prompt-injection guard (on by default): web pages can contain text written to
-  trick an AI. Once the agent has read web content in a chat, Auto mode asks
+  trick an AI. A page from a file on this PC counts as web content only when
+  it loads something from the web or the file is in Downloads or a temporary
+  folder, the same as reading the file. Once the agent has read web content
+  in a chat, Auto mode asks
   again before commands, before writes outside the workspace, before
   changes to your skills (the agent follows them in later chats, so in any
   mode but Full auto MinGent asks), before
@@ -837,7 +849,7 @@ Workspace
   so a chat that makes nothing leaves nothing behind. Deleting a chat
   deletes its folder too, and the delete question says how many files are
   in it; archiving a chat keeps it. A temporary chat's folder goes when the
-  temporary chat ends.
+  temporary chat ends. A folder a scheduled task works in stays.
 - To work on files you already have, tell the agent where they are; it can
   read and change files anywhere it is allowed to. To make another folder
   the chat's work folder, so the agent changes files in it without asking
@@ -887,9 +899,10 @@ THE BROWSER
 - It has its own profile, separate from your normal browsers: sign in there to
   the sites you want the agent to use, and the sign-ins stay. Every chat
   starts on a fresh page, so a new chat never carries on in the last chat's
-  tab or its back / forward history. The agent closes the pane when it no
-  longer needs it, or when you ask it to (the same goes for the notes pane);
-  a pane you are using stays open unless you ask. Settings > Privacy >
+  tab or its back / forward history, and a pane the agent opened for the
+  last chat closes. The agent closes the pane when it no longer needs it, or
+  when you ask it to (the same goes for the notes pane); a pane you are
+  using stays open unless you ask. Settings > Privacy >
   "Wipe browser data" signs you out of every site and erases the profile's
   history, cache and site data.
 - When a site answers with a bot check or blocks automated access, the agent
@@ -964,6 +977,8 @@ THE BROWSER
   "Running code in the browser console" in Settings > Safety is on (switching
   it off shows a warning). On a website the question is red: code there can
   do anything you can do on that site while signed in. Full auto doesn't ask.
+  In Auto, a page from a file on this PC that loads nothing from the web
+  doesn't ask, unless the chat has read web content.
 - The question says in plain words what the code does. MinGent reads the
   code itself and names what matters: reading or changing cookies and data
   the site stored in the browser, reading form fields or saved sign-ins,
