@@ -1,6 +1,197 @@
 MinGent - what changed
 ======================
 
+Version 1.6.0
+- Gemini web: the usage icon's weekly bar shows your weekly use. MinGent
+  read the usage from the reply behind Gemini's chat badge, which holds
+  only the fuller of the two limits, so the other bar stayed at 0. It now
+  reads the reply behind Gemini's Usage limits page, which lists both.
+- Gemini web: clicking the usage icon opens its details, as clicking the
+  context ring does: a bar for the 5-hour and the weekly limit, how much
+  of each is used, when each resets and how old the reading is.
+- Build-MinGent.bat says less and only what's true now. The option to
+  build with your own icon (an icon.png next to it) is gone, and so is
+  the note about a "C# 5" compiler message that no longer shows.
+- Programs: a click, drag, scroll or hover at a position in a program now
+  checks which window is really at that spot first. If another window is
+  in front of it, such as a notification or a window that stays on top,
+  nothing is sent and the agent is told why. Before, only clicks on a
+  control were checked, so a click at a position could land in the other
+  window.
+- Programs: positions from a screenshot are no longer used after the
+  window changed size, since they would point at other parts of it. The
+  agent is asked to take a new screenshot first.
+- Programs: the agent now sees the buttons, menus, lists and text of
+  Windows 11 apps built with WinUI, such as Paint. Before, Paint's window
+  looked empty to it, so it had to work from screenshots and guess where
+  to click.
+- Programs: when a click opens a drop-down or pop-up in such an app, the
+  agent sees its contents right away, as it does with menus.
+- Programs: when a menu, drop-down or other pop-up that closes on a click
+  outside it is still open and the agent clicks, drags or types somewhere
+  else in the program, MinGent closes it first. Such a click only closes
+  the pop-up, so in Paint the agent's click on a color did nothing and it
+  kept trying. Pop-ups that stay open, such as Paint's text toolbar, are
+  left alone.
+- Programs: a control picked by its ref is used in the window the ref
+  came from, even when the agent names another window. Before, the step
+  failed and had to be repeated.
+- Programs: typing into a box that takes both typed text and picks from
+  a list, such as the font size in Paint, replaces what the box held, as
+  in other one-line fields. Before, the new text went after the old, so
+  48 typed over 11 became 1148. The agent also sees which such boxes it
+  can type into.
+- Programs: clicks and drags move the mouse the way a real mouse does.
+  In Paint, the first drag after picking a tool or a color drew nothing,
+  because the app never saw the pointer arrive.
+- Programs: many programs reopen your documents or tabs when they start,
+  as Notepad does. The agent is told to make a new document or tab for its
+  work there and to leave yours as they are.
+- Programs: a program whose main window is a dialog, such as Character
+  Map, now also goes next to MinGent, as other programs do. So does a
+  program whose main window belongs to a hidden window of its own.
+- Programs: when something the agent does makes the program go full
+  screen, MinGent puts it back on its half of the screen, next to
+  MinGent, so you can keep following along.
+- Some model servers lose number arguments, such as where to click, on
+  the way to MinGent. When that happens, MinGent switches the chat's tools
+  to take numbers as text, so the next try works. Before, the agent sent
+  the same click again and again until MinGent stopped it.
+- Browser: when a click opens a page dialog, the agent can answer
+  Cancel, or type the text a prompt asks for. Before, MinGent always
+  answered OK and left prompts empty, so a page that asked for text never
+  got any.
+- Browser: code the agent runs on a page gives back lists and objects in
+  full. Before, a list of objects came back as "Array(3) [Object, Object,
+  Object]" and the agent had to run the code again.
+- Reading an Excel file tells the agent what each column holds: text,
+  numbers, dates, percentages or formulas. To check that a workbook it
+  made has real dates and numbers, the agent took the file apart with
+  commands, and each one needed your OK.
+- MinGent goes back to its own size when you start a new chat or open
+  another one, once no chat is working. Before, it stayed at half the
+  screen as long as the program the agent had used was open.
+- The question before the agent opens a program says how long the
+  permission lasts: until the program closes. It said "Until this chat
+  ends", but the program stays usable after that.
+- Commands: reading back a Word, PDF, Excel or PowerPoint file the agent
+  made in the same chat no longer makes its later commands wait for your
+  OK. When a file the agent didn't write does, the question now says it
+  read a file, instead of "web content".
+- Commands: after the agent read a web page or a program's window,
+  PowerShell commands that only read no longer ask first, also short
+  scripts with variables, loops and filters, such as counting the rows of
+  a file it downloaded. Commands that change something, run code, reach
+  the internet or touch keys and passwords still ask, and so does reading
+  many files outside the work folder at once.
+- Commands: a folder written as $env:USERPROFILE, $HOME or ~ is judged
+  like the same folder written out. Listing your Downloads to check on a
+  file asked after the agent had read a web page, though the same command
+  with the full path did not. Keys, passwords and app data still ask.
+- Auto: the switch under the message box is just Auto on or off. How
+  careful Auto is, you pick in Settings > Safety under "Auto asks before":
+  Risky steps (the new default), Most steps, your own choice, or Nothing,
+  which is Full auto. Full auto left the menu next to the switch; it still
+  warns you first and turns back into your Auto choice when MinGent closes.
+- Auto with Risky steps opens and uses programs and saves downloads
+  without asking, the kinds of question it asked most. Choose Most steps in
+  Settings > Safety to keep the old questions.
+- Auto: after the agent read a program's window, it no longer asks before
+  clicking and typing on in that same program, or in a program you allowed
+  in the chat. Text from the web, a file or another program still makes
+  it ask first, and so does a file dialog, which can save anywhere.
+- Auto: files a page downloads, such as PDFs and pictures, no longer ask
+  first after the agent read the page. Programs, scripts and archives still
+  ask.
+- Safety: when the agent reads a password, key or token in a file, a
+  command's output or a program's window, MinGent now asks before that
+  value goes into a web address, a search or a field on a website, also
+  when it is short. Pages on this PC, such as a site being built, are not
+  asked about.
+- Safety: after the agent read web content, a risky question now says so,
+  also in Ask mode, and code for a page on this PC can no longer be allowed
+  for the whole chat.
+- Safety: after the agent read web content, changing a file inside a
+  project's .git folder asks first. Git runs the hooks and settings kept
+  there without showing them, so a page could have used them to run
+  something later. Git commands work as before.
+- Auto runs code in a web page that only reads the page without asking.
+  Code that changes the page, sends something or reads cookies, saved
+  data or form fields still asks.
+- Browser: on a page that loads more as you scroll, such as a feed, the
+  agent is told when more loaded and how long the page is now. Before,
+  every scroll at the bottom said the same thing, so the agent couldn't
+  tell that anything new had come and ran page code to count instead.
+- Browser: when a site asks about cookies, the agent turns down the
+  optional ones unless you tell it otherwise. Before, it often accepted
+  them all to get the question out of the way.
+- Browser: things a page lets you drag, such as cards, boxes or list
+  items, get refs, so the agent can drag them by ref. So do sortable
+  column headings and places that react to a right-click or double-click.
+  Before, the agent had to find them on a screenshot, which a model
+  without vision can't do.
+- Browser: a drag and drop that changed the page is reported as taken.
+  Before, a page that handled the drop without saying so was reported as
+  not handling it, and the agent took a screenshot to check.
+- Browser: parts of a page built from web components are read as they
+  show on screen. Before, the agent also saw their hidden placeholder
+  text, such as a default title, and some of their text out of order.
+- Browser: parts of a page that come from another site, such as an
+  embedded form, editor, sign-in button or cookie question, are read with
+  the rest of the page, and the agent clicks, types, picks and gives
+  files in them by ref. Before, it only saw that such a part was there
+  and could reach it only by position in a screenshot, which a model
+  without vision can't do, and typing into one asked you every time.
+  Payment and CAPTCHA boxes from other sites still ask.
+- Browser: a dialog, cookie question or other box that sits on top of
+  a page is read first. Before, it came where it sits in the page's
+  code, on a long page often at the very end, so the agent had to read
+  on or take a screenshot to find what was in the way.
+- Browser: long links, headlines and boxes you can click are shown
+  whole, text typed into an editor is read back line by line with its
+  headings and lists, and a text area shows what it holds. Before, each
+  was cut after 80 or 120 characters, so the agent ran page code or took
+  a screenshot to read the rest.
+- Browser: a link that starts a download no longer comes back as "the
+  page could not be opened". When the download began a moment after the
+  click, the agent got that error and the file was dropped. MinGent now
+  waits for it, and a download that shows up after a step is dealt with
+  at the next one.
+- Browser: the agent can click words on a page that have no ref, such
+  as a plain "Close" that only reacts through the page's code or a table
+  heading that sorts, by giving the words. Before, that took a position
+  from a screenshot, which a model without vision can't get.
+- Browser: items inside other items, such as the entries of a submenu,
+  the files in a folder tree or the close button of a tab, get refs of
+  their own, and so do pictures. Before, only the outer item was listed,
+  named after everything inside it, and a picture could only be hovered
+  or clicked by position.
+- Browser: a drop-down, slider or text box built by the page itself
+  shows what it holds, as the built-in kinds do, and a button whose
+  spoken label differs from its words shows both. Before, the agent saw
+  only the label, so it could not tell what a custom drop-down was set to.
+- Browser: buttons and menus whose label is drawn by the page's style
+  sheet, such as the heading menu of a text editor, are listed with that
+  label. Before, they had no name, so the agent had to open each one or
+  look at a screenshot.
+- Browser: a part of the page that is still empty is listed as having
+  nothing in it yet, so the agent waits for it instead of taking it for
+  an empty box.
+- Browser and programs: the agent can wait a few seconds before reading
+  a page or a program that is still loading. Before, it ran a sleep
+  command to wait, which needed your OK once it had read a web page or a
+  program's window.
+- Programs: rows of a list with columns, such as in System Information,
+  come with the text of their other columns. Before, the agent saw only
+  the first column and had to read the rest from screenshots.
+- Programs: the list of programs the agent can open says that one
+  missing from it is most likely not installed, so the agent tells you
+  instead of trying other ways to start it.
+- Programs: tooltips and other pop-ups of Windows apps such as
+  Calculator are read, and a hover shows the tooltip right away. Before,
+  such a pop-up looked empty, so the agent read tooltips from screenshots,
+  and reading the pop-up made it read the window behind it again.
+
 Version 1.5.0
 - Gemini web: when Gemini answers with another model than the one you
   picked, the chat says which one, and says so again when your model is

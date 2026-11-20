@@ -25,7 +25,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.5.0. Report problems at
+This is version 1.6.0. Report problems at
 https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -95,24 +95,7 @@ sign-ins. MinGent has none of that.
   Full auto asks nothing. The check reads the command; it can't see what a
   script does once it runs.
 To check a download, compare its SHA-256 with the one on the release page.
-In PowerShell: Get-FileHash .\MinGent-1.5.0.zip
-
-
-YOUR OWN ICON
--------------
-MinGent comes with its own icon (src\MinGent.ico, the little robot face). To
-use a different one, put a picture next to Build-MinGent.bat, name it
-icon.png  and build again. It is converted into every size Windows uses
-(16 to 256 px).
-
-- Best: a square PNG, 256 x 256 px or bigger, with a transparent background.
-- If Explorer or a pinned taskbar button still shows the old icon after a
-  rebuild, that's the Windows icon cache. Unpin and pin again, or sign out and
-  back in.
-
-The converter (src\tools\MakeIcon.cs) is compiled into a temporary
-"build-temp" folder only when icon.png exists, and deleted afterwards. It is not
-part of MinGent.exe.
+In PowerShell: Get-FileHash .\MinGent-1.6.0.zip
 
 
 THE WINDOW
@@ -600,7 +583,10 @@ Programs on your PC
   several programs, or something only shows in a program's window. It asks
   for what the job needs before it starts, and the question shows its reason.
 - It can open a program by its name in the Start menu, such as Calculator
-  or Excel. MinGent asks first, except in Full auto. After your OK the agent
+  or Excel. MinGent asks first, except in Full auto, and in Auto while
+  "Starting and using other programs" is off in Settings > Safety, as it
+  is with Risky steps (Auto asks again once the chat has read a web page,
+  a file from outside or another program's window). After your OK the agent
   sees that program's windows and can click and type in them until the chat
   ends, without a second question. A program that starts through a launcher,
   such as a game from Steam, counts too when it starts within three minutes
@@ -726,7 +712,7 @@ Programs on your PC
 ASK, AUTO OR FULL AUTO
 ----------------------
 - The "Auto" switch under the message box decides how much it asks; the
-  arrow next to it has all three levels.
+  arrow next to it has Ask and Auto. Full auto is in Settings > Safety.
   Ask (switch off): it asks before running a command, before using the
   internet, and before changing files outside the workspace. Each request is
   a card in the chat with Allow / Allow for this chat / Deny. Allow on a
@@ -739,12 +725,17 @@ ASK, AUTO OR FULL AUTO
   sounds like paying.
   Auto (switch on): it works on its own and asks only before risky things
   (see below).
-  Full auto (red): it asks nothing at all. It warns you the first time and
-  goes back to Auto when you close MinGent. With a local model it also
+  Full auto (red): it asks nothing at all. Turn it on in Settings > Safety
+  with "Auto asks before: Nothing". It warns you the first time and goes
+  back to your Auto choice when you close MinGent; click the red switch to
+  turn it off sooner. With a local model it also
   points out that smaller models are easier for a web page to trick, so a
   frontier model such as Claude, GPT or Gemini is the safer choice.
-- What Auto still asks about is listed in Settings > Safety, one switch per
-  kind, all on until you switch one off:
+- "Auto asks before" in Settings > Safety picks how careful Auto is: Risky
+  steps (the default), Most steps, your own choice, or Nothing (Full auto).
+  Risky steps asks about every kind below except starting and using other
+  programs and downloading programs and archives in the browser; Most steps
+  asks about all of them. One switch per kind:
     Installing software and packages
     Starting and using other programs
     Deleting widely or outside the work folder
@@ -766,21 +757,41 @@ ASK, AUTO OR FULL AUTO
 - Sending one of your saved API keys to a website or over the internet asks
   first in Ask and Auto, and is refused in Full auto. The check looks for the
   key as written, so a command or script can get past it.
+- A password, key or token the agent read in this chat (a line like
+  "password: ..." in a file, a command's output or a program's window) asks
+  first in Ask and Auto before it goes into a web address, a web search or
+  a field on a website. Pages on this PC don't ask. The check looks for the
+  value as written.
 - These checks read the command; they catch common mistakes and tricks, but
   they cannot see every possible command or what a script does once it runs.
   Auto is for work you trust and Full auto for work you can afford to lose;
   use Ask when in doubt.
+- Code the agent runs in a web page's console that only reads the page,
+  as MinGent reads it, runs without asking in Auto; it can't send anything,
+  change the page or read cookies, saved data or form fields. PowerShell
+  commands that only read, such as Get-ChildItem, Get-Content, Import-Csv
+  or Get-Process, also in short scripts with variables, loops and filters,
+  run without asking in Auto even after the agent read web content. They
+  still ask when they touch keys, passwords or app data, reach another
+  computer, or read many files outside the work folder at once.
 - Prompt-injection guard (on by default): web pages can contain text written to
   trick an AI. A page from a file on this PC counts as web content only when
   it loads something from the web or the file is in Downloads or a temporary
   folder, the same as reading the file. Once the agent has read web content
   in a chat, Auto mode asks
-  again before commands, before writes outside the workspace, before
+  again before commands that could change things or reach the internet,
+  before writes outside the workspace, before
   changes to your skills (the agent follows them in later chats, so in any
-  mode but Full auto MinGent asks), before
+  mode but Full auto MinGent asks), before changes inside a project's .git
+  folder (git runs the hooks and settings there without showing them), before
   everything in the list above (also rows you switched off), and before
   opening addresses or searches that carry a lot of data, something that
-  looks like a password or key, or data hidden in a long site name. Page
+  looks like a password or key, or data hidden in a long site name. Text
+  read in a program's window or a file the agent didn't write counts the
+  same, except that what a program shows doesn't count against using that
+  same program: reading Calculator doesn't make it ask before clicking on in
+  Calculator, but it does before opening or using another program, and
+  before a file dialog, which can open or save files anywhere. Page
   text is passed to the model marked as untrusted data, with a note not to
   follow it, and that includes page text that shows up in error messages. A
   model can still be fooled.
@@ -810,7 +821,7 @@ ASK, AUTO OR FULL AUTO
 - A command runs outside the sandbox only after you allow that command, or
   in Full auto: when the agent asks for it, when MinGent asks about the
   command anyway (installs, opening programs), or when the sandbox can't
-  start. A row you switched off in "What Auto still asks about" keeps such
+  start. A row you switched off in "What Auto asks about" keeps such
   commands in the sandbox instead of letting them out without asking.
 - The sandbox limits what a command can change, not what you run later: a
   script or program a sandboxed command changed in the work folder does
@@ -892,6 +903,10 @@ THE BROWSER
   current Windows 10) in a pane next to the chat. The agent can open pages, read
   them, click, type, scroll and take screenshots (with models that can see
   images); you watch it happen and can take over any time.
+- Parts of a page that come from another site (an embedded form, editor,
+  sign-in button or cookie question) are read with the page, and the agent
+  clicks and types in them as in the rest of it. Up to six such parts are
+  read at a time, those on screen first, and advertising is skipped.
 - To websites it looks like ordinary Microsoft Edge: MinGent adds nothing to
   the pages and sets no automation flags. The agent reads and clicks from a
   separate, private script context that pages cannot see or tamper with. The
@@ -955,9 +970,11 @@ THE BROWSER
   refused automatically, just for that moment - the site can still ask you
   later. Downloads you start go to your Downloads folder as usual; downloads the
   agent starts (also ones that begin a moment after its click) go to the
-  workspace's downloads folder. Ask mode asks before every download; Auto asks
-  before programs, scripts and archives unless you switch off "Downloading
-  programs and archives in the browser"; Full auto doesn't ask.
+  workspace's downloads folder. Ask mode asks before every download. Auto
+  saves other files without asking; programs, scripts and archives ask first
+  when "Downloading programs and archives in the browser" is on, or once the
+  agent has read web content with the prompt-injection guard on, which is
+  nearly always the case in the browser. Full auto doesn't ask.
 - Google does not allow signing in to Google accounts from apps' built-in
   browsers (this applies to every app, not only MinGent). When a page sends
   you there, MinGent shows "Open in your browser" to continue in your normal
@@ -977,8 +994,9 @@ THE BROWSER
   "Running code in the browser console" in Settings > Safety is on (switching
   it off shows a warning). On a website the question is red: code there can
   do anything you can do on that site while signed in. Full auto doesn't ask.
-  In Auto, a page from a file on this PC that loads nothing from the web
-  doesn't ask, unless the chat has read web content.
+  In Auto, code that only reads the page doesn't ask, and neither does a
+  page from a file on this PC that loads nothing from the web, unless the
+  chat has read web content.
 - The question says in plain words what the code does. MinGent reads the
   code itself and names what matters: reading or changing cookies and data
   the site stored in the browser, reading form fields or saved sign-ins,

@@ -28,7 +28,7 @@ if not defined CSC (
 for %%I in ("%CSC%") do set "NET=%%~dpI"
 set "SYS=%WINDIR%\System32"
 
-set "SOURCES=Program.cs Theme.cs Syntax.cs Document.cs EditorView.cs TabStrip.cs FindBar.cs MainForm.cs UiKit.cs PixelIcons.cs Json.cs Net.cs Eraser.cs Http.cs Secret.cs Llm.cs ModelCatalog.cs ModelLibrary.cs Engine.cs Shell.cs AgentCore.cs AgentTools.cs AgentAssist.cs AgentExtras.cs AgentHelpers.cs Skills.cs Charts.cs Schedule.cs Projects.cs Video.cs QuickEntry.cs YouTube.cs Audio.cs AudioDetail.cs AudioFocus.cs Release.cs ReleaseKeys.cs Updater.cs Markdown.cs TexParse.cs TexLayout.cs Documents.cs PdfText.cs DocBuild.cs DocExport.cs DocxWriter.cs XlsxWriter.cs PptxWriter.cs PdfFont.cs PdfLayout.cs PdfWriter.cs AppHighlight.cs ChatView.cs AiPanel.cs Attachments.cs Terminal.cs Browser.cs BrowserWindows.cs BrowserScripts.cs BrowserConsole.cs ConsoleDrawer.cs WebView2Interop.cs GeminiWeb.cs GeminiHelper.cs SettingsDialog.cs ModelLibraryDialog.cs Controls.cs Sidebar.cs"
+set "SOURCES=Program.cs Theme.cs Syntax.cs Document.cs EditorView.cs TabStrip.cs FindBar.cs MainForm.cs UiKit.cs PixelIcons.cs Json.cs Net.cs Eraser.cs Http.cs Secret.cs Llm.cs ModelCatalog.cs ModelLibrary.cs Engine.cs Shell.cs AgentCore.cs AgentTools.cs AgentAssist.cs AgentExtras.cs Uia.cs AgentHelpers.cs Skills.cs Charts.cs Schedule.cs Projects.cs Video.cs QuickEntry.cs YouTube.cs Audio.cs AudioDetail.cs AudioFocus.cs Release.cs ReleaseKeys.cs Updater.cs Markdown.cs TexParse.cs TexLayout.cs Documents.cs PdfText.cs DocBuild.cs DocExport.cs DocxWriter.cs XlsxWriter.cs PptxWriter.cs PdfFont.cs PdfLayout.cs PdfWriter.cs AppHighlight.cs ChatView.cs AiPanel.cs Attachments.cs Terminal.cs Browser.cs BrowserWindows.cs BrowserScripts.cs BrowserConsole.cs ConsoleDrawer.cs WebView2Interop.cs GeminiWeb.cs GeminiHelper.cs SettingsDialog.cs ModelLibraryDialog.cs Controls.cs Sidebar.cs"
 set "FILES="
 for %%F in (%SOURCES% MinGent.manifest MinGent.ico helper\manifest.json helper\background.js helper\content.js helper\icon48.png helper\icon128.png) do (
     if not exist "src\%%F" (
@@ -55,24 +55,12 @@ if not errorlevel 1 (
 :notrunning
 set "ICONARGS=/win32icon:src\MinGent.ico /resource:src\MinGent.ico,MinGent.ico"
 set "HELPERARGS=/resource:src\helper\manifest.json,helper.manifest.json /resource:src\helper\background.js,helper.background.js /resource:src\helper\content.js,helper.content.js /resource:src\helper\icon48.png,helper.icon48.png /resource:src\helper\icon128.png,helper.icon128.png"
-set "USERICON="
-if exist "icon.png" set "USERICON=icon.png"
-if not defined USERICON if exist "icon.png.png" set "USERICON=icon.png.png"
-if exist "build-temp" rd /s /q "build-temp"
-if defined USERICON (
-    call :makeicon "%USERICON%"
-) else (
-    echo  Icon: the MinGent icon. Put an icon.png next to this file to use your own.
-)
-
-echo.
 echo  Compiler: %CSC%
 echo  Building MinGent.exe ...
 echo.
 
 "%CSC%" /nologo /noconfig /target:winexe /optimize+ /platform:anycpu /warn:4 /codepage:65001 /out:MinGent.exe /win32manifest:src\MinGent.manifest %ICONARGS% %HELPERARGS% /r:"%NET%System.dll" /r:"%NET%System.Core.dll" /r:"%NET%System.Drawing.dll" /r:"%NET%System.Windows.Forms.dll" /r:"%NET%System.Security.dll" /r:"%NET%System.IO.Compression.dll" /r:"%NET%System.IO.Compression.FileSystem.dll" /r:"%NET%System.Xml.dll" /r:"%NET%Accessibility.dll" %FILES%
 set "RESULT=%errorlevel%"
-if exist "build-temp" rd /s /q "build-temp"
 if not "%RESULT%"=="0" goto :failed
 if not exist "MinGent.exe" goto :failed
 
@@ -80,8 +68,6 @@ echo.
 echo  ==============================================================
 echo    Done. MinGent.exe was created here:
 echo    "%~dp0MinGent.exe"
-echo.
-echo    (A note from the compiler about "C# 5" is normal - ignore it.)
 echo.
 echo    README.txt explains how to pick a model and get started.
 echo  ==============================================================
@@ -93,7 +79,6 @@ start "" "%~dp0MinGent.exe"
 goto :end
 
 :failed
-if exist "build-temp" rd /s /q "build-temp"
 echo.
 echo  Build FAILED - see the messages above.
 echo.
@@ -104,23 +89,3 @@ exit /b 1
 :end
 endlocal
 exit /b 0
-
-:makeicon
-if not exist "src\tools\MakeIcon.cs" (
-    echo  [!] src\tools\MakeIcon.cs is missing, so icon.png cannot be used. Using the MinGent icon.
-    goto :eof
-)
-if not exist "build-temp" mkdir "build-temp"
-"%CSC%" /nologo /noconfig /target:exe /optimize+ /out:build-temp\MakeIcon.exe /r:"%NET%System.dll" /r:"%NET%System.Drawing.dll" src\tools\MakeIcon.cs > "build-temp\MakeIcon.log" 2>&1
-if errorlevel 1 (
-    type "build-temp\MakeIcon.log"
-    echo  [!] Could not build the icon converter. Using the MinGent icon.
-    goto :eof
-)
-"build-temp\MakeIcon.exe" "%~1" "build-temp\MinGent.ico"
-if errorlevel 1 (
-    echo  [!] Using the MinGent icon instead.
-    goto :eof
-)
-set "ICONARGS=/win32icon:build-temp\MinGent.ico /resource:build-temp\MinGent.ico,MinGent.ico"
-goto :eof
