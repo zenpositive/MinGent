@@ -1931,6 +1931,11 @@ namespace MinGent
         static readonly Regex CmdSay = new Regex(@"^echo(?:\.|[ \t]+([^%!^<>|]*))$", Ci);
         static readonly Regex CmdQuiet = new Regex(@"^(?:rem(?:[ \t].*)?|::.*|echo[ \t]+(?:off|on))$", Ci);
 
+        public static bool OnlyReads(string command, string shell, string cwd, string workspace)
+        {
+            return shell != "cmd" && PsReadOnly.Check(command, cwd, workspace);
+        }
+
         public static bool PlainWait(string command, string shell, out double seconds, out string printed)
         {
             seconds = 0;
@@ -3831,6 +3836,1080 @@ namespace MinGent
         {
             if (process != IntPtr.Zero) { TerminateProcess(process, 1); CloseHandle(process); }
             if (thread != IntPtr.Zero) CloseHandle(thread);
+        }
+    }
+    static class PsReadOnly
+    {
+        enum K { Word, Str, Var, Num, Punct, Sep, End }
+
+        class Tok
+        {
+            public K Kind;
+            public string Text = "";
+            public bool Spaced, Expands, Member;
+            public List<List<Tok>> Subs;
+        }
+
+        class Val
+        {
+            public string Literal;
+            public string Source = "other";
+            public bool Derived;
+        }
+
+        static HashSet<string> Set(params string[] items) { return new HashSet<string>(items, StringComparer.OrdinalIgnoreCase); }
+
+        static readonly HashSet<string> Readers = Set("get-content", "gc", "cat", "type", "select-string", "sls", "import-csv", "ipcsv");
+        static readonly HashSet<string> TextReaders = Set("get-content", "gc", "cat", "type", "select-string", "sls");
+        static readonly HashSet<string> Listers = Set("get-childitem", "gci", "ls", "dir", "get-item", "gi", "resolve-path", "rvpa");
+        static readonly HashSet<string> Takers = Set("test-path", "get-itemproperty", "gp", "get-acl", "get-filehash");
+        static readonly HashSet<string> Passers = Set("where-object", "sort-object", "sort", "select-object", "select", "get-unique", "gu");
+        static readonly HashSet<string> Blocks = Set("where-object", "foreach-object", "sort-object", "sort", "group-object", "group", "select-object", "select", "measure-object", "measure",
+            "format-table", "ft", "format-list", "fl", "format-wide", "fw");
+        static readonly HashSet<string> Others = Set("measure-object", "measure", "format-list", "fl", "format-table", "ft", "format-wide", "fw", "out-string", "group-object", "group",
+            "convertfrom-csv", "convertfrom-json", "convertto-json", "convertto-csv", "write-output", "write", "echo", "write-host", "out-host", "out-null", "compare-object", "diff", "split-path", "join-path",
+            "get-random", "get-process", "gps", "ps", "get-service", "gsv", "get-date", "get-location", "gl", "pwd", "get-psdrive", "gdr", "get-volume", "get-timezone", "get-culture",
+            "get-uptime", "get-hotfix", "get-command", "gcm", "get-alias", "gal", "get-computerinfo", "get-module", "get-host", "get-member", "gm", "start-sleep", "sleep");
+        static readonly HashSet<string> NotPaths = Set("-pattern", "-filter", "-include", "-exclude", "-first", "-last", "-skip", "-tail", "-totalcount", "-head", "-encoding", "-delimiter",
+            "-header", "-property", "-expandproperty", "-depth", "-algorithm", "-context", "-readcount", "-attributes", "-inputobject");
+        static readonly HashSet<string> Methods = Set("trim", "trimstart", "trimend", "split", "substring", "tolower", "toupper", "tolowerinvariant", "toupperinvariant", "replace", "contains",
+            "startswith", "endswith", "indexof", "lastindexof", "padleft", "padright", "tostring", "equals", "compareto", "gettype", "insert", "normalize", "adddays", "addhours", "addminutes",
+            "addseconds", "addmonths", "addyears", "toshortdatestring", "tolongdatestring", "tolocaltime", "touniversaltime", "subtract");
+        static readonly HashSet<string> Types = Set("int", "long", "double", "decimal", "string", "bool", "boolean", "datetime", "char", "int16", "int32", "int64", "uint16", "uint32", "uint64", "float",
+            "single", "byte", "math", "timespan", "array", "object", "void", "version", "guid", "convert", "io.path", "environment", "midpointrounding", "ordered", "pscustomobject", "hashtable",
+            "int[]", "string[]", "double[]", "object[]");
+        static readonly Dictionary<string, HashSet<string>> Statics = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase) {
+            { "math", Set("round", "floor", "ceiling", "abs", "max", "min", "sqrt", "pow", "truncate", "pi", "e") },
+            { "string", Set("join", "isnullorempty", "isnullorwhitespace", "format", "concat", "empty") },
+            { "io.path", Set("getextension", "getfilename", "getfilenamewithoutextension", "getdirectoryname", "combine", "changeextension", "ispathrooted", "getpathroot") },
+            { "datetime", Set("now", "today", "utcnow", "parse", "parseexact", "minvalue", "maxvalue", "daysinmonth", "isleapyear") },
+            { "timespan", Set("fromseconds", "fromminutes", "fromhours", "fromdays", "frommilliseconds", "zero") },
+            { "convert", Set("toint32", "toint64", "todouble", "todecimal", "tostring", "toboolean") },
+            { "environment", Set("username", "machinename", "osversion", "newline", "processorcount", "is64bitoperatingsystem") },
+            { "guid", Set("newguid") }, { "int", Set("parse", "maxvalue", "minvalue") }, { "int32", Set("parse", "maxvalue", "minvalue") }, { "int64", Set("parse", "maxvalue", "minvalue") },
+            { "long", Set("parse", "maxvalue", "minvalue") }, { "double", Set("parse", "maxvalue", "minvalue") },
+            { "decimal", Set("parse", "maxvalue", "minvalue", "round", "truncate", "floor", "ceiling") }, { "midpointrounding", Set("awayfromzero", "toeven") } };
+        static readonly HashSet<string> EnvNames = Set("username", "userprofile", "computername", "temp", "tmp", "appdata", "localappdata", "os", "processor_architecture", "number_of_processors",
+            "homedrive", "homepath", "systemroot", "windir", "programfiles", "programdata", "systemdrive", "userdomain");
+        static readonly Regex TypeWord = new Regex(@"^[A-Za-z_][A-Za-z0-9_.]*$", RegexOptions.CultureInvariant);
+        static readonly HashSet<string> TextOut = Set("out-string", "convertto-json", "convertto-csv");
+        static readonly HashSet<string> Reserved = Set("_", "psitem", "args", "input", "this", "true", "false", "null", "home", "pwd", "host", "executioncontext", "myinvocation", "error",
+            "profile", "shellid", "env", "matches", "lastexitcode", "foreach", "switch");
+        static readonly HashSet<string> SameItem = Set("fullname", "name", "pspath", "path");
+        static readonly Regex Op = new Regex(@"^-(?:[ci]?(?:eq|ne|gt|ge|lt|le|like|notlike|match|notmatch|contains|notcontains|in|notin|replace|split|join)|and|or|not|xor|f|is|isnot|as|band|bor|bnot)$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex Drive = new Regex(@"^[a-z][a-z0-9]+:", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex Private = new Regex(@"passw|secret|credential|vault|wallet|seed.?phrase|recovery.?(?:code|key)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex Name = new Regex(@"^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant);
+
+        public static Func<string, string> Env = Environment.GetEnvironmentVariable;
+        [ThreadStatic] static bool resolve;
+        static readonly Regex EnvWrite = new Regex(@"\benv:\w+\}?\s*[-+*/%]?=(?!=)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        static string Known(string name)
+        {
+            if (!resolve || name.Equals("temp", StringComparison.OrdinalIgnoreCase) || name.Equals("tmp", StringComparison.OrdinalIgnoreCase)) return null;
+            string v;
+            try { v = Env(name); }
+            catch (Exception) { return null; }
+            if (string.IsNullOrEmpty(v) || v.Length > 260 || v != v.Trim()) return null;
+            foreach (char c in v) if (c < ' ' || "$`\"'*?[]{}();|&<>,=%~".IndexOf(c) >= 0 || Odd(c) || Dash(c)) return null;
+            return v;
+        }
+
+        static string Home()
+        {
+            string profile = Known("userprofile");
+            if (profile == null) return null;
+            string drive, path;
+            try { drive = Env("HOMEDRIVE") ?? ""; path = Env("HOMEPATH") ?? ""; }
+            catch (Exception) { return null; }
+            if (drive.Length + path.Length > 0 && !string.Equals(drive + path, profile, StringComparison.OrdinalIgnoreCase)) return null;
+            return profile;
+        }
+
+        static int PathRest(string s, int at)
+        {
+            int j = at;
+            if (j >= s.Length || (s[j] != '\\' && s[j] != '/')) return j;
+            while (j < s.Length && Bare(s[j]) && "$\"'`[@&#~".IndexOf(s[j]) < 0 && !Odd(s[j])) j++;
+            return j < s.Length && ("$\"'`[@&#~".IndexOf(s[j]) >= 0 || Odd(s[j])) ? -1 : j;
+        }
+
+        public static bool Check(string command, string cwd, string workspace)
+        {
+            if (string.IsNullOrEmpty(command) || command.Length > 2000 || Norm("x", cwd) == null || CommandSafety.NeedsInternet(command)) return false;
+            resolve = !EnvWrite.IsMatch(command);
+            List<Tok> toks = Lex(command, 0);
+            if (toks == null) return false;
+            try
+            {
+                Dictionary<string, int> sets = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                Count(toks, sets);
+                Parser p = new Parser(toks, cwd, workspace ?? "");
+                foreach (KeyValuePair<string, int> kv in sets) if (kv.Value > 1) p.Unstable.Add(kv.Key);
+                return p.Script(null);
+            }
+            catch (Exception) { return false; }
+        }
+
+        static void Count(List<Tok> toks, Dictionary<string, int> sets)
+        {
+            for (int k = 0; k < toks.Count; k++)
+            {
+                Tok x = toks[k];
+                if (x.Subs != null) foreach (List<Tok> sub in x.Subs) Count(sub, sets);
+                Tok next = k + 1 < toks.Count ? toks[k + 1] : null;
+                string name = null;
+                if (x.Kind == K.Var && next != null && next.Kind == K.Punct && (next.Text == "=" || next.Text == "+=" || next.Text == "-=" || next.Text == "++" || next.Text == "--")) name = x.Text;
+                else if (x.Kind == K.Punct && (x.Text == "++" || x.Text == "--") && next != null && next.Kind == K.Var) name = next.Text;
+                else if (x.Kind == K.Word && !x.Member && x.Text.Equals("foreach", StringComparison.OrdinalIgnoreCase) && next != null && next.Kind == K.Punct && next.Text == "(" &&
+                         k + 2 < toks.Count && toks[k + 2].Kind == K.Var) name = toks[k + 2].Text;
+                if (name == null) continue;
+                int c;
+                sets.TryGetValue(name, out c);
+                sets[name] = c + 1;
+            }
+        }
+
+        static bool Odd(char c)
+        {
+            if (c == '\u2018' || c == '\u2019' || c == '\u201A' || c == '\u201B' || c == '\u201C' || c == '\u201D' || c == '\u201E') return true;
+            return c > 127 && char.IsWhiteSpace(c);
+        }
+
+        static bool Dash(char c) { return c == '\u2013' || c == '\u2014' || c == '\u2015'; }
+
+        static bool Bare(char c) { return !(c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == ';' || c == '|' || c == '(' || c == ')' || c == '{' || c == '}' || c == ',' || c == ']' || c == '<' || c == '>' || c == '='); }
+
+        static int EnvName(string s, int at)
+        {
+            if (string.Compare(s, at, "env:", 0, 4, StringComparison.OrdinalIgnoreCase) != 0) return -1;
+            int j = at + 4;
+            while (j < s.Length && Ident(s[j])) j++;
+            return j > at + 4 && EnvNames.Contains(s.Substring(at + 4, j - at - 4)) ? j : -1;
+        }
+
+        static readonly Regex Discard = new Regex(@"\G(?:[1-6*]?>>?[ \t]*\$null(?![A-Za-z0-9_])|[2-6*]>&1(?![0-9]))", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        static int SkipSingle(string s, int i)
+        {
+            i++;
+            while (i < s.Length)
+            {
+                if (s[i] == '\'') { if (i + 1 < s.Length && s[i + 1] == '\'') { i += 2; continue; } return i + 1; }
+                i++;
+            }
+            return -1;
+        }
+
+        static int SkipDouble(string s, int i)
+        {
+            i++;
+            while (i < s.Length)
+            {
+                char c = s[i];
+                if (c == '`') { i += 2; continue; }
+                if (c == '"') { if (i + 1 < s.Length && s[i + 1] == '"') { i += 2; continue; } return i + 1; }
+                if (c == '$' && i + 1 < s.Length && s[i + 1] == '(') { int e = SubEnd(s, i + 2); if (e < 0) return -1; i = e + 1; continue; }
+                i++;
+            }
+            return -1;
+        }
+
+        static int SubEnd(string s, int i)
+        {
+            int depth = 0;
+            while (i < s.Length)
+            {
+                char c = s[i];
+                if (c == '\'') { i = SkipSingle(s, i); if (i < 0) return -1; continue; }
+                if (c == '"') { i = SkipDouble(s, i); if (i < 0) return -1; continue; }
+                if (c == '(') depth++;
+                else if (c == ')') { if (depth == 0) return i; depth--; }
+                i++;
+            }
+            return -1;
+        }
+
+        static bool Ident(char c) { return char.IsLetterOrDigit(c) || c == '_'; }
+
+        static Tok Add(List<Tok> list, K kind, string text, bool spaced)
+        {
+            Tok t = new Tok();
+            t.Kind = kind;
+            t.Text = text;
+            t.Spaced = spaced;
+            list.Add(t);
+            return t;
+        }
+
+        static List<Tok> Lex(string s, int level)
+        {
+            if (level > 4) return null;
+            List<Tok> list = new List<Tok>();
+            int i = 0, n = s.Length;
+            bool spaced = true;
+            while (i < n)
+            {
+                char c = s[i];
+                if (c == ' ' || c == '\t' || c == '\r') { i++; spaced = true; continue; }
+                if (c == '\n' || c == ';') { Add(list, K.Sep, c == ';' ? ";" : "\n", true); i++; spaced = true; continue; }
+                if (c == '>' || ((c == '*' || (c >= '1' && c <= '6')) && i + 1 < n && s[i + 1] == '>'))
+                {
+                    Match d = Discard.Match(s, i);
+                    if (!d.Success || (!spaced && c != '>')) return null;
+                    i += d.Length;
+                    spaced = true;
+                    continue;
+                }
+                if (c == '`' && i + 1 < n && (s[i + 1] == '\n' || (s[i + 1] == '\r' && i + 2 < n && s[i + 2] == '\n'))) { i += s[i + 1] == '\n' ? 2 : 3; spaced = true; continue; }
+                if (c == '~' && (spaced || list.Count == 0) && (i + 1 >= n || s[i + 1] == '\\' || s[i + 1] == '/' || !Bare(s[i + 1])))
+                {
+                    int rest = PathRest(s, i + 1);
+                    if (rest < 0) return null;
+                    Add(list, K.Word, s.Substring(i, rest - i), spaced);
+                    i = rest;
+                    spaced = false;
+                    continue;
+                }
+                if (Odd(c) || Dash(c) || c == '<' || c == '&' || c == '`' || c == '~') return null;
+                if (c == '#')
+                {
+                    if (!spaced) return null;
+                    while (i < n && s[i] != '\n') i++;
+                    continue;
+                }
+                if (c == '\'')
+                {
+                    StringBuilder b = new StringBuilder();
+                    i++;
+                    while (true)
+                    {
+                        if (i >= n || Odd(s[i])) return null;
+                        if (s[i] == '\'')
+                        {
+                            if (i + 1 < n && s[i + 1] == '\'') { b.Append('\''); i += 2; continue; }
+                            i++;
+                            break;
+                        }
+                        b.Append(s[i]);
+                        i++;
+                    }
+                    Add(list, K.Str, b.ToString(), spaced);
+                    spaced = false;
+                    continue;
+                }
+                if (c == '"')
+                {
+                    StringBuilder b = new StringBuilder();
+                    bool expands = false;
+                    List<List<Tok>> subs = null;
+                    i++;
+                    while (true)
+                    {
+                        if (i >= n || Odd(s[i])) return null;
+                        char d = s[i];
+                        if (d == '"')
+                        {
+                            if (i + 1 < n && s[i + 1] == '"') { b.Append('"'); i += 2; continue; }
+                            i++;
+                            break;
+                        }
+                        if (d == '`')
+                        {
+                            if (i + 1 >= n || Odd(s[i + 1])) return null;
+                            expands = true;
+                            b.Append(s[i + 1]);
+                            i += 2;
+                            continue;
+                        }
+                        if (d == '$')
+                        {
+                            char e = i + 1 < n ? s[i + 1] : '\0';
+                            if (e == '(')
+                            {
+                                int end = SubEnd(s, i + 2);
+                                if (end < 0) return null;
+                                List<Tok> inner = Lex(s.Substring(i + 2, end - i - 2), level + 1);
+                                if (inner == null) return null;
+                                if (subs == null) subs = new List<List<Tok>>();
+                                subs.Add(inner);
+                                expands = true;
+                                b.Append(s, i, end + 1 - i);
+                                i = end + 1;
+                                continue;
+                            }
+                            if (e == '{') return null;
+                            if (Ident(e))
+                            {
+                                int env = EnvName(s, i + 1);
+                                if (env > 0)
+                                {
+                                    string known = Known(s.Substring(i + 5, env - i - 5));
+                                    if (known != null) { b.Append(known); i = env; continue; }
+                                    expands = true;
+                                    b.Append(s, i, env - i);
+                                    i = env;
+                                    continue;
+                                }
+                                int j = i + 1;
+                                while (j < n && Ident(s[j])) j++;
+                                if (j < n && s[j] == ':') return null;
+                                string home = j - i == 5 && string.Compare(s, i + 1, "home", 0, 4, StringComparison.OrdinalIgnoreCase) == 0 ? Home() : null;
+                                if (home != null) { b.Append(home); i = j; continue; }
+                                expands = true;
+                            }
+                        }
+                        b.Append(d);
+                        i++;
+                    }
+                    Tok t = Add(list, K.Str, b.ToString(), spaced);
+                    t.Expands = expands;
+                    t.Subs = subs;
+                    spaced = false;
+                    continue;
+                }
+                if (c == '$' && i + 1 < n && s[i + 1] == '(') { Add(list, K.Punct, "(", spaced); i += 2; spaced = false; continue; }
+                if (c == '$')
+                {
+                    int env = EnvName(s, i + 1);
+                    if (env > 0)
+                    {
+                        string known = Known(s.Substring(i + 5, env - i - 5));
+                        int rest = known != null ? PathRest(s, env) : -1;
+                        if (rest >= 0) { Add(list, K.Str, known + s.Substring(env, rest - env), spaced); i = rest; spaced = false; continue; }
+                        Add(list, K.Var, s.Substring(i + 1, env - i - 1).ToLowerInvariant(), spaced);
+                        i = env;
+                        spaced = false;
+                        continue;
+                    }
+                    int j = i + 1;
+                    while (j < n && Ident(s[j])) j++;
+                    if (j == i + 1 || (j < n && s[j] == ':')) return null;
+                    if (j - i == 5 && string.Compare(s, i + 1, "home", 0, 4, StringComparison.OrdinalIgnoreCase) == 0 && j < n && (s[j] == '\\' || s[j] == '/'))
+                    {
+                        string home = Home();
+                        int rest = home != null ? PathRest(s, j) : -1;
+                        if (rest >= 0) { Add(list, K.Str, home + s.Substring(j, rest - j), spaced); i = rest; spaced = false; continue; }
+                    }
+                    Add(list, K.Var, s.Substring(i + 1, j - i - 1).ToLowerInvariant(), spaced);
+                    i = j;
+                    spaced = false;
+                    continue;
+                }
+                if (c == '@')
+                {
+                    if (i + 1 < n && s[i + 1] == '(') { Add(list, K.Punct, "(", spaced); i += 2; spaced = false; continue; }
+                    if (i + 1 < n && s[i + 1] == '{') { Add(list, K.Punct, "@{", spaced); i += 2; spaced = false; continue; }
+                    return null;
+                }
+                if (c == '|' && i + 1 < n && s[i + 1] == '|') return null;
+                if (c == '(' || c == ')' || c == '{' || c == '}' || c == ',' || c == '|' || c == '[' || c == ']' || c == '!' || c == '%' || c == '/')
+                {
+                    Add(list, K.Punct, c.ToString(), spaced);
+                    i++;
+                    spaced = false;
+                    continue;
+                }
+                if (c == ':' && i + 1 < n && s[i + 1] == ':') { Add(list, K.Punct, "::", spaced); i += 2; spaced = false; continue; }
+                if (c == '=') { Add(list, K.Punct, "=", spaced); i++; spaced = false; continue; }
+                if ((c == '+' || c == '-') && i + 1 < n && (s[i + 1] == '=' || s[i + 1] == c))
+                {
+                    if (i + 2 < n && s[i + 2] == '%') return null;
+                    Add(list, K.Punct, s.Substring(i, 2), spaced);
+                    i += 2;
+                    spaced = false;
+                    continue;
+                }
+                if (c == '+') { Add(list, K.Punct, "+", spaced); i++; spaced = false; continue; }
+                if (c == '-')
+                {
+                    if (i + 1 < n && char.IsLetter(s[i + 1]))
+                    {
+                        int j = i + 1;
+                        while (j < n && Ident(s[j])) j++;
+                        string w = s.Substring(i, j - i);
+                        if (j < n && s[j] == ':') { w += ":"; j++; }
+                        Add(list, K.Word, w, spaced);
+                        i = j;
+                        spaced = false;
+                        continue;
+                    }
+                    Add(list, K.Punct, "-", spaced);
+                    i++;
+                    spaced = false;
+                    continue;
+                }
+                if (c == '*' && (i + 1 >= n || !Bare(s[i + 1]) || s[i + 1] == '$' || s[i + 1] == ' '))
+                {
+                    Add(list, K.Punct, "*", spaced);
+                    i++;
+                    spaced = false;
+                    continue;
+                }
+                if (c == '.')
+                {
+                    Tok last = list.Count > 0 ? list[list.Count - 1] : null;
+                    bool member = !spaced && last != null && (last.Kind == K.Var || last.Kind == K.Str || last.Kind == K.Num || (last.Kind == K.Word && last.Member) ||
+                                  (last.Kind == K.Punct && (last.Text == ")" || last.Text == "]")));
+                    if (member)
+                    {
+                        if (i + 1 < n && s[i + 1] == '.') { Add(list, K.Punct, "..", false); i += 2; spaced = false; continue; }
+                        int j = i + 1;
+                        while (j < n && Ident(s[j])) j++;
+                        if (j == i + 1) return null;
+                        Add(list, K.Punct, ".", false);
+                        Tok m = Add(list, K.Word, s.Substring(i + 1, j - i - 1), false);
+                        m.Member = true;
+                        i = j;
+                        spaced = false;
+                        continue;
+                    }
+                }
+                if (char.IsDigit(c))
+                {
+                    int j = i;
+                    while (j < n && char.IsDigit(s[j])) j++;
+                    if (j + 1 < n && s[j] == '.' && char.IsDigit(s[j + 1])) { j++; while (j < n && char.IsDigit(s[j])) j++; }
+                    int k = j;
+                    while (k < n && char.IsLetter(s[k])) k++;
+                    string unit = s.Substring(j, k - j).ToLowerInvariant();
+                    if ((unit == "" || unit == "kb" || unit == "mb" || unit == "gb" || unit == "tb" || unit == "pb") &&
+                        (k >= n || !Bare(s[k]) || (s[k] == '.' && k + 1 < n && (s[k + 1] == '.' || char.IsLetter(s[k + 1]) && unit == ""))))
+                    {
+                        Add(list, K.Num, s.Substring(i, k - i), spaced);
+                        i = k;
+                        spaced = false;
+                        continue;
+                    }
+                }
+                {
+                    int j = i;
+                    while (j < n && Bare(s[j]))
+                    {
+                        char d = s[j];
+                        if (d == '$' || d == '`' || d == '[' || d == '@' || d == '&' || d == '<' || d == '>' || d == '#' || d == '~' || d == '"' || d == '\'' || d == '=' || Odd(d)) return null;
+                        j++;
+                    }
+                    if (j == i) return null;
+                    Add(list, K.Word, s.Substring(i, j - i), spaced);
+                    i = j;
+                    spaced = false;
+                }
+            }
+            return list;
+        }
+
+        static string Norm(string path, string from)
+        {
+            bool unix = System.IO.Path.DirectorySeparatorChar == '/' && (from ?? "").StartsWith("/", StringComparison.Ordinal);
+            char sep = unix ? '/' : '\\';
+            string p = (path ?? "").Replace(unix ? '\\' : '/', sep).Replace('*', 'x').Replace('?', 'x');
+            string b = (from ?? "").Replace(unix ? '\\' : '/', sep).TrimEnd(sep);
+            string full;
+            if (unix) full = p.StartsWith("/", StringComparison.Ordinal) ? p : b + "/" + p;
+            else
+            {
+                if (b.Length < 2 || b[1] != ':' || !char.IsLetter(b[0])) return null;
+                full = p.Length >= 2 && p[1] == ':' ? p : b + "\\" + p;
+                if (full.Length < 2 || full.IndexOf(':', 2) >= 0) return null;
+            }
+            int floor = unix ? 0 : 1;
+            List<string> parts = new List<string>();
+            foreach (string seg in full.Split(sep))
+            {
+                if (seg.Length == 0 || seg == ".") continue;
+                if (seg == "..") { if (parts.Count <= floor) return null; parts.RemoveAt(parts.Count - 1); continue; }
+                if (seg.EndsWith(".", StringComparison.Ordinal) || seg.EndsWith(" ", StringComparison.Ordinal) || seg.StartsWith(" ", StringComparison.Ordinal)) return null;
+                parts.Add(seg);
+            }
+            if (unix) return "/" + string.Join("/", parts.ToArray());
+            if (parts.Count == 0) return null;
+            return parts.Count == 1 ? parts[0] + "\\" : string.Join("\\", parts.ToArray());
+        }
+
+        class Parser
+        {
+            List<Tok> t;
+            readonly string cwd, ws;
+            readonly Dictionary<string, Val> vars = new Dictionary<string, Val>(StringComparer.OrdinalIgnoreCase);
+            static readonly Tok End = new Tok { Kind = K.End };
+            int i, depth;
+            string item;
+            public readonly HashSet<string> Unstable = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            public Parser(List<Tok> toks, string cwd, string ws) { t = toks; this.cwd = cwd; this.ws = ws; }
+
+            Tok Peek { get { return i < t.Count ? t[i] : End; } }
+            Tok At(int k) { return i + k < t.Count ? t[i + k] : End; }
+            bool Is(string punct) { Tok x = Peek; return x.Kind == K.Punct && x.Text == punct; }
+            bool IsWord(string w) { Tok x = Peek; return x.Kind == K.Word && !x.Member && string.Equals(x.Text, w, StringComparison.OrdinalIgnoreCase); }
+            void SkipNewlines() { while (Peek.Kind == K.Sep && Peek.Text == "\n") i++; }
+
+            public bool Script(string close)
+            {
+                if (depth > 40) return false;
+                depth++;
+                try { return Body(close); }
+                finally { depth--; }
+            }
+
+            bool Body(string close)
+            {
+                while (true)
+                {
+                    while (Peek.Kind == K.Sep) i++;
+                    if (Peek.Kind == K.End) return close == null;
+                    if (close != null && Is(close)) return true;
+                    if (!Statement()) return false;
+                    if (Peek.Kind == K.Sep || Peek.Kind == K.End || (close != null && Is(close))) continue;
+                    return false;
+                }
+            }
+
+            static bool Settable(string name) { return Name.IsMatch(name) && !Reserved.Contains(name) && !name.StartsWith("ps", StringComparison.OrdinalIgnoreCase) && !name.EndsWith("preference", StringComparison.OrdinalIgnoreCase); }
+
+            bool Statement()
+            {
+                Tok x = Peek;
+                if (IsWord("foreach") && At(1).Kind == K.Punct && At(1).Text == "(") return Foreach();
+                if (IsWord("for") && At(1).Kind == K.Punct && At(1).Text == "(") return For();
+                if (IsWord("if")) return If();
+                if (IsWord("try")) return Try();
+                bool after = x.Kind == K.Var && At(1).Kind == K.Punct && !At(1).Spaced && (At(1).Text == "++" || At(1).Text == "--");
+                bool before = x.Kind == K.Punct && (x.Text == "++" || x.Text == "--") && At(1).Kind == K.Var && !At(1).Spaced;
+                if (after || before)
+                {
+                    string name = after ? x.Text : At(1).Text;
+                    if (!Settable(name)) return false;
+                    i += 2;
+                    vars[name] = new Val();
+                    return true;
+                }
+                if (x.Kind == K.Var && At(1).Kind == K.Punct && (At(1).Text == "=" || At(1).Text == "+=" || At(1).Text == "-="))
+                {
+                    bool discard = x.Text == "null" && At(1).Text == "=";
+                    if (!discard && !Settable(x.Text)) return false;
+                    bool plain = At(1).Text == "=";
+                    i += 2;
+                    Val v;
+                    if (!Pipeline(out v)) return false;
+                    if (!discard) vars[x.Text] = plain && !Unstable.Contains(x.Text) ? v : new Val();
+                    return true;
+                }
+                Val ignored;
+                return Pipeline(out ignored);
+            }
+
+            bool Foreach()
+            {
+                i += 2;
+                Tok v = Peek;
+                if (v.Kind != K.Var || !Settable(v.Text)) return false;
+                i++;
+                if (!IsWord("in")) return false;
+                i++;
+                Val src;
+                if (!Pipeline(out src) || !Is(")")) return false;
+                i++;
+                SkipNewlines();
+                if (!Is("{")) return false;
+                i++;
+                Val loop = new Val();
+                if (!Unstable.Contains(v.Text))
+                {
+                    loop.Source = src.Literal != null ? "other" : src.Source;
+                    loop.Derived = src.Derived;
+                }
+                vars[v.Text] = loop;
+                if (!Script("}")) return false;
+                i++;
+                return true;
+            }
+
+            bool For()
+            {
+                i += 2;
+                for (int part = 0; part < 3; part++)
+                {
+                    SkipNewlines();
+                    bool last = part == 2;
+                    if (!(last ? Is(")") : Peek.Kind == K.Sep && Peek.Text == ";") && !Statement()) return false;
+                    SkipNewlines();
+                    if (!(last ? Is(")") : Peek.Kind == K.Sep && Peek.Text == ";")) return false;
+                    i++;
+                }
+                SkipNewlines();
+                return Block();
+            }
+
+            bool Block()
+            {
+                if (!Is("{")) return false;
+                i++;
+                if (!Script("}")) return false;
+                i++;
+                return true;
+            }
+
+            bool Try()
+            {
+                i++;
+                SkipNewlines();
+                if (!Block()) return false;
+                bool caught = false;
+                while (true)
+                {
+                    int save = i;
+                    SkipNewlines();
+                    if (IsWord("catch"))
+                    {
+                        i++;
+                        SkipNewlines();
+                        if (Is("["))
+                        {
+                            i++;
+                            if (Peek.Kind != K.Word || Peek.Member) return false;
+                            i++;
+                            if (!Is("]")) return false;
+                            i++;
+                            SkipNewlines();
+                        }
+                        string was = item;
+                        item = "other";
+                        bool ok = Block();
+                        item = was;
+                        if (!ok) return false;
+                        caught = true;
+                        continue;
+                    }
+                    if (IsWord("finally")) { i++; SkipNewlines(); return Block(); }
+                    i = save;
+                    return caught;
+                }
+            }
+
+            bool Sub(List<Tok> toks)
+            {
+                List<Tok> keepT = t;
+                int keepI = i;
+                t = toks;
+                i = 0;
+                bool ok = Script(null);
+                t = keepT;
+                i = keepI;
+                return ok;
+            }
+
+            bool If()
+            {
+                i++;
+                while (true)
+                {
+                    if (!Is("(")) return false;
+                    i++;
+                    Val c;
+                    if (!Pipeline(out c) || !Is(")")) return false;
+                    i++;
+                    SkipNewlines();
+                    if (!Is("{")) return false;
+                    i++;
+                    if (!Script("}")) return false;
+                    i++;
+                    int save = i;
+                    SkipNewlines();
+                    if (IsWord("elseif")) { i++; continue; }
+                    if (IsWord("else"))
+                    {
+                        i++;
+                        SkipNewlines();
+                        if (!Is("{")) return false;
+                        i++;
+                        if (!Script("}")) return false;
+                        i++;
+                        return true;
+                    }
+                    i = save;
+                    return true;
+                }
+            }
+
+            bool Pipeline(out Val result)
+            {
+                result = new Val();
+                if (depth > 40) return false;
+                depth++;
+                try { return Chain(out result); }
+                finally { depth--; }
+            }
+
+            bool Chain(out Val result)
+            {
+                Tok x = Peek;
+                bool command = (x.Kind == K.Word && !x.Member && !x.Text.StartsWith("-", StringComparison.Ordinal)) || (x.Kind == K.Punct && x.Text == "%");
+                if (command) { if (!Command(true, "other", out result)) return false; }
+                else if (!Expression(out result)) return false;
+                while (Is("|"))
+                {
+                    i++;
+                    SkipNewlines();
+                    string src = result.Literal != null ? "other" : result.Source;
+                    if (!Command(false, src, out result)) return false;
+                }
+                return true;
+            }
+
+            static string Canon(string name)
+            {
+                switch (name)
+                {
+                    case "%": case "foreach": return "foreach-object";
+                    case "?": case "where": return "where-object";
+                    default: return name;
+                }
+            }
+
+            bool Command(bool first, string src, out Val result)
+            {
+                result = new Val();
+                Tok x = Peek;
+                if (!((x.Kind == K.Word && !x.Member && !x.Text.StartsWith("-", StringComparison.Ordinal)) || (x.Kind == K.Punct && x.Text == "%"))) return false;
+                string name = Canon(x.Text.ToLowerInvariant());
+                bool reader = Readers.Contains(name), lister = Listers.Contains(name), taker = Takers.Contains(name);
+                bool each = name == "foreach-object";
+                if (!(reader || lister || taker || each || Passers.Contains(name) || Others.Contains(name))) return false;
+                bool paths = reader || lister || taker;
+                i++;
+                string param = null;
+                string cls = null;
+                bool any = false;
+                while (true)
+                {
+                    Tok a = Peek;
+                    if (a.Kind == K.Sep || a.Kind == K.End || (a.Kind == K.Punct && (a.Text == "|" || a.Text == ")" || a.Text == "}"))) break;
+                    if (a.Kind == K.Punct && a.Text == ",") { i++; continue; }
+                    if (a.Kind == K.Word && !a.Member && a.Text.StartsWith("-", StringComparison.Ordinal))
+                    {
+                        string p = a.Text.ToLowerInvariant();
+                        bool attached = p.EndsWith(":", StringComparison.Ordinal);
+                        if (attached) p = p.Substring(0, p.Length - 1);
+                        if (p.StartsWith("-cn", StringComparison.Ordinal) || p.StartsWith("-com", StringComparison.Ordinal) || p.StartsWith("-ses", StringComparison.Ordinal) ||
+                            p.StartsWith("-cim", StringComparison.Ordinal) || p.StartsWith("-cred", StringComparison.Ordinal)) return false;
+                        if (each && p != "-process" && p != "-begin" && p != "-end") return false;
+                        if (p == "-ov" || p == "-pv" || p == "-ev" || p == "-wv" || p == "-iv" || p.StartsWith("-outv", StringComparison.Ordinal) || p.StartsWith("-pi", StringComparison.Ordinal) ||
+                            p.StartsWith("-errorv", StringComparison.Ordinal) || p.StartsWith("-warningv", StringComparison.Ordinal) || p.StartsWith("-informationv", StringComparison.Ordinal)) return false;
+                        param = p;
+                        i++;
+                        if (!attached) continue;
+                        if (Peek.Spaced) return false;
+                    }
+                    if (a.Kind == K.Punct && a.Text == "{")
+                    {
+                        if (!(Blocks.Contains(name))) return false;
+                        i++;
+                        string was = item;
+                        item = src;
+                        bool ok = Script("}");
+                        item = was;
+                        if (!ok) return false;
+                        i++;
+                        param = null;
+                        continue;
+                    }
+                    if (a.Kind == K.Punct && a.Text == "@{")
+                    {
+                        if (!Blocks.Contains(name) || each || !Table(src)) return false;
+                        if (!Is(",")) param = null;
+                        continue;
+                    }
+                    if (each) return false;
+                    Val v;
+                    if (!Value(out v)) return false;
+                    if (v.Literal != null && !Harmless(v.Literal)) return false;
+                    bool num = v.Literal == null && v.Source == "number";
+                    if (paths && !num && (param == null || !NotPaths.Contains(param)))
+                    {
+                        string c = PathClass(v, reader);
+                        if (c == null) return false;
+                        cls = cls == null || cls == c ? c : "out";
+                        any = true;
+                    }
+                    if (!Is(",")) param = null;
+                }
+                if (paths && !first)
+                {
+                    if (!(src == "ws" || (src == "out" && !reader) || (src == "text" && reader))) return false;
+                    string from = reader ? "ws" : src;
+                    cls = !any || cls == from ? from : "out";
+                }
+                else if (paths && !any) cls = Inside(cwd) ? "ws" : "out";
+                if (lister) result.Source = cls;
+                else if (TextReaders.Contains(name) || TextOut.Contains(name)) result.Source = "text";
+                else if (Passers.Contains(name) && !first) result.Source = src;
+                return true;
+            }
+
+            bool Table(string src)
+            {
+                i++;
+                while (true)
+                {
+                    while (Peek.Kind == K.Sep) i++;
+                    if (Is("}")) { i++; return true; }
+                    Tok k = Peek;
+                    if (!((k.Kind == K.Word && !k.Member && Name.IsMatch(k.Text)) || (k.Kind == K.Str && !k.Expands) || k.Kind == K.Num)) return false;
+                    i++;
+                    if (!Is("=")) return false;
+                    i++;
+                    if (Is("{"))
+                    {
+                        i++;
+                        string was = item;
+                        item = src;
+                        bool ok = Script("}");
+                        item = was;
+                        if (!ok) return false;
+                        i++;
+                    }
+                    else
+                    {
+                        Val v;
+                        if (!Expression(out v)) return false;
+                    }
+                    if (!(Peek.Kind == K.Sep || Is("}"))) return false;
+                }
+            }
+
+            bool Inside(string full) { return ws.Length > 0 && Norm("x", ws) != null && AgentPaths.IsInside(full, ws.TrimEnd('\\', '/')); }
+
+            static bool Harmless(string literal)
+            {
+                if (literal.IndexOfAny(new char[] { '\\', '/', ':', '.' }) < 0) return true;
+                try
+                {
+                    string p = literal.Replace('/', '\\').Replace('*', 'x').Replace('?', 'x');
+                    return !(p.Length >= 2 && p[1] == ':' && AgentPaths.SensitiveReal(p) != null) && !p.StartsWith("\\\\", StringComparison.Ordinal);
+                }
+                catch { return false; }
+            }
+
+            string PathClass(Val v, bool reader)
+            {
+                if (v.Literal != null)
+                {
+                    string p = v.Literal;
+                    if (p == "~" || p.StartsWith("~\\", StringComparison.Ordinal) || p.StartsWith("~/", StringComparison.Ordinal))
+                    {
+                        string home = Home();
+                        if (home == null) return null;
+                        p = home + p.Substring(1);
+                    }
+                    if (p.Length == 0 || p.StartsWith("\\", StringComparison.Ordinal) || p.StartsWith("/", StringComparison.Ordinal) || p.IndexOfAny(new char[] { '$', '`', '~', '[' }) >= 0) return null;
+                    if (Drive.IsMatch(p)) return null;
+                    if (p.Length >= 2 && p[1] == ':' && (p.Length == 2 || (p[2] != '\\' && p[2] != '/'))) return null;
+                    string full = Norm(p, cwd);
+                    if (full == null) return null;
+                    try { if (AgentPaths.SensitiveReal(full) != null) return null; }
+                    catch { return null; }
+                    bool inside = Inside(full);
+                    bool wild = p.IndexOfAny(new char[] { '*', '?' }) >= 0;
+                    if (reader && !inside && (wild || Private.IsMatch(full) || full.IndexOf("\\AppData\\", StringComparison.OrdinalIgnoreCase) >= 0 || full.IndexOf("\\.", StringComparison.Ordinal) >= 0)) return null;
+                    return inside ? "ws" : "out";
+                }
+                if (v.Source == "ws") return "ws";
+                if (v.Source == "out" && !reader) return "out";
+                return null;
+            }
+
+            bool Value(out Val v)
+            {
+                v = new Val();
+                Tok x = Peek;
+                if (x.Kind == K.Word && !x.Member) { i++; v.Literal = x.Text; return true; }
+                if (x.Kind == K.Punct && x.Text == "*") { i++; v.Literal = "*"; return true; }
+                if (x.Kind == K.Punct && x.Text == "-" && At(1).Kind == K.Num && !At(1).Spaced) { i += 2; v.Source = "number"; return true; }
+                if (x.Kind == K.Num) { i++; v.Source = "number"; return Postfix(ref v); }
+                if (x.Kind == K.Str || x.Kind == K.Var || (x.Kind == K.Punct && (x.Text == "(" || x.Text == "["))) return Operand(out v);
+                return false;
+            }
+
+            bool Expression(out Val v)
+            {
+                if (!Operand(out v)) return false;
+                bool single = true;
+                while (true)
+                {
+                    Tok x = Peek;
+                    bool op = (x.Kind == K.Punct && (x.Text == "+" || x.Text == "-" || x.Text == "*" || x.Text == "/" || x.Text == "%" || x.Text == ".." || x.Text == ",")) ||
+                              (x.Kind == K.Word && !x.Member && Op.IsMatch(x.Text));
+                    if (!op) break;
+                    i++;
+                    SkipNewlines();
+                    single = false;
+                    if (x.Kind == K.Word && x.Text.Equals("-as", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string type;
+                        if (!TypeName(out type, false)) return false;
+                        continue;
+                    }
+                    if (x.Kind == K.Word && (x.Text.Equals("-is", StringComparison.OrdinalIgnoreCase) || x.Text.Equals("-isnot", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        string type;
+                        if (!TypeName(out type, true)) return false;
+                        continue;
+                    }
+                    Val o;
+                    if (!Operand(out o)) return false;
+                }
+                if (!single) v = new Val();
+                return true;
+            }
+
+            bool Operand(out Val v)
+            {
+                v = new Val();
+                if (depth > 40) return false;
+                depth++;
+                try { return Term(out v); }
+                finally { depth--; }
+            }
+
+            bool Term(out Val v)
+            {
+                v = new Val();
+                Tok x = Peek;
+                if ((x.Kind == K.Punct && (x.Text == "!" || x.Text == "-" || x.Text == "+")) || (x.Kind == K.Word && !x.Member && (x.Text.Equals("-not", StringComparison.OrdinalIgnoreCase) || x.Text.Equals("-bnot", StringComparison.OrdinalIgnoreCase))))
+                {
+                    i++;
+                    Val inner;
+                    return Operand(out inner);
+                }
+                if (x.Kind == K.Str)
+                {
+                    i++;
+                    if (x.Subs != null) foreach (List<Tok> sub in x.Subs) if (!Sub(sub)) return false;
+                    if (!x.Expands) v.Literal = x.Text;
+                    return Postfix(ref v);
+                }
+                if (x.Kind == K.Num) { i++; v.Source = "number"; return Postfix(ref v); }
+                if (x.Kind == K.Punct && x.Text == "@{") return Table(item ?? "other") && Postfix(ref v);
+                if (x.Kind == K.Var)
+                {
+                    i++;
+                    Val known;
+                    if (x.Text == "_" || x.Text == "psitem") v.Source = item ?? "other";
+                    else if (vars.TryGetValue(x.Text, out known)) { v.Literal = known.Literal; v.Source = known.Source; v.Derived = known.Derived; }
+                    return Postfix(ref v);
+                }
+                if (x.Kind == K.Punct && x.Text == "(")
+                {
+                    i++;
+                    SkipNewlines();
+                    Val inner;
+                    if (!Pipeline(out inner)) return false;
+                    SkipNewlines();
+                    if (!Is(")")) return false;
+                    i++;
+                    v = inner;
+                    return Postfix(ref v);
+                }
+                if (x.Kind == K.Punct && x.Text == "[")
+                {
+                    string type;
+                    if (!TypeName(out type, false)) return false;
+                    if (Is("::"))
+                    {
+                        i++;
+                        Tok m = Peek;
+                        if (m.Kind != K.Word || m.Spaced || !Name.IsMatch(m.Text)) return false;
+                        HashSet<string> calls;
+                        if (!Statics.TryGetValue(type, out calls) || !calls.Contains(m.Text)) return false;
+                        i++;
+                        if (Is("(") && !Peek.Spaced)
+                        {
+                            i++;
+                            if (!Args()) return false;
+                        }
+                        return Postfix(ref v);
+                    }
+                    Tok n = Peek;
+                    if (n.Kind == K.Var || n.Kind == K.Str || n.Kind == K.Num || (n.Kind == K.Punct && (n.Text == "(" || n.Text == "[" || n.Text == "@{")))
+                    {
+                        Val inner;
+                        if (!Operand(out inner)) return false;
+                    }
+                    return true;
+                }
+                return false;
+            }
+
+            bool Args()
+            {
+                SkipNewlines();
+                if (Is(")")) { i++; return true; }
+                Val a;
+                if (!Expression(out a)) return false;
+                SkipNewlines();
+                if (!Is(")")) return false;
+                i++;
+                return true;
+            }
+
+            bool TypeName(out string type, bool any)
+            {
+                type = null;
+                if (!Is("[")) return false;
+                i++;
+                Tok w = Peek;
+                if (w.Kind != K.Word || w.Member || !TypeWord.IsMatch(w.Text)) return false;
+                string name = w.Text.StartsWith("System.", StringComparison.OrdinalIgnoreCase) ? w.Text.Substring(7) : w.Text;
+                i++;
+                if (Is("[")) { i++; if (!Is("]")) return false; i++; name += "[]"; }
+                if (!Is("]")) return false;
+                i++;
+                if (!any && !Types.Contains(name)) return false;
+                type = name;
+                return true;
+            }
+
+            bool Postfix(ref Val v)
+            {
+                while (true)
+                {
+                    Tok x = Peek;
+                    if (x.Kind == K.Punct && x.Text == "." && !x.Spaced)
+                    {
+                        Tok m = At(1);
+                        if (m.Kind != K.Word || !m.Member) return false;
+                        i += 2;
+                        if (Is("(") && !Peek.Spaced)
+                        {
+                            if (!Methods.Contains(m.Text)) return false;
+                            i++;
+                            if (!Args()) return false;
+                            v = new Val();
+                            continue;
+                        }
+                        Val d = new Val();
+                        if (!v.Derived && v.Literal == null && (v.Source == "ws" || v.Source == "out") && SameItem.Contains(m.Text)) { d.Source = v.Source; d.Derived = true; }
+                        v = d;
+                        continue;
+                    }
+                    if (x.Kind == K.Punct && x.Text == "[" && !x.Spaced)
+                    {
+                        i++;
+                        Val idx;
+                        if (!Expression(out idx) || !Is("]")) return false;
+                        i++;
+                        Val d = new Val();
+                        if (v.Literal == null) { d.Source = v.Source; d.Derived = v.Derived; }
+                        v = d;
+                        continue;
+                    }
+                    return true;
+                }
+            }
         }
     }
 }

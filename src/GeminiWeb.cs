@@ -83,47 +83,23 @@ namespace MinGent
             return Weekly.Now(utc) > Short.Now(utc) ? Weekly : Short;
         }
 
-        public static GeminiUsage From(List<object> rows, DateTime utc)
+        public static GeminiUsage From(List<object> limits, DateTime utc)
         {
-            if (rows == null) return null;
-            Dictionary<double, GeminiWindow> byUnit = new Dictionary<double, GeminiWindow>();
-            foreach (object o in rows)
-            {
-                List<object> row = o as List<object>;
-                if (row == null || !(Json.Get(row, 0, 1) is double) || (double)Json.Get(row, 0, 1) != 2) continue;
-                object pct = Json.Get(row, 2), sec = Json.Get(row, 3, 0), unit = Json.Get(row, 1);
-                if (!(pct is double)) continue;
-                GeminiWindow w = new GeminiWindow();
-                w.Percent = (double)pct;
-                if (sec is double && (double)sec > 0) w.Resets = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds((double)sec);
-                byUnit[unit is double ? (double)unit : -1] = w;
-            }
-            if (byUnit.Count == 0) return null;
-            List<double> units = new List<double>(byUnit.Keys);
-            units.Sort(delegate (double x, double y) { return byUnit[x].Resets.CompareTo(byUnit[y].Resets); });
+            if (limits == null) return null;
             GeminiUsage u = new GeminiUsage();
             u.When = utc;
-            double learned;
-            lock (learnGate) learned = weeklyUnit;
-            double only = units[0], last = units[units.Count - 1];
-            if (units.Count == 1)
+            foreach (object o in limits)
             {
-                if (Far(byUnit[only], utc) || (!double.IsNaN(learned) && only == learned)) u.Weekly = byUnit[only];
-                else u.Short = byUnit[only];
-                return u;
+                object kind = Json.Get(o, 2), used = Json.Get(o, 1), sec = Json.Get(o, 3, 0, 0);
+                if (!(kind is double) || ((double)kind != 1 && (double)kind != 2)) continue;
+                GeminiWindow w = new GeminiWindow();
+                w.Percent = used is double ? (double)used * 100 : 0;
+                if (sec is double && (double)sec > 0) w.Resets = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds((double)sec);
+                if ((double)kind == 1) u.Short = w;
+                else u.Weekly = w;
             }
-            double weekly = last;
-            if (Far(byUnit[last], utc) && !Far(byUnit[only], utc)) lock (learnGate) weeklyUnit = last;
-            else if (!double.IsNaN(learned) && byUnit.ContainsKey(learned)) weekly = learned;
-            u.Weekly = byUnit[weekly];
-            foreach (double k in units) if (k != weekly) { u.Short = byUnit[k]; break; }
-            return u;
+            return u.Short == null && u.Weekly == null ? null : u;
         }
-
-        static readonly object learnGate = new object();
-        static double weeklyUnit = double.NaN;
-
-        static bool Far(GeminiWindow w, DateTime utc) { return w.Resets != DateTime.MinValue && (w.Resets - utc).TotalHours > 5.5; }
 
         public static string Until(DateTime resets, DateTime utc)
         {
@@ -142,7 +118,25 @@ namespace MinGent
         {
             if (w == null) return null;
             string when = Until(w.Resets, utc);
-            return name + ": " + Math.Round(w.Now(utc)).ToString(CultureInfo.InvariantCulture) + "% used" + (when.Length == 0 ? "" : when == "now" ? ", resets now" : ", resets " + when);
+            return name + ": " + Used(w, utc) + (when.Length == 0 ? "" : when == "now" ? ", resets now" : ", resets " + when);
+        }
+
+        public static string Used(GeminiWindow w, DateTime utc) { return Math.Round(w.Now(utc)).ToString(CultureInfo.InvariantCulture) + "% used"; }
+
+        public static string Resets(GeminiWindow w, DateTime utc)
+        {
+            if (w.Resets == DateTime.MinValue || w.Resets <= utc) return "";
+            string when = Until(w.Resets, utc);
+            return when == "now" ? "Resets now" : "Resets " + when;
+        }
+
+        public static string Age(DateTime when, DateTime utc)
+        {
+            double min = (utc - when).TotalMinutes;
+            if (min < 1) return "updated just now";
+            if (min < 60) return "updated " + ((int)min).ToString(CultureInfo.InvariantCulture) + " min ago";
+            DateTime local = when.ToLocalTime();
+            return local.Date == utc.ToLocalTime().Date ? "updated at " + local.ToString("HH:mm", CultureInfo.InvariantCulture) : "updated " + local.ToString("ddd HH:mm", CultureInfo.InvariantCulture);
         }
 
         public string Tip(DateTime utc)
@@ -306,34 +300,31 @@ namespace MinGent
             return "hl=en&_reqid=" + id.ToString(CultureInfo.InvariantCulture) + "&rt=c" + (s.Build.Length > 0 ? "&bl=" + Enc(s.Build) : "") + (s.Sid.Length > 0 ? "&f.sid=" + Enc(s.Sid) : "");
         }
 
-        public static GeminiCall Status(GeminiSession s)
+        static GeminiCall Batch(GeminiSession s, string rpc, string page)
         {
             GeminiCall c = new GeminiCall();
-            c.Url = Origin + Rpc + "batchexecute?rpcids=otAQ7b&source-path=%2Fapp&" + Common(s);
+            c.Url = Origin + Rpc + "batchexecute?rpcids=" + rpc + "&source-path=" + Enc(page) + "&" + Common(s);
             c.Headers["Content-Type"] = Form;
             c.Headers["X-Same-Domain"] = "1";
             c.Headers["x-goog-ext-525001261-jspb"] = Json.Write(Json.A(1, null, null, null, null, null, null, null, Json.A(4, 5, 6, 8), null, null, null, null, null, null, null, Run));
             c.Headers["x-goog-ext-73010989-jspb"] = "[0]";
-            c.Body = "at=" + Enc(s.At) + "&f.req=" + Enc("[[[\"otAQ7b\",\"[]\",null,\"generic\"]]]");
+            c.Body = "at=" + Enc(s.At) + "&f.req=" + Enc("[[[\"" + rpc + "\",\"[]\",null,\"generic\"]]]");
             return c;
         }
 
-        public static GeminiCall Quota(GeminiSession s)
-        {
-            GeminiCall c = Status(s);
-            c.Url = c.Url.Replace("rpcids=otAQ7b", "rpcids=qpEbW");
-            c.Body = "at=" + Enc(s.At) + "&f.req=" + Enc("[[[\"qpEbW\",\"[[[1,2]]]\",null,\"generic\"]]]");
-            return c;
-        }
+        public static GeminiCall Status(GeminiSession s) { return Batch(s, "otAQ7b", "/app"); }
+
+        public const string UsageRpc = "jSf9Qc";
+
+        public static GeminiCall Quota(GeminiSession s) { return Batch(s, UsageRpc, "/usage"); }
 
         public static GeminiUsage ParseQuota(string text, DateTime utc)
         {
             foreach (object part in new GeminiFrames().Feed(text))
             {
                 List<object> p = part as List<object>;
-                if (p == null || p.Count < 3 || Json.Str(p, 1) != "qpEbW") continue;
-                List<object> body = Json.TryParse(Json.Str(p, 2) ?? "") as List<object>;
-                GeminiUsage u = GeminiUsage.From(Json.List(body, 0), utc);
+                if (p == null || p.Count < 3 || Json.Str(p, 1) != UsageRpc) continue;
+                GeminiUsage u = GeminiUsage.From(Json.List(Json.TryParse(Json.Str(p, 2) ?? ""), 1), utc);
                 if (u != null) return u;
             }
             return null;

@@ -28,7 +28,7 @@ namespace MinGent
         public string AiLastLmModel = "";
         public string AiMode = "ask";
         public bool AiAutoExplained, AiPlanExplained, AiFullExplained;
-        public string AiAutoAllow = "";
+        public string AiAutoAllow = PermissionCategory.BalancedList;
         public bool AiCaptcha;
         public bool AiSandbox;
         public bool AiOtherApps = true;
@@ -114,6 +114,7 @@ namespace MinGent
         {
             Settings s = new Settings();
             string oldMode = null, oldBase = null, oldKey = null, oldModel = null, oldRef = null, newRef = null;
+            bool sawPreset = false;
             try
             {
                 if (!File.Exists(FilePath)) return s;
@@ -149,6 +150,7 @@ namespace MinGent
                         case "aiPlanExplained": s.AiPlanExplained = v == "1"; break;
                         case "aiFullExplained": s.AiFullExplained = v == "1"; break;
                         case "aiAutoAllow": s.AiAutoAllow = v; break;
+                        case "aiAutoPreset": sawPreset = true; break;
                         case "aiCaptcha": s.AiCaptcha = v == "1"; break;
                         case "aiSandbox": s.AiSandbox = v == "1"; break;
                         case "aiOpenApps": s.AiOtherApps = v == "1"; break;
@@ -213,6 +215,7 @@ namespace MinGent
                     }
                 }
                 s.AiModel = newRef ?? (oldRef == null || oldRef == "lmstudio:" ? "" : oldRef);
+                if (!sawPreset && (s.AiAutoAllow ?? "").Trim().Length == 0) s.AiAutoAllow = PermissionCategory.BalancedList;
                 if (oldMode == "custom" && !string.IsNullOrEmpty(oldBase) && string.IsNullOrEmpty(s.CustomUrl))
                 {
                     string b = oldBase.Trim().TrimEnd('/');
@@ -258,6 +261,7 @@ namespace MinGent
                 w("aiPlanExplained", AiPlanExplained ? "1" : "0");
                 w("aiFullExplained", AiFullExplained ? "1" : "0");
                 w("aiAutoAllow", AiAutoAllow);
+                w("aiAutoPreset", "1");
                 w("aiCaptcha", AiCaptcha ? "1" : "0");
                 w("aiSandbox", AiSandbox ? "1" : "0");
                 w("aiOpenApps", AiOtherApps ? "1" : "0");
@@ -1230,6 +1234,7 @@ namespace MinGent
             p.CloseClicked += delegate { if (p == aiPanel) ShowAgent(false, true); };
             p.NotesChatChanged += delegate { if (p == aiPanel) SyncNotesChat(); };
             p.HandOff = delegate { return HandOff(p); };
+            p.ChatLeft += delegate { if (!AnyRunning()) AppHighlight.Release(); };
             return p;
         }
 
@@ -2018,6 +2023,7 @@ namespace MinGent
                 else library.Close();
             }
             bool saved;
+            bool? fullAuto = null;
             int erase = -1;
             bool reset = false;
             string updateVersion = null;
@@ -2025,6 +2031,7 @@ namespace MinGent
             {
                 using (SettingsDialog dlg = new SettingsDialog(settings, theme))
                 {
+                    if (aiPanel != null && aiPanel.FullAuto) dlg.MarkFullAuto();
                     if (page != null) dlg.OpenPage(page);
                     if (place)
                     {
@@ -2061,6 +2068,7 @@ namespace MinGent
                         return true;
                     };
                     saved = dlg.ShowDialog(this) == DialogResult.OK;
+                    if (saved) fullAuto = dlg.FullAuto;
                 }
             }
             finally
@@ -2100,6 +2108,7 @@ namespace MinGent
             EngineUpdates.CheckSoon();
             if (settings.ThemeName != oldTheme || settings.AccentName != oldAccent) ApplyTheme();
             foreach (AiPanel p in panels) p.SettingsChanged();
+            if (fullAuto.HasValue && aiPanel != null) aiPanel.SetFullAuto(fullAuto.Value);
             UpdateAiChip();
             if (!ApplyQuickEntry() && settings.QuickKey != oldQuick)
             {

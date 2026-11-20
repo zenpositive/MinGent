@@ -148,6 +148,7 @@ namespace MinGent
             composer.PlanChanged += delegate (bool on) { SetPlan(on); };
             composer.EffortClicked += delegate { ShowEffortMenu(); };
             composer.MeterClicked += delegate { ShowContextMenu(); };
+            composer.UsageClicked += delegate { ShowUsageMenu(); };
             composer.HeightChanged += delegate { PerformLayout(); };
             composer.ContextCleared += delegate { };
             composer.AttachClicked += delegate { Attach(); };
@@ -431,6 +432,7 @@ namespace MinGent
         int conversation = ++conversations;
         readonly List<string> deletedChats = new List<string>();
         public event EventHandler NotesChatChanged;
+        public event Action ChatLeft;
         public int Conversation { get { return conversation; } }
         public string NotesKey { get { return temporary ? "~temp:" + conversation.ToString(CultureInfo.InvariantCulture) : chatFile != null ? Path.GetFileName(chatFile) : "~new"; } }
 
@@ -848,6 +850,7 @@ namespace MinGent
         }
 
         string level = "ask";
+        public bool FullAuto { get { return level == "full"; } }
 
         void SetAuto(bool on) { SetLevel(on ? "auto" : "ask"); }
 
@@ -863,16 +866,19 @@ namespace MinGent
             return p == "engine" || p == "lmstudio" || (p == "custom" && Http.IsLoopback(settings.CustomUrl ?? ""));
         }
 
+        public void SetFullAuto(bool on)
+        {
+            if (on) SetLevel("full");
+            else if (level == "full") SetLevel("auto");
+        }
+
         void SetLevel(string lv)
         {
             if (lv != "auto" && lv != "full") lv = "ask";
             if (lv == "full" && level != "full" && !settings.AiFullExplained)
             {
                 Form f = FindForm();
-                bool yes = Alert.Ask(f, th, "Full auto asks you nothing. The agent can install software, delete files, change settings, press buy buttons and run any command without your OK, even when a web page tries to trick it.\n\n" +
-                                            (LocalModelPicked() ? LocalFullAutoNote + "\n\n" : "") +
-                                            "Its file tools still never write into Windows, Program Files or MinGent's own data, and it never sends your API keys to a website. Full auto turns back into Auto when MinGent closes.\n\nOnly use it for work you trust.",
-                                     Program.AppName, "Turn on Full auto");
+                bool yes = Alert.Confirm(f, th, (LocalModelPicked() ? LocalFullAutoNote + "\n\n" : "") + SettingsDialog.FullAutoWarning, Program.AppName, "Turn on Full auto", true);
                 if (!yes) { composer.Level = level; return; }
                 settings.AiFullExplained = true;
             }
@@ -888,10 +894,10 @@ namespace MinGent
                 settings.AiAutoExplained = true;
                 settings.Save();
                 Notice("Auto is on: the agent edits files, runs commands and browses without asking. It still asks before risky steps like installing software, wide deletes, system changes, passwords and payments" +
-                       (settings.AiWebGuard ? ", and before commands once it has read web content" : "") + ". You choose what Auto asks about in Settings > Safety, and Undo under a reply reverts file changes.", 0);
+                       (settings.AiWebGuard ? ", and before commands that could change things once it has read web content" : "") + ". You choose what Auto asks before in Settings > Safety, and Undo under a reply reverts file changes.", 0);
             }
             if (lv == "full" && was != "full")
-                Notice("Full auto is on: the agent asks nothing. Click the red switch to turn it off; it also turns back into Auto when MinGent closes." + (LocalModelPicked() ? " " + LocalFullAutoNote : ""), 2);
+                Notice("Full auto is on: the agent asks nothing. Click the red switch to turn it off; it also turns back into your Auto choice when MinGent closes." + (LocalModelPicked() ? " " + LocalFullAutoNote : ""), 2);
             ChatItem pending = chat.PendingPermission();
             if (pending == null || lv == "ask" || pending.Ask.EvenInFull) return;
             if (lv == "full") { chat.Resolve(pending, pending.Ask.Never ? PermissionDecision.Deny : PermissionDecision.Allow); return; }
@@ -3255,6 +3261,7 @@ namespace MinGent
             bool had = chatFile != null || chat.Items.Count > 0;
             StashDraft();
             SaveChat();
+            if (had && ChatLeft != null) ChatLeft();
             ClearView(false, false);
             RestoreDraft();
             if (had) host.ResetBrowser();
@@ -3294,6 +3301,7 @@ namespace MinGent
         {
             SaveChat();
             if (!File.Exists(path)) { Changed(); return; }
+            if (ChatLeft != null) ChatLeft();
             StashDraft();
             LoadChat(path);
             RestoreDraft();
@@ -3797,6 +3805,7 @@ namespace MinGent
             if (Json.Bool(root, "tainted") && !session.Perms.Tainted)
             {
                 session.Perms.Tainted = true;
+                session.Perms.OnlyApp = "";
                 session.Perms.TaintSource = "web content read earlier in this chat";
             }
             chatFile = path;
@@ -4346,6 +4355,21 @@ namespace MinGent
             m.Items.Add(Menus.Hint("Older messages are summarized automatically when it fills up.", th));
             m.Closed += delegate { BeginInvoke(new Action(delegate { m.Dispose(); })); };
             m.Show(composer, composer.MeterAnchor, ToolStripDropDownDirection.AboveLeft);
+            composer.Invalidate();
+        }
+
+        void ShowUsageMenu()
+        {
+            GeminiUsage u = composer.GeminiUsageShown;
+            if (u == null) return;
+            DateTime now = DateTime.UtcNow;
+            ContextMenuStrip m = Menus.Create(th);
+            m.Items.Add(Menus.Header("Gemini usage", GeminiUsage.Age(u.When, now), th));
+            if (u.Short != null) m.Items.Add(new MeterMenuItem("5-hour limit", GeminiUsage.Used(u.Short, now), u.Short.Now(now) / 100.0, GeminiUsage.Resets(u.Short, now)));
+            if (u.Weekly != null) m.Items.Add(new MeterMenuItem("Weekly limit", GeminiUsage.Used(u.Weekly, now), u.Weekly.Now(now) / 100.0, GeminiUsage.Resets(u.Weekly, now)));
+            m.Items.Add(Menus.Hint("Longer chats and bigger requests use more of it.", th));
+            m.Closed += delegate { BeginInvoke(new Action(delegate { m.Dispose(); })); };
+            m.Show(composer, composer.UsageAnchor, ToolStripDropDownDirection.AboveLeft);
             composer.Invalidate();
         }
 
@@ -5027,7 +5051,19 @@ namespace MinGent
             }
         }
 
-        public event EventHandler MeterClicked;
+        public event EventHandler MeterClicked, UsageClicked;
+
+        public Point UsageAnchor
+        {
+            get
+            {
+                Rectangle r;
+                bool t;
+                if (!UsageLayout(out r, out t)) return MeterAnchor;
+                return new Point(r.Right, r.Y - UI.S(2));
+            }
+        }
+
         public bool HasAttachments { get { return attachments.Count > 0; } }
         public bool HasPictures { get { return PictureCount > 0; } }
         public int PictureCount { get { return Attachments.Pictures(attachments); } }
@@ -5081,7 +5117,7 @@ namespace MinGent
             auto.DangerText = "Full auto";
             auto.MenuRequested += delegate { ShowLevelMenu(); };
             auto.MouseUp += delegate { if (menuClosedByAuto) BeginInvoke(new Action(delegate { menuClosedByAuto = false; })); };
-            tip.SetToolTip(auto, "Auto: the agent acts without asking, except for what you chose in Settings > Safety.\nOff: it asks before commands, web access and changes outside the work folder.\nThe arrow has Full auto, which asks nothing.");
+            tip.SetToolTip(auto, "Auto: the agent works without asking, except before the steps you chose in Settings > Safety.\nOff: it asks before commands, web access and changes outside the work folder.");
             tip.SetToolTip(plan, "Plan first: the agent researches and shows you a plan before it changes anything.\nShift+Tab turns it on or off.");
             tip.SetToolTip(Model, "Choose the model");
             auto.Changed += delegate { if (AutoChanged != null) AutoChanged(auto.On); };
@@ -5121,10 +5157,13 @@ namespace MinGent
             string cur = Level;
             ContextMenuStrip m = Menus.Create(th);
             m.Items.Add(Menus.Detail("Ask", "asks before commands, web and outside changes", cur == "ask", delegate { if (LevelChosen != null) LevelChosen("ask"); }));
-            m.Items.Add(Menus.Detail("Auto", "asks only about what you chose", cur == "auto", delegate { if (LevelChosen != null) LevelChosen("auto"); }));
-            ToolStripMenuItem full = Menus.Detail("Full auto", "asks nothing, risky", cur == "full", delegate { if (LevelChosen != null) LevelChosen("full"); });
-            full.ForeColor = th.HighContrast ? th.Fore : th.Error;
-            m.Items.Add(full);
+            m.Items.Add(Menus.Detail("Auto", "asks only before the steps you chose", cur == "auto", delegate { if (LevelChosen != null) LevelChosen("auto"); }));
+            if (cur == "full")
+            {
+                ToolStripMenuItem full = Menus.Detail("Full auto", "asks nothing until MinGent closes", true, delegate { });
+                full.ForeColor = th.HighContrast ? th.Fore : th.Error;
+                m.Items.Add(full);
+            }
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add(Menus.Item("Choose what Auto asks about...", false, delegate { if (CustomizeAuto != null) CustomizeAuto(this, EventArgs.Empty); }));
             m.Closed += delegate (object o, ToolStripDropDownClosedEventArgs ce)
@@ -5457,6 +5496,7 @@ namespace MinGent
             if (UsageLayout(out ur, out utext))
             {
                 DateTime now = DateTime.UtcNow;
+                if (hoverUsage) Glyphs.Hover(g, th, th.ButtonHover, ur, UI.S(8));
                 Color track = th.HighContrast ? th.ChromeDim : Theme.Blend(th.ChromeDim, th.InputBack, th.Dark ? 0.62 : 0.7);
                 int bw = UI.S(16), bh = Math.Max(3, UI.S(4)), gap = Math.Max(2, UI.S(3));
                 int bx = ur.X + UI.S(6), by = ur.Y + (ur.Height - bh * 2 - gap) / 2;
@@ -5505,7 +5545,7 @@ namespace MinGent
             if (s != hoverSend || ef != hoverEffort || at != hoverAttach || cx != hoverCtx || ti != hoverTile || rm != hoverRemove || me != hoverMeter || us != hoverUsage)
             {
                 hoverSend = s; hoverEffort = ef; hoverAttach = at; hoverCtx = cx; hoverTile = ti; hoverRemove = rm; hoverMeter = me; hoverUsage = us;
-                Cursor = s || ef || at || cx || rm || me ? Cursors.Hand : ti >= 0 || us ? Cursors.Default : Cursors.IBeam;
+                Cursor = s || ef || at || cx || rm || me || us ? Cursors.Hand : ti >= 0 ? Cursors.Default : Cursors.IBeam;
                 tip.Hide(this);
                 tip.SetToolTip(this, s ? (running && Box.TextLength == 0 && attachments.Count == 0 ? "Stop (Esc)" : running ? "Send to the agent while it works" : "Send (Enter)") : at ? "Attach files or images" : rm ? "Remove" : ti >= 0 ? Attachments.Tip(attachments[ti]) : me ? MeterTip : us ? geminiUsage.Tip(DateTime.UtcNow) : null);
                 Invalidate();
@@ -5535,6 +5575,9 @@ namespace MinGent
             Rectangle mr;
             bool mt;
             if (MeterLayout(out mr, out mt) && mr.Contains(e.Location)) { if (MeterClicked != null) MeterClicked(this, EventArgs.Empty); return; }
+            Rectangle ur;
+            bool ut;
+            if (UsageLayout(out ur, out ut) && ur.Contains(e.Location)) { if (UsageClicked != null) UsageClicked(this, EventArgs.Empty); return; }
             bool rm;
             int ti = TileAt(e.Location, out rm);
             if (ti >= 0 && rm) { RemoveAttachment(ti); return; }

@@ -812,7 +812,9 @@ namespace MinGent
         static void Pad(ToolStripItem it)
         {
             NoteMenuItem note = it as NoteMenuItem;
+            MeterMenuItem meter = it as MeterMenuItem;
             if (note != null) it.Padding = new Padding(it.Padding.Left, note.Heading ? UI.S(6) : 0, it.Padding.Right, note.Heading ? UI.S(2) : UI.S(4));
+            else if (meter != null) it.Padding = new Padding(it.Padding.Left, UI.S(4), it.Padding.Right, meter.Extra);
             else if (it is ToolStripMenuItem) it.Padding = new Padding(it.Padding.Left, UI.S(4), it.Padding.Right, UI.S(4));
             else if (it is ToolStripSeparator) it.Margin = new Padding(0, UI.S(2), 0, UI.S(2));
         }

@@ -182,6 +182,20 @@ namespace MinGent
         SwitchRow offline, netLog, errorLog, lmUnload, engineUpdates, autoSave, openFiles, showThinking, sendContext, web, browserOn, guard, appsOn, sideBySide, memoryOn, helpersOn, autoReview, captcha, sandbox, otherApps, restrictedApps;
         readonly Dictionary<string, SwitchRow> autoAsk = new Dictionary<string, SwitchRow>();
         readonly List<string> pageTitles = new List<string>();
+        ThemedCombo autoLevel;
+        int lastLevel;
+        bool settingLevel;
+        bool FullAutoOn;
+        public bool? FullAuto;
+
+        public void MarkFullAuto()
+        {
+            FullAutoOn = true;
+            if (autoLevel != null) SetLevelBox(LevelFull);
+        }
+
+        static readonly string[] AutoLevels = { "Risky steps", "Most steps", "Your own choice", "Nothing (Full auto)" };
+        const int LevelBalanced = 0, LevelCareful = 1, LevelCustom = 2, LevelFull = 3;
 
         static readonly int[] CtxValues = { 0, 8192, 16384, 32768, 49152, 65536, 98304, 131072, 196608, 262144 };
         static readonly string[] CtxNames = { "LM Studio's default", "8K", "16K", "32K", "48K", "64K", "96K", "128K", "192K", "256K" };
@@ -588,7 +602,7 @@ namespace MinGent
             web = Switch(c, "Web search and web pages", "Search the web and read pages and YouTube videos. With the built-in browser on, you can watch the searches there. Off: the agent can still open addresses on this PC and your network. " + Cap(Tokens(new WebSearchTool())) + ".", s.AiWeb);
             browserOn = Switch(c, "Built-in browser", "Open pages, click, type and scroll in MinGent's own browser, which keeps its own sign-ins. " + Cap(Tokens(AgentToolbox.BrowserTools(true))) + "; off by itself when the model's context is under 16K.", s.AiBrowser);
             captcha = Switch(c, "Let the agent try CAPTCHAs (experimental)", "The agent tries to solve CAPTCHAs in its own browser and hands them to you after five failed tries. Off: CAPTCHAs are left to you.", s.AiCaptcha);
-            appsOn = Switch(c, "Programs it starts itself", "Open programs from the Start menu, start the ones it builds, and read, click, type and scroll in them. A program from the Start menu, a Store app or one Windows opens for it needs your OK first, except in Full auto. " + Cap(Tokens(AgentToolbox.AppTools(true))) + "; off by itself under 24K.", s.AiApps);
+            appsOn = Switch(c, "Programs it starts itself", "Open programs from the Start menu, start the ones it builds, and read, click, type and scroll in them. Opening a program from the Start menu, a Store app or one Windows opens for it asks first, unless Auto is set not to (Safety). " + Cap(Tokens(AgentToolbox.AppTools(true))) + "; off by itself under 24K.", s.AiApps);
             otherApps = Switch(c, "Programs you opened yourself", "The agent can ask to use a program you already have open; you decide for each one, in each chat, even in Full auto. Browsers, File Explorer, terminals and code editors are look-only, and mail and chat programs are not offered, unless \"Restricted programs\" is on. Needs \"Programs it starts itself\". " + Cap(Tokens(new AppAccessTool())) + ".", s.AiOtherApps);
             restrictedApps = Switch(c, "Restricted programs", "On: when you ask for it, the agent can also click and type in your browsers, File Explorer, terminals, code editors, mail and chat programs and Windows' own tools, after your OK for each program in each chat, even in Full auto. Password managers, money and remote-access programs, Windows' sign-in and admin prompts and the Windows Security app stay off limits either way. Needs \"Programs it starts itself\".", s.AiRestrictedApps);
             sideBySide = Switch(c, "Put MinGent and the program side by side", "While the agent uses a program, MinGent and the program each get half the screen, until the program closes.", s.AiSideBySide);
@@ -809,18 +823,31 @@ namespace MinGent
         {
             ScrollHost p = AddPage("Safety", "shield");
             Card c;
-            Section(p, "Auto mode", "Auto, the switch under the message box, lets the agent edit files, run commands and browse without asking. Full auto, in the menu next to it, asks nothing and turns back into Auto when MinGent closes.");
-            c = NewCard(p);
-            guard = Switch(c, "Prompt-injection guard (recommended)", "After the agent reads anything from the web, Auto asks again before commands, writing outside the work folder, sending a lot of data to an address, and everything below, even rows you switched off.", s.AiWebGuard);
-            Place(p, c);
-
-            Section(p, "What Auto still asks about", "Auto asks you first about the rows switched on here. Ask mode always asks; Full auto never does.");
+            Section(p, "Auto mode", "Auto, the switch under the message box, lets the agent edit files, run commands and browse without asking, except before the steps chosen here. With the switch off, it asks before commands, web access and changes outside the work folder.");
             c = NewCard(p);
             List<string> allowed = s.AutoAllowList;
+            string preset = PermissionCategory.PresetOf(allowed);
+            lastLevel = FullAutoOn ? LevelFull : preset == "balanced" ? LevelBalanced : preset == "careful" ? LevelCareful : LevelCustom;
+            autoLevel = MakeCombo(AutoLevels, lastLevel);
+            autoLevel.SetBadge(LevelBalanced, "Recommended");
+            autoLevel.SetNote(LevelCustom, "the switches below");
+            autoLevel.SetNote(LevelFull, "until MinGent closes");
+            Row(c, "Auto asks before", "Risky steps: installing, wide deletes, system changes, passwords, payments and sending files or code out. Most steps: also opening programs and saving downloads. Nothing: the agent asks nothing, even when a web page tries to trick it, until MinGent closes.", autoLevel, autoLevel.PreferredWidth);
+            guard = Switch(c, "Prompt-injection guard (recommended)", "After the agent reads anything from the web, a program's window or a file it didn't write, Auto asks again before commands that could change things or reach the internet, writing outside the work folder, sending a lot of data to an address, and everything below, even rows you switched off.", s.AiWebGuard);
+            Place(p, c);
+
+            Section(p, "What Auto asks about", "Auto asks you first about the rows switched on here. Ask mode always asks.");
+            c = NewCard(p);
             foreach (string cat in PermissionCategory.All)
-                autoAsk[cat] = Switch(c, PermissionCategory.Title(cat), PermissionCategory.Note(cat), !allowed.Contains(cat));
+            {
+                SwitchRow row = Switch(c, PermissionCategory.Title(cat), PermissionCategory.Note(cat), !allowed.Contains(cat));
+                autoAsk[cat] = row;
+                row.CheckedChanged += delegate { SyncLevel(); };
+            }
             SwitchRow console = autoAsk[PermissionCategory.Console];
             console.CheckedChanged += delegate { if (!console.Checked && !reverting) BeginInvoke(new Action(delegate { ConfirmConsoleOff(console); })); };
+            autoLevel.SelectedIndexChanged += delegate { LevelPicked(); };
+            DimRows();
             Place(p, c);
 
             Section(p, "Sandbox", null);
@@ -844,6 +871,64 @@ namespace MinGent
         }
 
         bool reverting;
+
+        void LevelPicked()
+        {
+            if (settingLevel) return;
+            int i = autoLevel.SelectedIndex;
+            if (i == LevelFull)
+            {
+                if (!FullAutoOn && !s.AiFullExplained && !Alert.Confirm(this, Th, FullAutoWarning, Text, "Turn on Full auto", true))
+                {
+                    SetLevelBox(lastLevel);
+                    return;
+                }
+                s.AiFullExplained = true;
+                FullAuto = FullAutoOn ? (bool?)null : true;
+                lastLevel = i;
+                DimRows();
+                return;
+            }
+            FullAuto = FullAutoOn ? (bool?)false : null;
+            if (i == LevelBalanced || i == LevelCareful)
+            {
+                settingLevel = true;
+                reverting = true;
+                foreach (KeyValuePair<string, SwitchRow> kv in autoAsk) kv.Value.Checked = i == LevelCareful || Array.IndexOf(PermissionCategory.Balanced, kv.Key) < 0;
+                reverting = false;
+                settingLevel = false;
+            }
+            lastLevel = i;
+            DimRows();
+        }
+
+        void DimRows()
+        {
+            bool on = autoLevel.SelectedIndex != LevelFull;
+            guard.Enabled = on;
+            foreach (SwitchRow row in autoAsk.Values) row.Enabled = on;
+        }
+
+        void SyncLevel()
+        {
+            if (settingLevel || autoLevel == null || autoLevel.SelectedIndex == LevelFull) return;
+            List<string> allow = new List<string>();
+            foreach (KeyValuePair<string, SwitchRow> kv in autoAsk) if (!kv.Value.Checked) allow.Add(kv.Key);
+            string preset = PermissionCategory.PresetOf(allow);
+            SetLevelBox(preset == "balanced" ? LevelBalanced : preset == "careful" ? LevelCareful : LevelCustom);
+        }
+
+        void SetLevelBox(int i)
+        {
+            settingLevel = true;
+            autoLevel.SelectedIndex = i;
+            settingLevel = false;
+            lastLevel = i;
+            if (guard != null) DimRows();
+        }
+
+        public const string FullAutoWarning = "Full auto asks you nothing. The agent can install software, delete files, change settings, press buy buttons and run any command without your OK, even when a web page tries to trick it.\n\n" +
+                                              "Its file tools still never write into Windows, Program Files or MinGent's own data, and it never sends your API keys to a website. Full auto turns back into your Auto choice when MinGent closes.\n\nOnly use it for work you trust.";
 
         void ConfirmConsoleOff(SwitchRow row)
         {

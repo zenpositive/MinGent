@@ -1063,9 +1063,9 @@ namespace MinGent
         public IAccessible Acc;
         public object Child;
         public int Role, State;
-        public string Name = "", Value = "", Text = "";
+        public string Name = "", Value = "", Text = "", Details = "";
         public Rectangle Rect;
-        public bool Inside;
+        public bool Inside, Writable;
     }
 
     class WalkBudget
@@ -1083,6 +1083,7 @@ namespace MinGent
         delegate bool EnumProc(IntPtr hwnd, IntPtr lParam);
         [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr lParam);
         [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr parent, EnumProc cb, IntPtr lParam);
+        [DllImport("user32.dll")] static extern bool IsChild(IntPtr parent, IntPtr child);
         [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr hwnd);
         [DllImport("user32.dll")] static extern bool IsHungAppWindow(IntPtr hwnd);
         [DllImport("user32.dll")] static extern int GetDlgCtrlID(IntPtr hwnd);
@@ -1102,6 +1103,7 @@ namespace MinGent
         [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
         [DllImport("user32.dll", EntryPoint = "SetCursorPos")] static extern bool SetCursorPosRaw(int x, int y);
         [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT p);
+        [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
         [DllImport("user32.dll", EntryPoint = "SendInput", SetLastError = true)] static extern uint SendInputRaw(uint n, INPUT[] inputs, int size);
         [DllImport("user32.dll", EntryPoint = "keybd_event")] static extern void KeybdEventRaw(byte vk, byte scan, uint flags, UIntPtr extra);
         [DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
@@ -1120,6 +1122,7 @@ namespace MinGent
         [DllImport("user32.dll")] static extern IntPtr GetKeyboardLayout(int thread);
         [DllImport("user32.dll")] static extern int GetWindowThreadProcessId(IntPtr hwnd, IntPtr pid);
         [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd, int attr, out int value, int size);
+        [DllImport("user32.dll")] static extern bool GetGUIThreadInfo(int thread, ref GUITHREADINFO info);
 
         [StructLayout(LayoutKind.Sequential)] struct RECT { public int Left, Top, Right, Bottom; }
         [StructLayout(LayoutKind.Sequential)] struct POINT { public int X, Y; }
@@ -1128,6 +1131,7 @@ namespace MinGent
         [StructLayout(LayoutKind.Explicit)] struct InputUnion { [FieldOffset(0)] public MOUSEINPUT mi; [FieldOffset(0)] public KEYBDINPUT ki; }
         [StructLayout(LayoutKind.Sequential)] struct INPUT { public uint type; public InputUnion u; }
         [StructLayout(LayoutKind.Sequential)] struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+        [StructLayout(LayoutKind.Sequential)] struct GUITHREADINFO { public int cbSize, flags; public IntPtr active, focus, capture, menuOwner, moveSize, caret; public RECT caretRect; }
 
         static int ownInputFrom, ownInputTo, answeredAt, gaveUpAt;
         static bool ownInputSent, answered, gaveUp;
@@ -1158,12 +1162,30 @@ namespace MinGent
             OwnInputEnds();
         }
 
-        static bool SetCursorPos(int x, int y)
+        static void MoveTo(int x, int y)
         {
             OwnInputStarts();
-            bool moved = SetCursorPosRaw(x, y);
-            OwnInputEnds();
-            return moved;
+            try
+            {
+                int vx = GetSystemMetrics(76), vy = GetSystemMetrics(77), vw = Math.Max(2, GetSystemMetrics(78)), vh = Math.Max(2, GetSystemMetrics(79));
+                INPUT[] i = new INPUT[1];
+                i[0].type = 0;
+                i[0].u.mi.dx = (int)Math.Round((x - vx) * 65535.0 / (vw - 1));
+                i[0].u.mi.dy = (int)Math.Round((y - vy) * 65535.0 / (vh - 1));
+                i[0].u.mi.dwFlags = 0x0001 | 0x4000 | 0x8000;
+                SendInputRaw(1, i, InputSize);
+                POINT p;
+                if (!GetCursorPos(out p) || p.X != x || p.Y != y) SetCursorPosRaw(x, y);
+            }
+            finally { OwnInputEnds(); }
+        }
+
+        static void Approach(int x, int y, int settle)
+        {
+            MoveTo(x - 6, y - 6);
+            Thread.Sleep(25);
+            MoveTo(x, y);
+            Thread.Sleep(settle);
         }
 
         public static void UserAnswered()
@@ -2455,6 +2477,8 @@ namespace MinGent
 
         public static bool IsEdit(AppElement e) { return e != null && e.Role == RoleText; }
 
+        public static bool EditableCombo(AppElement e) { return e != null && e.Role == RoleCombo && e.Writable; }
+
         public static bool StillDisabled(AppElement e)
         {
             if (e == null || (e.State & StateUnavailable) == 0) return false;
@@ -2710,10 +2734,107 @@ namespace MinGent
                         else shared.InsertRange(at + 1, inner);
                     }
                 }
+                foreach (IntPtr island in Islands(w.Hwnd))
+                {
+                    int room = max - b.Useful;
+                    if (room <= 0 || DateTime.UtcNow > until || (ct != null && ct.IsCancelled)) { b.Cut = true; break; }
+                    bool cut;
+                    List<AppElement> seen;
+                    lock (shared) seen = new List<AppElement>(shared);
+                    List<AppElement> fresh = FromUia(island, room, seen, out cut);
+                    if (cut) b.Cut = true;
+                    foreach (AppElement e in fresh) b.Seen(e);
+                    lock (shared) shared.AddRange(fresh);
+                }
                 done = !b.Cut && DateTime.UtcNow <= until && (ct == null || !ct.IsCancelled);
             }, 9000);
             lock (shared) { list.AddRange(shared); whole = done; }
             return list;
+        }
+
+        static readonly HashSet<string> IslandClasses = new HashSet<string>(StringComparer.Ordinal) {
+            "Microsoft.UI.Content.DesktopChildSiteBridge", "Microsoft.UI.Content.PopupWindowSiteBridge", "Windows.UI.Composition.DesktopWindowContentBridge", "Xaml_WindowedPopupClass" };
+
+        public const string PopupClass = "Microsoft.UI.Content.PopupWindowSiteBridge";
+
+        public static bool IsPopup(string cls) { return cls == PopupClass || cls == "Xaml_WindowedPopupClass"; }
+
+        static string ClassOf(IntPtr h)
+        {
+            StringBuilder sb = new StringBuilder(128);
+            GetClassName(h, sb, 128);
+            return sb.ToString();
+        }
+
+        static List<IntPtr> Islands(IntPtr top)
+        {
+            List<IntPtr> found = new List<IntPtr>();
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) return found;
+            if (IslandClasses.Contains(ClassOf(top))) { found.Add(top); return found; }
+            EnumProc cb = delegate (IntPtr h, IntPtr l)
+            {
+                if (!IsWindowVisible(h) || !IslandClasses.Contains(ClassOf(h))) return true;
+                foreach (IntPtr f in found) if (IsChild(f, h)) return true;
+                found.Add(h);
+                return true;
+            };
+            try { EnumChildWindows(top, cb, IntPtr.Zero); } catch { }
+            GC.KeepAlive(cb);
+            return found;
+        }
+
+        static List<AppElement> FromUia(IntPtr island, int room, List<AppElement> have, out bool cut)
+        {
+            cut = false;
+            List<AppElement> res = new List<AppElement>();
+            List<UiaItem> items;
+            try { items = Uia.Read(island, Math.Max(400, room * 4), out cut); }
+            catch { return res; }
+            Dictionary<string, List<Rectangle>> known = new Dictionary<string, List<Rectangle>>(StringComparer.Ordinal);
+            foreach (AppElement h in have)
+            {
+                if (h.Name.Length == 0) continue;
+                List<Rectangle> at;
+                if (!known.TryGetValue(h.Name, out at)) { at = new List<Rectangle>(); known[h.Name] = at; }
+                at.Add(h.Rect);
+            }
+            int useful = 0;
+            foreach (UiaItem it in items)
+            {
+                if ((it.State & StateInvisible) != 0) continue;
+                AppElement e = new AppElement();
+                e.Acc = new UiaAccessible(it);
+                e.Child = 0;
+                e.Role = it.Role;
+                e.State = it.State;
+                e.Name = it.Name.Replace('\n', ' ').Trim();
+                if (e.Role == RoleText || e.Role == RoleCombo || e.Role == RoleSlider || e.Role == RoleSpin)
+                {
+                    e.Value = it.Value.Replace('\n', ' ');
+                    if (e.Role == RoleText) e.Text = it.Value;
+                }
+                e.Rect = it.Rect;
+                e.Writable = it.Writable;
+                e.Inside = e.Role == RoleListItem || e.Role == RoleOutlineItem || e.Role == RoleCell || e.Role == RoleRow;
+                if (e.Name.Length == 0 && !Actionable(e.Role)) continue;
+                List<Rectangle> same;
+                if (e.Name.Length > 0 && known.TryGetValue(e.Name, out same) && same.Exists(delegate (Rectangle r) { return Near(r, e.Rect); })) continue;
+                AppElement prev = res.Count > 0 ? res[res.Count - 1] : null;
+                if (prev != null && e.Name.Length > 0 && prev.Name == e.Name && prev.Rect.Contains(e.Rect))
+                {
+                    if (Actionable(e.Role) || !Actionable(prev.Role)) res[res.Count - 1] = e;
+                    continue;
+                }
+                if (useful >= room) { cut = true; break; }
+                res.Add(e);
+                useful++;
+            }
+            return res;
+        }
+
+        static bool Near(Rectangle a, Rectangle b)
+        {
+            return Math.Abs(a.X - b.X) <= 3 && Math.Abs(a.Y - b.Y) <= 3 && Math.Abs(a.Width - b.Width) <= 3 && Math.Abs(a.Height - b.Height) <= 3;
         }
 
         static void Walk(IAccessible acc, int depth, List<AppElement> list, WalkBudget b, DateTime until, CancelToken ct, List<KeyValuePair<AppElement, IAccessible>> later, int cap)
@@ -2854,6 +2975,11 @@ namespace MinGent
                         e.Value = raw.Replace('\n', ' ');
                         if (e.Role == RoleText) e.Text = raw;
                     }
+                    else if (e.Role == RoleListItem && e.Name.Length > 0)
+                    {
+                        string more = (e.Acc.get_accDescription(e.Child) ?? "").Replace('\n', ' ').Trim();
+                        if (more.Length > 0 && more != e.Name) e.Details = more;
+                    }
                 }
                 catch { }
                 try
@@ -2946,8 +3072,10 @@ namespace MinGent
             StringBuilder sb = new StringBuilder();
             sb.Append('[').Append(id).Append(' ').Append(role);
             if (e.Name.Length > 0) sb.Append(" \"").Append(e.Name.Length > 80 ? e.Name.Substring(0, 80) + "..." : e.Name).Append('"');
+            if (e.Details.Length > 0) sb.Append(" (").Append(e.Details.Length > 200 ? e.Details.Substring(0, 200) + "..." : e.Details).Append(')');
             if ((e.State & StateProtected) != 0) sb.Append(" (password)");
             else if (e.Value.Length > 0) sb.Append(" value=\"").Append(e.Value.Length > 100 ? e.Value.Substring(0, 100) + "..." : e.Value).Append('"');
+            if (EditableCombo(e)) sb.Append(" editable");
             if ((e.State & StateChecked) != 0) sb.Append(" checked");
             if ((e.State & StateSelected) != 0) sb.Append(" selected");
             if ((e.State & StatePressed) != 0) sb.Append(" pressed");
@@ -3098,14 +3226,73 @@ namespace MinGent
             if (click && wait > 0) Thread.Sleep(Math.Min(wait, 200));
         }
 
-        public static void Click(int x, int y, MouseSpec m)
+        public static string InFront(AppWindow w, int x, int y, string spot)
+        {
+            if (w == null || Environment.OSVersion.Platform != PlatformID.Win32NT) return null;
+            try
+            {
+                IntPtr h = WindowFromPoint(new POINTSTRUCT(x, y));
+                if (h == IntPtr.Zero) return spot + " is off the screen";
+                int pid;
+                GetWindowThreadProcessId(h, out pid);
+                if (pid == w.Pid) return null;
+                IntPtr root = GetAncestor(h, 2);
+                if (root == IntPtr.Zero) root = h;
+                if (root == w.Hwnd || root == GetAncestor(w.Hwnd, 2) || OwnedBy(root, w.Hwnd)) return null;
+                return (pid == OwnPid ? "MinGent's own window" : "another window") + " is in front of " + spot;
+            }
+            catch { return spot + " could not be checked"; }
+        }
+
+        public static bool KeysToPopup(AppWindow w, List<AppWindow> popups)
+        {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) return false;
+            int fpid;
+            GetWindowThreadProcessId(GetForegroundWindow(), out fpid);
+            if (fpid != w.Pid) return false;
+            if (InMenuMode(w.Hwnd)) return true;
+            if (popups == null) return false;
+            foreach (AppWindow p in popups) if (p.Menu && InMenuMode(p.Hwnd)) return true;
+            bool inside = false;
+            RunTimed(delegate
+            {
+                foreach (AppWindow p in popups)
+                {
+                    if (p.Menu) continue;
+                    Refresh(p);
+                    try { if (Uia.LightDismissFocus(p.Hwnd, p.Rect)) { inside = true; return; } } catch { }
+                }
+            }, 3000);
+            return inside;
+        }
+
+        static bool InMenuMode(IntPtr hwnd)
+        {
+            GUITHREADINFO g = new GUITHREADINFO();
+            g.cbSize = Marshal.SizeOf(typeof(GUITHREADINFO));
+            int thread = GetWindowThreadProcessId(hwnd, IntPtr.Zero);
+            return thread != 0 && GetGUIThreadInfo(thread, ref g) && (g.flags & 0x4) != 0;
+        }
+
+        public static string NotDone(string why, string nothing)
+        {
+            string s = why + ", so " + nothing + ".";
+            if (why.StartsWith("MinGent's own window", StringComparison.Ordinal)) return s + " Use a part of the program that MinGent doesn't cover, or ask the user to move the two windows apart.";
+            if (why.StartsWith("another window", StringComparison.Ordinal)) return s + " It may be a notification or a window that stays on top: try again in a moment, or ask the user to move it.";
+            return s;
+        }
+
+        public static string Click(AppWindow w, int x, int y, MouseSpec m)
         {
             if (m == null) m = new MouseSpec();
+            string front = InFront(w, x, y, "that spot");
+            if (front != null) return front;
             ShowPointer(x, y, true);
             POINT old;
             GetCursorPos(out old);
-            SetCursorPos(x, y);
-            Thread.Sleep(30);
+            Approach(x, y, 40);
+            front = InFront(w, x, y, "that spot");
+            if (front != null) { MoveTo(old.X, old.Y); return front; }
             Mods(m, false);
             try
             {
@@ -3119,26 +3306,32 @@ namespace MinGent
             }
             finally { Mods(m, true); }
             Thread.Sleep(60);
-            if (m.HoldMs == 0) { Unstick(); SetCursorPos(old.X, old.Y); }
+            if (m.HoldMs == 0) { Unstick(); MoveTo(old.X, old.Y); }
+            return null;
         }
 
-        public static void Hover(int x, int y)
+        public static string Hover(AppWindow w, int x, int y)
         {
+            string front = InFront(w, x, y, "that spot");
+            if (front != null) return front;
             ShowPointer(x, y, false);
-            SetCursorPos(x, y);
-            Thread.Sleep(60);
-            SetCursorPos(x + 1, y);
+            Approach(x, y, 60);
+            MoveTo(x + 1, y);
             Thread.Sleep(30);
-            SetCursorPos(x, y);
+            MoveTo(x, y);
+            return null;
         }
 
-        public static void Wheel(int x, int y, bool horizontal, int notches)
+        public static string Wheel(AppWindow w, int x, int y, bool horizontal, int notches)
         {
+            string front = InFront(w, x, y, "that spot");
+            if (front != null) return front;
             ShowPointer(x, y, false);
             POINT old;
             GetCursorPos(out old);
-            SetCursorPos(x, y);
-            Thread.Sleep(40);
+            Approach(x, y, 40);
+            front = InFront(w, x, y, "that spot");
+            if (front != null) { MoveTo(old.X, old.Y); return front; }
             int left = Math.Max(-200, Math.Min(200, notches));
             while (left != 0)
             {
@@ -3152,17 +3345,21 @@ namespace MinGent
                 Thread.Sleep(30);
             }
             Thread.Sleep(80);
-            SetCursorPos(old.X, old.Y);
+            MoveTo(old.X, old.Y);
+            return null;
         }
 
-        public static void Drag(int x1, int y1, int x2, int y2)
+        public static string Drag(AppWindow w, int x1, int y1, int x2, int y2)
         {
+            string front = InFront(w, x1, y1, "the start of the drag") ?? InFront(w, x2, y2, "the end of the drag");
+            if (front != null) return front;
             ShowPointer(x1, y1, true);
             AgentCursor.PointAt(new Point(x2, y2), false);
             POINT old;
             GetCursorPos(out old);
-            SetCursorPos(x1, y1);
-            Thread.Sleep(50);
+            Approach(x1, y1, 150);
+            front = InFront(w, x1, y1, "the start of the drag");
+            if (front != null) { MoveTo(old.X, old.Y); return front; }
             Button("left", false);
             try
             {
@@ -3170,7 +3367,7 @@ namespace MinGent
                 const int steps = 15;
                 for (int k = 1; k <= steps; k++)
                 {
-                    SetCursorPos(x1 + (x2 - x1) * k / steps, y1 + (y2 - y1) * k / steps);
+                    MoveTo(x1 + (x2 - x1) * k / steps, y1 + (y2 - y1) * k / steps);
                     Thread.Sleep(20);
                 }
                 Thread.Sleep(120);
@@ -3178,7 +3375,8 @@ namespace MinGent
             finally { Button("left", true); }
             Thread.Sleep(80);
             Unstick();
-            SetCursorPos(old.X, old.Y);
+            MoveTo(old.X, old.Y);
+            return null;
         }
 
         static readonly int[] Held = { 0x01, 0x02, 0x04, 0x10, 0x11, 0x12, 0x5B, 0x5C };
@@ -3334,13 +3532,16 @@ namespace MinGent
             Thread.Sleep(4);
         }
 
-        public static void Click(int x, int y, bool right, bool dbl)
+        public static string Click(AppWindow w, int x, int y, bool right, bool dbl)
         {
+            string front = InFront(w, x, y, "that spot");
+            if (front != null) return front;
             ShowPointer(x, y, true);
             POINT old;
             GetCursorPos(out old);
-            SetCursorPos(x, y);
-            Thread.Sleep(30);
+            Approach(x, y, 40);
+            front = InFront(w, x, y, "that spot");
+            if (front != null) { MoveTo(old.X, old.Y); return front; }
             uint down = right ? 0x0008u : 0x0002u, up = right ? 0x0010u : 0x0004u;
             for (int i = 0; i < (dbl ? 2 : 1); i++)
             {
@@ -3351,7 +3552,8 @@ namespace MinGent
                 Thread.Sleep(40);
             }
             Thread.Sleep(60);
-            SetCursorPos(old.X, old.Y);
+            MoveTo(old.X, old.Y);
+            return null;
         }
 
         public static string Type(AppWindow w, string text)
@@ -3517,6 +3719,7 @@ namespace MinGent
         public IntPtr ShotWindow = IntPtr.Zero;
         public double ShotScale = 1;
         public int ShotW, ShotH;
+        public Size ShotOf;
         public readonly Dictionary<string, AppGrant> Grants = new Dictionary<string, AppGrant>(StringComparer.OrdinalIgnoreCase);
         public readonly Dictionary<IntPtr, KeyValuePair<int, int>> WinIds = new Dictionary<IntPtr, KeyValuePair<int, int>>();
         public int NextWin = 1;
@@ -3562,6 +3765,45 @@ namespace MinGent
             if (ctx.Cfg == null || !ctx.Cfg.OtherApps) return null;
             AppSession st = State(ctx);
             lock (st.Grants) return new Dictionary<string, AppGrant>(st.Grants, StringComparer.OrdinalIgnoreCase);
+        }
+
+        static List<AppWindow> Popups(ToolContext ctx, AppWindow w)
+        {
+            List<AppWindow> l = new List<AppWindow>();
+            foreach (AppWindow x in All(ctx))
+                if (x.Pid == w.Pid && x.Hwnd != w.Hwnd && !x.Veiled && (x.Menu || AppControl.IsPopup(x.Class))) l.Add(x);
+            return l;
+        }
+
+        protected static string ClosePopups(ToolContext ctx, AppWindow w, Point spot, out bool left)
+        {
+            left = false;
+            if (w.Menu || AppControl.IsPopup(w.Class)) return null;
+            List<AppWindow> open = Popups(ctx, w);
+            if (open.Count == 0) return null;
+            if (!spot.IsEmpty)
+                foreach (AppWindow p in open)
+                {
+                    AppControl.Refresh(p);
+                    if (p.Rect.Contains(spot)) return null;
+                }
+            bool tried = false;
+            for (int i = 0; i < 3 && AppControl.KeysToPopup(w, open); i++)
+            {
+                tried = true;
+                AppControl.Key(0x1B, null);
+                ctx.Ct.Sleep(250);
+                open = Popups(ctx, w);
+            }
+            if (!tried) return null;
+            if (AppControl.KeysToPopup(w, open)) { left = true; return null; }
+            return "MinGent closed the program's open pop-up first, since a click outside a pop-up only closes it";
+        }
+
+        protected static string LeftNote(ToolContext ctx, AppWindow w, bool left)
+        {
+            if (!left || Popups(ctx, w).Count > 0) return null;
+            return "A pop-up of the program was open, and this closed it. Programs often use a click outside a pop-up only to close it, so check that it did what you wanted";
         }
 
         protected static List<AppWindow> All(ToolContext ctx)
@@ -3721,7 +3963,7 @@ namespace MinGent
         protected static string Check(ToolContext ctx, AppWindow w, bool acting, bool cancelOnly, string act)
         {
             PermissionState ps = ctx.Session.Perms;
-            bool tainted = ps.WebGuard && ps.Tainted;
+            bool tainted = ps.WebGuard && ps.TaintedFor(UseName(w));
             string limited = Restricted(ctx, w, true);
             if (limited != null) return limited;
             if (w.Veiled && AppControl.Allowed(w) == null)
@@ -3739,7 +3981,7 @@ namespace MinGent
                 }
                 PermissionAsk fd = new PermissionAsk();
                 fd.Kind = "app";
-                fd.Category = ctx.Guarded(PermissionCategory.Launch);
+                ctx.Guard(fd, PermissionCategory.Launch);
                 fd.Title = "Use a file dialog in " + w.Process;
                 fd.Detail = "\"" + w.Title + "\"";
                 fd.Reason = "Typing in a file dialog can open or save files anywhere on your PC.";
@@ -3771,13 +4013,24 @@ namespace MinGent
 
         protected static AppWindow Find(ToolContext ctx, Dictionary<string, object> a, out string error)
         {
+            AppWindow w = Pick(ctx, a, out error);
+            if (w != null) ctx.AppSeen = UseName(w);
+            return w;
+        }
+
+        static AppWindow Pick(ToolContext ctx, Dictionary<string, object> a, out string error)
+        {
             List<AppWindow> all = All(ctx);
             bool named = (S(a, "window") ?? "").Trim().Length > 0;
-            bool refs = (S(a, "ref") ?? "").Trim().Length > 0 || (S(a, "to_ref") ?? "").Trim().Length > 0;
-            if (!named && refs)
+            string r1 = (S(a, "ref") ?? "").Trim(), r2 = (S(a, "to_ref") ?? "").Trim();
+            if (r1.Length > 0 || r2.Length > 0)
             {
-                IntPtr from = State(ctx).RefsWindow;
-                foreach (AppWindow x in all) if (from != IntPtr.Zero && x.Hwnd == from) { error = null; return x; }
+                AppSession st = State(ctx);
+                if (!named || st.Refs.ContainsKey(r1) || st.Refs.ContainsKey(r2))
+                {
+                    IntPtr from = st.RefsWindow;
+                    foreach (AppWindow x in all) if (from != IntPtr.Zero && x.Hwnd == from) { error = null; return x; }
+                }
             }
             return AppControl.Pick(all, S(a, "window"), ctx.Cfg.OtherApps, out error);
         }
@@ -3819,6 +4072,7 @@ namespace MinGent
             {
                 int x = (int)Math.Round(D(a, xKey, -1)), y = (int)Math.Round(D(a, yKey, -1));
                 bool shot = st.ShotWindow == w.Hwnd && st.ShotScale > 0;
+                if (shot && !st.ShotOf.IsEmpty && st.ShotOf != w.Rect.Size) return "the window changed size since the last app_screenshot, so positions in that picture no longer match. Take a new app_screenshot and use positions from it.";
                 double scale = shot ? st.ShotScale : 1;
                 int limW = shot && st.ShotW > 0 ? st.ShotW : w.Rect.Width, limH = shot && st.ShotH > 0 ? st.ShotH : w.Rect.Height;
                 if (x < 0 || y < 0 || x >= limW || y >= limH) return xKey + "," + yKey + " must be inside the " + (shot ? "screenshot" : "window") + " (0-" + (limW - 1) + ", 0-" + (limH - 1) + ")";
@@ -3826,7 +4080,7 @@ namespace MinGent
                 what = "at " + x + "," + y;
                 return null;
             }
-            if (required) return "give " + refKey + " (a ref from app_read) or " + xKey + " and " + yKey + " (" + (vision ? "a position in app_screenshot" : "a position in the window, as app_read gives it") + ")." + Sent(a);
+            if (required) return "give " + refKey + " (a ref from app_read) or " + xKey + " and " + yKey + " (" + (vision ? "a position in app_screenshot" : "a position in the window, as app_read gives it") + ")." + Sent(a) + Lost(ctx, a, xKey, yKey);
             p = new Point(w.Rect.X + w.Rect.Width / 2, w.Rect.Y + w.Rect.Height / 2);
             what = "in the middle of the window";
             return null;
@@ -3851,7 +4105,7 @@ namespace MinGent
             if (ClipboardGuard.AgentOwns()) return null;
             PermissionAsk ask = new PermissionAsk();
             ask.Kind = "app";
-            ask.Category = ctx.Guarded(PermissionCategory.Credentials);
+            ctx.Guard(ask, PermissionCategory.Credentials);
             ask.High = true;
             ask.Title = "Paste your clipboard into \"" + (w.Title.Length > 0 ? w.Title : w.Process) + "\"";
             ask.Detail = w.Process;
@@ -3869,12 +4123,25 @@ namespace MinGent
 
         protected static ToolOutcome After(ToolContext ctx, AppWindow w, int ms, string how)
         {
+            return After(ctx, w, ms, how, null);
+        }
+
+        protected static ToolOutcome After(ToolContext ctx, AppWindow w, int ms, string how, string first)
+        {
             AppControl.UnstickAfterOwnInput();
             string note;
             AppWindow now = Settle(ctx, w, ms, out note);
-            if (now == null) return ToolOutcome.Ok(how + ". The program has no open windows now.", how);
+            if (first != null) note = first + "." + (note != null ? " " + note : "");
+            if (now == null) return ToolOutcome.Ok(how + "." + (note != null ? " " + note : "") + " The program has no open windows now.", how);
+            if (ctx.Cfg.SideBySide && AppHighlight.Unzoom(now.Hwnd))
+            {
+                ctx.Ct.Sleep(400);
+                AppControl.Refresh(now);
+                note = (note != null ? note + " " : "") + "The window went full screen, so MinGent put it back on its half of the screen, next to MinGent, where the user can follow along.";
+            }
             ToolOutcome o = ToolOutcome.Ok(Read(ctx, now, State(ctx), how + "." + (note != null ? " " + note : "")), how);
             o.Untrusted = true;
+            o.App = UseName(now);
             return o;
         }
 
@@ -3903,6 +4170,14 @@ namespace MinGent
                     note = "A menu is open; its items are below. Click one, or press Escape to close it.";
                     return x;
                 }
+            AppSession ss = State(ctx);
+            if (ss.Before != null && ss.BeforePid == w.Pid)
+                foreach (AppWindow x in all)
+                    if (AppControl.IsPopup(x.Class) && x.Pid == w.Pid && x.Hwnd != w.Hwnd && !x.Veiled && !ss.Before.Contains(x.Hwnd))
+                    {
+                        note = "A pop-up opened, such as a drop-down or a tooltip; what it shows is below. To use it, click in it; Escape closes it.";
+                        return x;
+                    }
             AppWindow chosen = Chosen(all, w);
             if (chosen != null) note = Opened(State(ctx), all, w, chosen);
             return chosen;
@@ -4193,8 +4468,11 @@ namespace MinGent
                 st.Refs.Clear();
                 return (header != null ? header + "\n" : "") + "The window \"" + w.Title + "\" (" + w.Process + ") has closed, for example a start-up screen that made way for the main window. Call app_read without window to see the program's windows now.\n";
             }
-            st.Refs.Clear();
-            st.RefsWindow = w.Hwnd;
+            if (controls.Count > 0 || st.RefsWindow == w.Hwnd || !AppControl.Exists(st.RefsWindow))
+            {
+                st.Refs.Clear();
+                st.RefsWindow = w.Hwnd;
+            }
             StringBuilder sb = new StringBuilder();
             if (header != null) sb.Append(header).Append('\n');
             sb.Append("Window \"").Append(w.Title).Append("\" (").Append(w.Process).Append("), ").Append(w.Rect.Width).Append('x').Append(w.Rect.Height).Append(" at ").Append(w.Rect.X).Append(',').Append(w.Rect.Y);
@@ -4337,6 +4615,7 @@ namespace MinGent
                 (mine.Count > 0 ? "Its windows:\n" + ws + "Read one with app_read window=\"" + mine[0].Ref(all) + "\"." : "It has no window open right now; it shows up in app_read when it has one."),
                 "Allowed: " + hit.Name);
             o.Untrusted = true;
+            o.App = mine.Count > 0 ? UseName(mine[0]) : null;
             return o;
         }
     }
@@ -4393,7 +4672,8 @@ namespace MinGent
                     if (++n > 250) break;
                     sb.Append(x.Key).Append('\n');
                 }
-                return ToolOutcome.Ok("Programs in the Start menu of this PC that you can open" + (n > 250 ? " (the first 250; one that is not listed here can still be opened by its name)" : "") + ":\n" + sb + "Open one with app_open name=\"<name>\".", "Listed the programs");
+                return ToolOutcome.Ok("Programs in the Start menu of this PC that you can open" + (n > 250 ? " (the first 250; one that is not listed here can still be opened by its name)" : "") + ":\n" + sb + "Open one with app_open name=\"<name>\"." +
+                                      (n > 250 ? "" : " Store apps are listed too, so a program that isn't here is most likely not installed: tell the user rather than looking for another way to start it."), "Listed the programs");
             }
             string wrong;
             int at = AppControl.PickStart(apps, want, out wrong);
@@ -4424,12 +4704,12 @@ namespace MinGent
             PermissionState ps = ctx.Session.Perms;
             PermissionAsk ask = new PermissionAsk();
             ask.Kind = "app";
-            ask.Category = ctx.Guarded(PermissionCategory.Launch);
+            ctx.Guard(ask, PermissionCategory.Launch);
             ask.Title = "Open " + name;
             ask.Summary = PermissionAsk.PlainSummary(S(a, "reason"), 160);
             int slash = id.IndexOf('\\');
             if (slash >= 0) ask.Detail = id.StartsWith("{", StringComparison.Ordinal) && id.IndexOf('}') == slash - 1 ? id.Substring(slash + 1) : id;
-            ask.Where = "Until this chat ends";
+            ask.Where = "Until it closes";
             ask.Reason = "The agent wants to start this program from the Start menu. It will see its windows and can click, type and press keys in them, like a person at your PC. Whatever the program can do, such as running macros or scripts, the agent can do in it too.";
             ask.Key = "open:" + id.ToLowerInvariant();
             if (risk != null)
@@ -4524,6 +4804,9 @@ namespace MinGent
             foreach (AppWindow w in fresh) ws.Append(w.Ref(all)).Append(": \"").Append(w.Title).Append("\" (").Append(w.Process).Append(")\n");
             ToolOutcome o = ToolOutcome.Ok("Opened " + name + ". Its window" + (fresh.Count == 1 ? "" : "s") + ":\n" + ws + "Read it with app_read window=\"" + fresh[0].Ref(all) + "\".", "Opened " + name);
             o.Untrusted = true;
+            string app = UseName(fresh[0]);
+            foreach (AppWindow w in fresh) if (UseName(w) != app) app = null;
+            o.App = app;
             return o;
         }
     }
@@ -4604,12 +4887,21 @@ namespace MinGent
         public override string Name { get { return "app_read"; } }
         public bool Others;
         public override string Description { get { return "Test a desktop program you started (with app_open, or run_command background=true): lists its windows and the controls of one window (buttons, fields with their whole text, labels, menus) with refs like a12 for app_click and app_type" + (Blind ? ", and where each one is in the window" : "") + ". Only programs started by you in this chat can be read, including ones Windows opened for your command (such as Store apps)" + (Others ? ", and programs the user allowed with app_access." : ".") + " When the program is busy and not responding, app_read waits up to " + BusyWait + " seconds for it to answer."; } }
-        public override Dictionary<string, object> Schema { get { return Obj("window", WindowArg(), false, "part", P("integer", "For a window with more controls than one read lists: 2 lists the next ones"), false); } }
-        public override string Label(Dictionary<string, object> a) { string w = S(a, "window"); int p = I(a, "part", 1); return "Read the app window" + (string.IsNullOrEmpty(w) ? "" : " " + w) + (p > 1 ? ", part " + p : ""); }
+        public override Dictionary<string, object> Schema
+        {
+            get
+            {
+                return Obj("window", WindowArg(), false, "part", P("integer", "For a window with more controls than one read lists: 2 lists the next ones"), false,
+                           "wait", P("integer", "Seconds to wait before reading, up to 30, when the program is still loading or working on something (default 0)"), false);
+            }
+        }
+        public override string Label(Dictionary<string, object> a) { string w = S(a, "window"); int p = I(a, "part", 1), s = BrowserReadTool.Pause(a); return (s > 0 ? "Wait " + s + " s, then read" : "Read") + " the app window" + (string.IsNullOrEmpty(w) ? "" : " " + w) + (p > 1 ? ", part " + p : ""); }
         public override bool Untrusted { get { return true; } }
 
         public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
         {
+            int pause = BrowserReadTool.Pause(a);
+            if (pause > 0) ctx.Ct.Sleep(pause * 1000);
             List<AppWindow> all = All(ctx);
             int ago;
             if (all.Count == 0 && AppControl.Starting(null, out ago) != null)
@@ -4637,6 +4929,7 @@ namespace MinGent
             string text = Read(ctx, w, State(ctx), list, true, Math.Max(1, I(a, "part", 1)));
             ToolOutcome o = ToolOutcome.Ok(text, w.Process + " window");
             o.Untrusted = true;
+            o.App = UseName(w);
             return o;
         }
     }
@@ -4684,6 +4977,7 @@ namespace MinGent
                 if (wrong != null) return ToolOutcome.Fail(wrong);
                 AppSession last = State(ctx);
                 if (last.ShotWindow != w.Hwnd || last.ShotScale <= 0) return ToolOutcome.Fail("Take a full app_screenshot of this window first: zoom is an area of that picture.");
+                if (!last.ShotOf.IsEmpty && last.ShotOf != w.Rect.Size) return ToolOutcome.Fail("The window changed size since the last app_screenshot. Take a new full app_screenshot first: zoom is an area of that picture.");
                 wrong = AppZoom.Fit(box, last.ShotW, last.ShotH);
                 if (wrong != null) return ToolOutcome.Fail(wrong);
             }
@@ -4699,6 +4993,7 @@ namespace MinGent
                 fs.ShotH = Math.Max(1, (int)(shot.Height * fit));
                 fs.ShotScale = (double)shot.Width / fs.ShotW;
                 fs.ShotWindow = w.Hwnd;
+                fs.ShotOf = w.Rect.Size;
                 int pad = UI.S(8);
                 box = new int[] {
                     (int)((el.Rect.X - w.Rect.X - pad) / fs.ShotScale), (int)((el.Rect.Y - w.Rect.Y - pad) / fs.ShotScale),
@@ -4720,6 +5015,7 @@ namespace MinGent
                             (waiting != null ? "\n" + waiting : ""), "Close-up");
                         z.Images = new List<ImageData>(new ImageData[] { img });
                         z.Untrusted = true;
+                        z.App = UseName(w);
                         return z;
                     }
                 }
@@ -4733,6 +5029,7 @@ namespace MinGent
                 img = ImageTools.Encode(bm, maxSide);
                 AppSession st = State(ctx);
                 st.ShotWindow = w.Hwnd;
+                st.ShotOf = w.Rect.Size;
                 st.ShotScale = (double)bm.Width / iw;
                 st.ShotW = iw;
                 st.ShotH = ih;
@@ -4741,6 +5038,7 @@ namespace MinGent
             ToolOutcome o = ToolOutcome.Ok("Screenshot of \"" + w.Title + "\" (" + w.Process + "), " + iw + "x" + ih + " pixels. app_click x/y uses these pixel positions (0,0 is the window's top-left corner, including its title bar)." + (wait != null ? "\n" + wait : ""), iw + "x" + ih);
             o.Images = new List<ImageData>(new ImageData[] { img });
             o.Untrusted = true;
+            o.App = UseName(w);
             return o;
         }
     }
@@ -4893,7 +5191,7 @@ namespace MinGent
                 w = RefWindow(ctx, a, w, st, out rwhy, "ref");
                 if (w == null) return ToolOutcome.Fail(rwhy);
             }
-            else if (a == null || !a.ContainsKey("x") || !a.ContainsKey("y")) return ToolOutcome.Fail("give ref (a ref from app_read) or x and y (" + (ctx.Cfg.Vision ? "a position in app_screenshot" : "a position in the window, as app_read gives it") + ")." + Sent(a));
+            else if (a == null || !a.ContainsKey("x") || !a.ContainsKey("y")) return ToolOutcome.Fail("give ref (a ref from app_read) or x and y (" + (ctx.Cfg.Vision ? "a position in app_screenshot" : "a position in the window, as app_read gives it") + ")." + Sent(a) + Lost(ctx, a, "x", "y"));
             string waiting = Waiting(ctx, w);
             if (waiting != null) return ToolOutcome.Fail(waiting);
             if (el != null && AppControl.StillDisabled(el))
@@ -4915,6 +5213,12 @@ namespace MinGent
                 string pg = PasteGate(ctx, w);
                 if (pg != null) return Denied(pg);
             }
+            Point spot;
+            string spotWhat;
+            if (el != null) spot = new Point(el.Rect.X + el.Rect.Width / 2, el.Rect.Y + el.Rect.Height / 2);
+            else if (ScreenPoint(ctx, a, w, st, "ref", "x", "y", true, out spot, out spotWhat) != null) spot = Point.Empty;
+            bool left;
+            string popup = ClosePopups(ctx, w, spot, out left);
             bool plain = mouse.Button == "left" && mouse.Clicks == 1 && !mouse.Ctrl && !mouse.Shift && !mouse.Alt && mouse.HoldMs == 0;
             string how;
             bool picked = false;
@@ -4925,7 +5229,8 @@ namespace MinGent
             {
                 string f = AppControl.FocusWhenIdle(w, ctx.Ct);
                 if (f != null) return ToolOutcome.Fail(f);
-                AppControl.Click(el.Rect.X + el.Rect.Width / 2, el.Rect.Y + el.Rect.Height / 2, mouse);
+                string front = AppControl.Click(w, el.Rect.X + el.Rect.Width / 2, el.Rect.Y + el.Rect.Height / 2, mouse);
+                if (front != null) return ToolOutcome.Fail(AppControl.NotDone(front.Replace("that spot", r), "it was not clicked")).Brief("Covered, not clicked");
                 how = "Clicked " + r + (el.Name.Length > 0 ? " (" + el.Name + ")" : "");
                 picked = true;
             }
@@ -4955,7 +5260,8 @@ namespace MinGent
                     if (AppControl.OutOfView(el, w.Rect)) return ToolOutcome.Fail(r + " is out of view, scrolled away or outside the window, and can't be clicked from where it is. Scroll it into view with app_scroll, read the window again and click its new ref.");
                     string f = AppControl.FocusWhenIdle(w, ctx.Ct);
                     if (f != null) return ToolOutcome.Fail(f);
-                    AppControl.Click(el.Rect.X + el.Rect.Width / 2, el.Rect.Y + el.Rect.Height / 2, mouse);
+                    string front = AppControl.Click(w, el.Rect.X + el.Rect.Width / 2, el.Rect.Y + el.Rect.Height / 2, mouse);
+                    if (front != null) return ToolOutcome.Fail(AppControl.NotDone(front.Replace("that spot", r), "it was not clicked")).Brief("Covered, not clicked");
                 }
                 how = "Clicked " + r + (el.Name.Length > 0 ? " (" + el.Name + ")" : "");
                 if (outcome == 0) how += "; the program is still busy with the click";
@@ -4970,10 +5276,11 @@ namespace MinGent
                 string what;
                 string perr = ScreenPoint(ctx, a, w, st, "ref", "x", "y", true, out pt, out what);
                 if (perr != null) return ToolOutcome.Fail(perr);
-                AppControl.Click(pt.X, pt.Y, mouse);
+                string front = AppControl.Click(w, pt.X, pt.Y, mouse);
+                if (front != null) return ToolOutcome.Fail(AppControl.NotDone(front, "nothing was clicked")).Brief("Covered, not clicked");
                 how = mouse.Describe() + " " + what;
             }
-            return After(ctx, w, mouse.HoldMs > 0 ? 300 : 500, how);
+            return After(ctx, w, mouse.HoldMs > 0 ? 300 : 500, how, popup ?? LeftNote(ctx, w, left));
         }
     }
 
@@ -5023,7 +5330,7 @@ namespace MinGent
             {
                 PermissionAsk ask = new PermissionAsk();
                 ask.Kind = "app";
-                ask.Category = ctx.Guarded(PermissionCategory.BrowserSensitive);
+                ctx.Guard(ask, PermissionCategory.BrowserSensitive);
                 ask.High = true;
                 ask.AllowRemember = false;
                 ask.Title = "Type into a password field";
@@ -5041,6 +5348,8 @@ namespace MinGent
                     lock (tt) { tt.Clicked = true; tt.Lost("a click"); }
                 }
             }
+            bool left = false;
+            string popup = el != null ? ClosePopups(ctx, w, new Point(el.Rect.X + el.Rect.Width / 2, el.Rect.Y + el.Rect.Height / 2), out left) : null;
             string f = AppControl.FocusWhenIdle(w, ctx.Ct);
             if (f != null) return ToolOutcome.Fail(f);
             string where = "";
@@ -5051,8 +5360,9 @@ namespace MinGent
                 AppControl.RunTimed(delegate { target.Acc.accSelect(1, target.Child); focused = true; }, 4000);
                 AppControl.Relocate(el);
                 bool inView = el.Rect.Width > 0 && el.Rect.Height > 0 && !AppControl.OutOfView(el, w.Rect);
-                if (inView) AppControl.Click(el.Rect.X + el.Rect.Width / 2, el.Rect.Y + el.Rect.Height / 2, false, false);
-                else if (!focused) return ToolOutcome.Fail(r + " is out of view and did not take the keyboard focus, so nothing was typed. Scroll it into view with app_scroll, read the window again and type with its new ref.");
+                string front = inView ? AppControl.Click(w, el.Rect.X + el.Rect.Width / 2, el.Rect.Y + el.Rect.Height / 2, false, false) : null;
+                if (front != null && !focused) return ToolOutcome.Fail(AppControl.NotDone(front.Replace("that spot", r), "nothing was typed")).Brief("Covered, nothing typed");
+                if (!inView && !focused) return ToolOutcome.Fail(r + " is out of view and did not take the keyboard focus, so nothing was typed. Scroll it into view with app_scroll, read the window again and type with its new ref.");
                 Thread.Sleep(80);
                 if (AppControl.IsTextField(el) && AppControl.IsFileDialog(w))
                 {
@@ -5060,9 +5370,9 @@ namespace MinGent
                     AppControl.Key(0x24, null);
                     AppControl.Key(0x23, new List<ushort>(new ushort[] { 0x10 }));
                 }
-                else if (AppControl.IsEdit(el) && !w.Terminal)
+                else if ((AppControl.IsEdit(el) || AppControl.EditableCombo(el)) && !w.Terminal)
                 {
-                    bool clear = a != null && a.ContainsKey("clear") ? B(a, "clear", false) : AppControl.OneLine(el);
+                    bool clear = a != null && a.ContainsKey("clear") ? B(a, "clear", false) : AppControl.EditableCombo(el) || AppControl.OneLine(el);
                     if (clear || el.Value.Length > 0)
                     {
                         if (!AppControl.StaysFocused(w)) return ToolOutcome.Fail("typing stopped because another window came to the front");
@@ -5089,10 +5399,14 @@ namespace MinGent
             }
             string note;
             AppWindow now = Settle(ctx, w, 400, out note);
+            string first = popup ?? LeftNote(ctx, w, left);
+            if (first != null) note = first + "." + (note != null ? " " + note : "");
+            if (AppControl.EditableCombo(el) && !B(a, "enter", false)) note = "A box like this may only take the new value once Tab or Enter is pressed (app_key), and some take only one of the two: check that it did." + (note != null ? " " + note : "");
             string summary = "Typed " + text.Length + " characters" + where + (B(a, "enter", false) ? " and pressed Enter" : "");
             if (now == null) return ToolOutcome.Ok(summary + ". The program has no open windows now.", summary);
             ToolOutcome o = ToolOutcome.Ok(Read(ctx, now, st, summary + "." + (note != null ? " " + note : "")), summary);
             o.Untrusted = true;
+            o.App = UseName(now);
             return o;
         }
     }
@@ -5229,7 +5543,8 @@ namespace MinGent
             if (perr != null) return ToolOutcome.Fail(perr);
             bool horizontal = dir == "left" || dir == "right";
             int sign = dir == "up" || dir == "right" ? 1 : -1;
-            AppControl.Wheel(pt.X, pt.Y, horizontal, sign * n);
+            string front = AppControl.Wheel(w, pt.X, pt.Y, horizontal, sign * n);
+            if (front != null) return ToolOutcome.Fail(AppControl.NotDone(front, "nothing was scrolled")).Brief("Covered, not scrolled");
             return After(ctx, w, 300, "Scrolled " + dir + " " + n + " notch" + (n == 1 ? "" : "es") + " " + what);
         }
     }
@@ -5312,7 +5627,8 @@ namespace MinGent
             string what;
             string perr = ScreenPoint(ctx, a, w, st, "ref", "x", "y", true, out pt, out what);
             if (perr != null) return ToolOutcome.Fail(perr);
-            AppControl.Hover(pt.X, pt.Y);
+            string front = AppControl.Hover(w, pt.X, pt.Y);
+            if (front != null) return ToolOutcome.Fail(AppControl.NotDone(front, "the mouse was not moved")).Brief("Covered, not moved");
             return After(ctx, w, 700, "Moved the mouse " + (what.StartsWith("at ", StringComparison.Ordinal) ? "to " + what.Substring(3) : "over " + what));
         }
     }
@@ -5365,6 +5681,11 @@ namespace MinGent
                 if (deny != null) return Denied(deny);
                 lock (term) { term.Clicked = true; term.Lost("dragging"); }
             }
+            Point spot;
+            string spotWhat;
+            if (ScreenPoint(ctx, a, w, st, "ref", "x", "y", true, out spot, out spotWhat) != null) spot = Point.Empty;
+            bool left;
+            string popup = ClosePopups(ctx, w, spot, out left);
             string f = AppControl.FocusWhenIdle(w, ctx.Ct);
             if (f != null) return ToolOutcome.Fail(f);
             Point from, to;
@@ -5373,8 +5694,9 @@ namespace MinGent
             if (e1 != null) return ToolOutcome.Fail(e1);
             string e2 = ScreenPoint(ctx, a, w, st, "to_ref", "to_x", "to_y", true, out to, out toWhat);
             if (e2 != null) return ToolOutcome.Fail(e2);
-            AppControl.Drag(from.X, from.Y, to.X, to.Y);
-            return After(ctx, w, 400, "Dragged from " + (fromWhat.StartsWith("at ", StringComparison.Ordinal) ? fromWhat.Substring(3) : fromWhat) + " to " + (toWhat.StartsWith("at ", StringComparison.Ordinal) ? toWhat.Substring(3) : toWhat));
+            string front = AppControl.Drag(w, from.X, from.Y, to.X, to.Y);
+            if (front != null) return ToolOutcome.Fail(AppControl.NotDone(front, "nothing was dragged")).Brief("Covered, not dragged");
+            return After(ctx, w, 400, "Dragged from " + (fromWhat.StartsWith("at ", StringComparison.Ordinal) ? fromWhat.Substring(3) : fromWhat) + " to " + (toWhat.StartsWith("at ", StringComparison.Ordinal) ? toWhat.Substring(3) : toWhat), popup ?? LeftNote(ctx, w, left));
         }
     }
 }

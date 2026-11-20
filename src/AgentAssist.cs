@@ -2764,7 +2764,7 @@ namespace MinGent
             if (AgentPaths.IsInside(full, ctx.Workspace) && (!through || AgentPaths.IsInside(real, AgentPaths.Real(ctx.Workspace)))) return null;
             PermissionAsk ask = new PermissionAsk();
             ask.Kind = "write";
-            ask.Category = ctx.Guarded(PermissionCategory.Delete);
+            ctx.Guard(ask, PermissionCategory.Delete);
             ask.Title = "Delete a file outside the work folder";
             ask.High = true;
             ask.Detail = full + (through ? " (really " + real + ")" : "");

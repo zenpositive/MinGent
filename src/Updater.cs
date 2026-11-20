@@ -322,11 +322,6 @@ namespace MinGent
                 if (offer.Note.SignedBy(ReleaseKey.InText(keysText)).Count < ReleaseKey.Needed) return "The release is signed, but not by two of the keys the new version pins, so updates after it might not work. It was not installed.";
                 if (!File.Exists(Path.Combine(staging, "Build-MinGent.bat"))) return "The new version has no Build-MinGent.bat, so it can't be built.";
                 if (File.Exists(Path.Combine(staging, ExeName))) File.Delete(Path.Combine(staging, ExeName));
-                foreach (string icon in new string[] { "icon.png", "icon.png.png" })
-                {
-                    string mine = Path.Combine(appDir, icon);
-                    if (File.Exists(mine)) File.Copy(mine, Path.Combine(staging, icon), true);
-                }
                 if (ct != null && ct.IsCancelled) return "Cancelled.";
                 say("Building MinGent " + offer.Version + " with the C# compiler in Windows\u2026", -1);
                 err = build(staging, ct);
@@ -627,7 +622,7 @@ namespace MinGent
             {
                 string rel = Path.GetFullPath(f).Substring(root.Length);
                 string top = rel.Split(Path.DirectorySeparatorChar)[0];
-                if (top.Equals("build-temp", StringComparison.OrdinalIgnoreCase) || top.Equals("Data", StringComparison.OrdinalIgnoreCase) || top.Equals("Files", StringComparison.OrdinalIgnoreCase) || rel.Equals("icon.png", StringComparison.OrdinalIgnoreCase) || rel.Equals("icon.png.png", StringComparison.OrdinalIgnoreCase)) continue;
+                if (top.Equals("build-temp", StringComparison.OrdinalIgnoreCase) || top.Equals("Data", StringComparison.OrdinalIgnoreCase) || top.Equals("Files", StringComparison.OrdinalIgnoreCase)) continue;
                 if (rel.Equals(ExeName, StringComparison.OrdinalIgnoreCase)) files.Insert(0, rel);
                 else files.Add(rel);
             }

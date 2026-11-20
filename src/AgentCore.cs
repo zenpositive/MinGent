@@ -80,6 +80,7 @@ namespace MinGent
         string OpenSearch(string url, CancelToken ct, out string html, out string finalUrl);
         string ClickElement(string refId, MouseSpec mouse, CancelToken ct, out string summary);
         string ClickAt(double x, double y, MouseSpec mouse, CancelToken ct, out string summary);
+        void DialogReply(string reply);
         string CaptchaClick(List<double[]> points, MouseSpec mouse, CancelToken ct, out string summary, out bool submitted);
         string Hover(string refId, double x, double y, CancelToken ct, out string summary);
         string Drag(string fromRef, double fromX, double fromY, string toRef, double toX, double toY, CancelToken ct, out string summary);
@@ -98,6 +99,7 @@ namespace MinGent
         bool CaptchaTyped { get; }
         bool CaptchaShowing(CancelToken ct);
         string ElementInfo(string refId, CancelToken ct, out string kind, out bool sensitive);
+        string TextRef(string text, CancelToken ct, out string refId, out int places);
         string PointInfo(double x, double y, CancelToken ct, out string kind, out bool sensitive);
         bool PendingDownload(out string name, out string url, out long bytes);
         string ResolveDownload(bool allow, string folder, CancelToken ct, out string savedTo);
@@ -128,6 +130,15 @@ namespace MinGent
                             Publish = "publish", Remote = "remote", BrowserSensitive = "sensitive", Downloads = "downloads", Console = "console", Never = "never";
 
         public static readonly string[] All = { Install, Launch, Delete, System, Credentials, Publish, Remote, BrowserSensitive, Downloads, Console };
+        public static readonly string[] Balanced = { Launch, Downloads };
+        public const string BalancedList = "launch,downloads";
+
+        public static string PresetOf(IList<string> allowed)
+        {
+            if (allowed == null || allowed.Count == 0) return "careful";
+            if (allowed.Count == Balanced.Length && Array.TrueForAll(Balanced, delegate (string c) { return allowed.Contains(c); })) return "balanced";
+            return "custom";
+        }
 
         public static string Title(string c)
         {
@@ -160,7 +171,7 @@ namespace MinGent
                 case Remote: return "Commands that may change a server the agent reached with ssh, or Linux in WSL. Commands that only look around (ls, cat, logs, status) don't ask.";
                 case BrowserSensitive: return "Buy, pay and delete-account buttons, and password or payment fields, in the browser and in programs.";
                 case Downloads: return "Files the browser would save that can run code: programs, scripts and archives.";
-                case Console: return "JavaScript the agent runs in a page to debug it, like code typed into the developer tools. On a website it can do anything you can do there. Pages from files on this PC that load nothing from the web don't ask.";
+                case Console: return "JavaScript the agent runs in a page to debug it, like code typed into the developer tools. On a website it can do anything you can do there. Code that only reads the page doesn't ask, and neither do pages from files on this PC that load nothing from the web.";
             }
             return "";
         }
@@ -168,7 +179,7 @@ namespace MinGent
 
     class PermissionAsk
     {
-        public string Kind = "", Title = "", Detail = "", Reason = "", Key = "", Where = "", Summary = "", Reading = "", Category = "";
+        public string Kind = "", Title = "", Detail = "", Reason = "", Key = "", Where = "", Summary = "", Reading = "", Category = "", GuardedFrom = "";
         public bool High, Never, EvenInFull;
         public bool AllowRemember = true;
 
@@ -239,6 +250,7 @@ namespace MinGent
         public string Summary;
         public string Detail;
         public bool Untrusted;
+        public string App;
         public bool Denied;
         public bool Snapshot;
         public List<string> Paths;
@@ -627,15 +639,85 @@ namespace MinGent
         public bool WebGuard = true;
         public bool Tainted;
         public string TaintSource = "";
-        public bool TaintFromApp;
-        public string HasRead { get { return TaintFromApp ? "This chat has read text from a program's window" : "This chat has read web content"; } }
-        public string Planter { get { return TaintFromApp ? "that text" : "a page"; } }
+        public bool TaintFromApp, TaintFromFile;
+        public string HasRead { get { return TaintFromApp ? "This chat has read text from a program's window" : TaintFromFile ? "This chat has read a file it didn't write" : "This chat has read web content"; } }
+        public string Planter { get { return TaintFromApp ? "that text" : TaintFromFile ? "that file" : "a page"; } }
         public readonly HashSet<string> AllowedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         public readonly HashSet<string> DeniedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         public readonly HashSet<string> TaskKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         public readonly object AskLock = new object();
 
-        public void Reset() { Tainted = false; TaintSource = ""; TaintFromApp = false; AllowedKeys.Clear(); DeniedKeys.Clear(); TaskKeys.Clear(); }
+        public string OnlyApp = "";
+        readonly HashSet<string> secrets = new HashSet<string>(StringComparer.Ordinal);
+        static readonly Regex Pair = new Regex(@"(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]{2,80})[""']?[ \t]*[:=][ \t]*[""']?((?:bearer|basic)[ \t]+)?([^\s""',;<>]{8,200})", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex SecretLabel = new Regex(@"^(?:.*[_-])?(?:[a-z0-9]*?(?:passwords?|passwd|passphrase|passcode|secret|token|credentials?)(?:[_-]?(?:key|value|text|string))?|pwd|pass|(?:api|secret|access|private|auth|encryption|signing|license|master)[_-]?key)$", RegexOptions.CultureInvariant);
+        static readonly Regex DottedName = new Regex(@"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$", RegexOptions.CultureInvariant);
+
+        public void Reset() { lock (secrets) { Tainted = false; TaintSource = ""; TaintFromApp = TaintFromFile = false; OnlyApp = ""; secrets.Clear(); } AllowedKeys.Clear(); DeniedKeys.Clear(); TaskKeys.Clear(); }
+
+        static bool LooksSecret(string v)
+        {
+            if (v.Length < 8) return false;
+            bool digit = false, letter = false;
+            foreach (char c in v)
+            {
+                if (c >= '0' && c <= '9') digit = true;
+                else if (char.IsLetter(c)) letter = true;
+                else if ("()[]{}\\`".IndexOf(c) >= 0) return false;
+            }
+            if (!digit || !letter) return false;
+            if ("$%@/~.".IndexOf(v[0]) >= 0 || v.IndexOf("://", StringComparison.Ordinal) >= 0) return false;
+            return !DottedName.IsMatch(v);
+        }
+
+        public void Learn(string text)
+        {
+            if (string.IsNullOrEmpty(text) || text.IndexOfAny(new char[] { ':', '=' }) < 0) return;
+            foreach (Match m in Pair.Matches(text.Length > 200000 ? text.Substring(0, 200000) : text))
+            {
+                string label = m.Groups[1].Value.ToLowerInvariant();
+                int dot = label.LastIndexOf('.');
+                if (dot >= 0) label = label.Substring(dot + 1);
+                bool scheme = m.Groups[2].Success;
+                if (!(scheme ? label == "authorization" : SecretLabel.IsMatch(label))) continue;
+                string v = m.Groups[3].Value.TrimEnd('.', ')', ']', '}');
+                if (!LooksSecret(v)) continue;
+                lock (secrets) if (secrets.Count < 500) secrets.Add(v);
+            }
+        }
+
+        public bool Holds(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return false;
+            lock (secrets) foreach (string s in secrets) if (text.IndexOf(s, StringComparison.Ordinal) >= 0) return true;
+            return false;
+        }
+
+        public string Hide(string text)
+        {
+            string t = text ?? "";
+            lock (secrets) foreach (string s in secrets) t = t.Replace(s, s.Substring(0, 2) + "\u2026");
+            return t;
+        }
+
+        public void Taint(string source, bool fromApp, string app, bool fromFile)
+        {
+            lock (secrets)
+            {
+                if (Tainted)
+                {
+                    if (!string.Equals(OnlyApp, app ?? "", StringComparison.OrdinalIgnoreCase)) OnlyApp = "";
+                    return;
+                }
+                TaintSource = source;
+                TaintFromApp = fromApp;
+                TaintFromFile = fromFile;
+                OnlyApp = app ?? "";
+                Tainted = true;
+            }
+        }
+
+        public bool TaintedFor(string app) { lock (secrets) return Tainted && !(OnlyApp.Length > 0 && string.Equals(OnlyApp, app, StringComparison.OrdinalIgnoreCase)); }
         public bool Auto { get { return Mode == "auto" || Mode == "full"; } }
         public bool Full { get { return Mode == "full"; } }
         volatile string[] autoAllows = new string[0];
@@ -805,13 +887,16 @@ namespace MinGent
         public ToolCall Call;
         public RunChangeLog Changes;
         public int TabsOpened;
+        public string AppSeen;
 
         public string Workspace { get { return Cfg.Workspace; } }
 
-        public string Guarded(string category)
+        public void Guard(PermissionAsk ask, string category)
         {
             PermissionState ps = Session.Perms;
-            return ps.Auto && ps.WebGuard && ps.Tainted ? "" : category;
+            bool held = ps.Auto && ps.WebGuard && ps.Tainted;
+            ask.Category = held ? "" : category;
+            ask.GuardedFrom = held ? category ?? "" : "";
         }
 
         public bool Approve(PermissionAsk ask)
@@ -824,6 +909,9 @@ namespace MinGent
                 return !ask.Never;
             }
             if (ps.Auto && !ask.Never && ps.AutoAllows(ask.Category)) return true;
+            if (ps.Tainted && (ps.Auto || ask.High) && (ask.Reason ?? "").IndexOf(ps.HasRead, StringComparison.Ordinal) < 0)
+                ask.Reason = ((ask.Reason ?? "") + " " + ps.HasRead + " (" + ps.TaintSource + ")" +
+                    (ps.Auto && ps.AutoAllows(ask.GuardedFrom) ? ", so Auto checks with you first in case " + ps.Planter + " tried to slip in this request." : ", so make sure " + ps.Planter + " didn't slip in this request.")).Trim();
             lock (ps.AskLock)
             {
                 if (ask.Key.Length > 0 && ps.DeniedKeys.Contains(ask.Key)) return false;
@@ -870,7 +958,7 @@ namespace MinGent
             {
                 PermissionAsk k = new PermissionAsk();
                 k.Kind = "write";
-                k.Category = Guarded(PermissionCategory.Credentials);
+                Guard(k, PermissionCategory.Credentials);
                 k.Title = what + " in a sensitive location";
                 k.Detail = linked ? full + " (really " + real + ")" : full;
                 k.High = true;
@@ -883,7 +971,7 @@ namespace MinGent
             {
                 PermissionAsk k = new PermissionAsk();
                 k.Kind = "write";
-                k.Category = Guarded(PermissionCategory.Credentials);
+                Guard(k, PermissionCategory.Credentials);
                 k.Title = what + " in MinGent's own folder";
                 k.Detail = linked ? full + " (really " + real + ")" : full;
                 k.High = true;
@@ -918,6 +1006,17 @@ namespace MinGent
                 if (!Approve(k)) return "The user did not allow changing " + full + ". Do not try another way; ask the user if you need it.";
                 return null;
             }
+            if (ps.WebGuard && ps.Tainted && inside && InGitFolder(full))
+            {
+                PermissionAsk k = new PermissionAsk();
+                k.Kind = "write";
+                k.Title = what + " in git's own folder";
+                k.Detail = full;
+                k.Key = "git:" + full;
+                k.Reason = ps.HasRead + ", and git runs the hooks and settings kept in its .git folder without showing them to you, so changing it needs your OK.";
+                if (!Approve(k)) return "The user did not allow changing " + full + ". Do not try another way; ask the user if you need it.";
+                return null;
+            }
             if (inside) return null;
             bool guard = ps.Auto && ps.WebGuard && ps.Tainted;
             if (ps.Auto && !guard) return null;
@@ -932,6 +1031,16 @@ namespace MinGent
             if (!Approve(a)) return "The user did not allow writing to " + full + ". Do not try another way; ask the user if you need it.";
             if (!guard) lock (ps.AskLock) ps.TaskKeys.Add(sameFolder);
             return null;
+        }
+
+        static bool InGitFolder(string full)
+        {
+            foreach (string part in (full ?? "").Split('\\', '/'))
+            {
+                string name = part.TrimEnd('.', ' ');
+                if (name.Equals(".git", StringComparison.OrdinalIgnoreCase) || Regex.IsMatch(name, "^git~[0-9]+$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) return true;
+            }
+            return false;
         }
 
         bool OpenInTabs(string full)
@@ -952,7 +1061,7 @@ namespace MinGent
             if (why == null) return null;
             PermissionAsk a = new PermissionAsk();
             a.Kind = "read";
-            a.Category = Guarded(PermissionCategory.Credentials);
+            Guard(a, PermissionCategory.Credentials);
             a.Title = "Read a sensitive file";
             a.Detail = full;
             a.High = true;
@@ -982,6 +1091,47 @@ namespace MinGent
             if (v is double) return ((double)v).ToString(CultureInfo.InvariantCulture);
             if (v is bool) return (bool)v ? "true" : "false";
             return Json.Write(v);
+        }
+
+        public static string Lost(ToolContext ctx, Dictionary<string, object> a, string xKey, string yKey)
+        {
+            if (a != null && (a.ContainsKey(xKey) || a.ContainsKey(yKey))) return "";
+            if (ctx != null && ctx.Session != null) ctx.Session.NumbersAsText = true;
+            return " If you did send " + xKey + " and " + yKey + ", they were lost before reaching MinGent (some model servers drop number arguments). From now on MinGent's tools take numbers as text: send them again like \"" + xKey + "\": \"412\", \"" + yKey + "\": \"230\".";
+        }
+
+        public static List<ToolSpec> NumbersAsText(List<ToolSpec> specs)
+        {
+            List<ToolSpec> l = new List<ToolSpec>();
+            foreach (ToolSpec t in specs) l.Add(new ToolSpec(t.Name, t.Description, Texted(t.Schema) as Dictionary<string, object>));
+            return l;
+        }
+
+        static object Texted(object o)
+        {
+            Dictionary<string, object> d = o as Dictionary<string, object>;
+            if (d != null)
+            {
+                Dictionary<string, object> c = new Dictionary<string, object>();
+                foreach (KeyValuePair<string, object> kv in d) c[kv.Key] = kv.Key == "items" ? kv.Value : Texted(kv.Value);
+                string type = c.ContainsKey("type") ? c["type"] as string : null;
+                if (type == "number" || type == "integer")
+                {
+                    c["type"] = "string";
+                    c.Remove("minimum"); c.Remove("maximum");
+                    string desc = c.ContainsKey("description") ? c["description"] as string ?? "" : "";
+                    c["description"] = "A number written as text, like \"412\"." + (desc.Length > 0 ? " " + desc : "");
+                }
+                return c;
+            }
+            List<object> list = o as List<object>;
+            if (list != null)
+            {
+                List<object> c = new List<object>();
+                foreach (object x in list) c.Add(Texted(x));
+                return c;
+            }
+            return o;
         }
 
         public static string Sent(Dictionary<string, object> a)
@@ -1152,6 +1302,7 @@ namespace MinGent
         public string CaptchaHost;
         public readonly List<string> Remembered = new List<string>();
         public readonly Dictionary<string, string> DocSources = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        public bool NumbersAsText;
         public readonly Dictionary<string, string> DocStamps = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         double nextPruneAt;
 
@@ -1190,8 +1341,10 @@ namespace MinGent
                 if (m.Role == "tool" && (m.Text ?? "").StartsWith("<untrusted_content", StringComparison.Ordinal))
                 {
                     Perms.Tainted = true;
+                    Perms.OnlyApp = "";
                     Perms.TaintFromApp = m.Text.StartsWith("<untrusted_content source=\"app_", StringComparison.Ordinal) || m.Text.StartsWith("<untrusted_content source=\"screen_look", StringComparison.Ordinal);
-                    Perms.TaintSource = Perms.TaintFromApp ? "a program window read earlier in this chat" : "web content read earlier in this chat";
+                    Perms.TaintFromFile = m.Text.StartsWith("<untrusted_content source=\"read_file", StringComparison.Ordinal);
+                    Perms.TaintSource = Perms.TaintFromApp ? "a program window read earlier in this chat" : Perms.TaintFromFile ? "a file read earlier in this chat" : "web content read earlier in this chat";
                     return;
                 }
         }
@@ -1494,7 +1647,7 @@ namespace MinGent
             {
                 j.Release();
                 ToolOutcome o = j.Outcome ?? ToolOutcome.Fail("the helper stopped without a report. Do this part yourself.");
-                if (o.Untrusted && !Perms.Tainted) { Perms.Tainted = true; Perms.TaintSource = "a helper's report"; }
+                if (o.Untrusted) Perms.Taint("a helper's report", false, null, false);
                 string note;
                 if (j.Framing != null)
                 {
@@ -1853,6 +2006,7 @@ namespace MinGent
                 LlmRequest req = new LlmRequest();
                 req.System = planning ? systemPrompt + PlanMode.Note : systemPrompt;
                 req.Tools = finalTurn && !keepToolsOnFinal && dropToolsOnFinal ? new List<ToolSpec>() : planning ? planSpecs : fullSpecs;
+                if (NumbersAsText && req.Tools.Count > 0) req.Tools = AgentTool.NumbersAsText(req.Tools);
                 req.NoCalls = finalTurn && !keepToolsOnFinal;
                 req.Effort = cfg.Effort;
                 req.ShowThinking = cfg.ShowThinking;
@@ -1942,7 +2096,7 @@ namespace MinGent
                     throw new AgentError(r);
                 }
                 retries = 0;
-                if (r.UsedWeb && !Perms.Tainted) { Perms.Tainted = true; Perms.TaintSource = "the model's own web search"; }
+                if (r.UsedWeb) Perms.Taint("the model's own web search", false, null, false);
                 if (r.ServedBy != null && r.ServedFor != servedFor) { servedFor = r.ServedFor; servedBy = null; }
                 if (r.ServedBy != null && r.ServedBy != servedBy)
                 {
@@ -2132,7 +2286,7 @@ namespace MinGent
                             AgentTool side;
                             if (call.Name == "delegate" || !byName.TryGetValue(call.Name, out side))
                             {
-                                if (outcome.Untrusted && !Perms.Tainted) { Perms.Tainted = true; Perms.TaintSource = "a helper's report"; }
+                                if (outcome.Untrusted) Perms.Taint("a helper's report", false, null, false);
                             }
                             else
                             {
@@ -2141,7 +2295,8 @@ namespace MinGent
                                     outcome = ToolOutcome.Fail("Not run: the user stopped the assistant.");
                                     outcome.Summary = "stopped";
                                 }
-                                if ((outcome.Untrusted || side.UntrustedFor(call.Args)) && !Perms.Tainted) { Perms.Tainted = true; Perms.TaintFromApp = side is AppTool; Perms.TaintSource = Named(side, side.Label(call.Args)); }
+                                if (side is AppTool || Learns.Contains(side.Name)) Perms.Learn(outcome.Text);
+                                if (outcome.Untrusted || side.UntrustedFor(call.Args)) Perms.Taint(Named(side, side.Label(call.Args)), side is AppTool, side is AppTool ? outcome.App : null, side is ReadFileTool);
                             }
                         }
                         else if (!byName.TryGetValue(call.Name, out tool))
@@ -2196,6 +2351,7 @@ namespace MinGent
                             else
                             {
                                 tc.Call = call;
+                                tc.AppSeen = null;
                                 tc.Browser = !IsHelper && HelperHoldsBrowser ? null : br;
                                 ui.ToolStart(call, Named(tool, tool.Label(call.Args)));
                                 try { outcome = RunTool(tool, tc, call.Args, ui, ct); }
@@ -2207,12 +2363,11 @@ namespace MinGent
                                     outcome = ToolOutcome.Fail("Not run: the user stopped the assistant.");
                                     outcome.Summary = "stopped";
                                 }
-                                if ((outcome.Untrusted || tool.UntrustedFor(call.Args)) && !Perms.Tainted && !(tool is BrowserTool && BrowserTool.LocalOnly(tc)))
-                                {
-                                    Perms.Tainted = true;
-                                    Perms.TaintFromApp = tool is AppTool;
-                                    Perms.TaintSource = Named(tool, tool.Label(call.Args));
-                                }
+                                if (tool is AppTool || Learns.Contains(tool.Name)) Perms.Learn(outcome.Text);
+                                string seen = tool is AppTool ? outcome.App ?? tc.AppSeen : null;
+                                bool blank = tool is AppTool && outcome.Error && !outcome.Untrusted && seen == null;
+                                if ((outcome.Untrusted || tool.UntrustedFor(call.Args)) && !blank && !(tool is BrowserTool && BrowserTool.LocalOnly(tc)))
+                                    Perms.Taint(Named(tool, tool.Label(call.Args)), tool is AppTool, seen, tool is ReadFileTool);
                             }
                         }
                         if (call.AutoRefused) outcome.AddNote("Nobody was asked: Full auto never does this, so MinGent turned it down by itself. Tell the user that plainly; don't say they declined.");
@@ -2736,6 +2891,8 @@ namespace MinGent
             try { AppControl.UnstickAfterOwnInput(); }
             finally { Monitor.Exit(inputGate); }
         }
+
+        static readonly HashSet<string> Learns = new HashSet<string> { "read_file", "search_text", "run_command", "command_status" };
 
         static ToolOutcome RunTool(AgentTool tool, ToolContext tc, Dictionary<string, object> args, IAgentUi ui, CancelToken ct)
         {
@@ -3501,11 +3658,11 @@ namespace MinGent
             {
                 sb.Append("- Unsaved tabs have no file on disk: use the tab name as the path. Edits to open tabs show up at once, and the user can undo them.\n");
                 sb.Append("- After you make a sound file, check it with analyze_audio focus=listen before you call it done: it tells you the clicks, fades, pitch and tone you can't hear.\n");
-                if (browser) sb.Append("- Browser: browser_read lists links, buttons and fields with refs like e12. Use browser_click and browser_type with those refs, and read the page again after it changes. browser_click also does right, middle and double clicks and clicks with Ctrl or Shift held; browser_hover, browser_drag and browser_scroll (also inside lists and maps, and sideways) cover the rest of the mouse, and browser_press_key presses any key or shortcut. For just reading documentation, web_fetch is faster.\n");
+                if (browser) sb.Append("- Browser: browser_read lists links, buttons and fields with refs like e12. Use browser_click and browser_type with those refs, and read the page again after it changes. Words on the page that have no ref can be clicked by giving browser_click their text. browser_click also does right, middle and double clicks and clicks with Ctrl or Shift held; browser_hover, browser_drag and browser_scroll (also inside lists and maps, and sideways) cover the rest of the mouse, and browser_press_key presses any key or shortcut. When a site asks about cookies, pick the choice that turns down the optional ones (such as Reject all or Only necessary) unless the user said otherwise. For just reading documentation, web_fetch is faster.\n");
                 if (browser) sb.Append("- browser_console reads the page's console and runs JavaScript in the page to look into it and debug it: errors, app state, storage or element details. Keep it efficient: check several things in one call, and return only the values you need. Never use it for what the other browser_ tools do: clicking, typing, keys, scrolling, submitting or navigating.\n");
                 sb.Append("- close_pane closes the browser, its console or the notes pane: when the user asks (set user_asked), or when you are done with a pane and it shows nothing the user needs.\n");
                 if (apps) sb.Append("- Desktop programs: app_read lists a window's controls with refs like a5 for app_click and app_type. It works for programs you started in this chat, including ones Windows opened for your command (Store apps such as Calculator). app_click also does right, middle and double clicks and clicks with Ctrl or Shift held; app_scroll, app_hover and app_drag cover the rest of the mouse, and app_key presses any key or shortcut.\n");
-                if (apps) sb.Append("- Using this PC: do the job with your file, command and browser tools when they can do it. Use programs on the PC when they can't, or when that is the natural way: the user talks about a program they have open, a job goes across several programs, or something only shows in a program's window. app_open starts a program by its Start menu name").Append(cfg.OtherApps ? ", app_access asks the user for a program they already have open (without app it lists them)" : "").Append(vision ? ", and screen_look shows the whole screen with the programs you may use" : "").Append(". Ask for what the job needs before you start on it, and say why.").Append(cfg.OtherApps ? "" : " Programs the user already has open are off limits until they switch on \"Programs you opened yourself\" in Settings > Agent > Tools; tell them when a job needs one.")
+                if (apps) sb.Append("- Using this PC: do the job with your file, command and browser tools when they can do it. Use programs on the PC when they can't, or when that is the natural way: the user talks about a program they have open, a job goes across several programs, or something only shows in a program's window. app_open starts a program by its Start menu name").Append(cfg.OtherApps ? ", app_access asks the user for a program they already have open (without app it lists them)" : "").Append(vision ? ", and screen_look shows the whole screen with the programs you may use" : "").Append(". Ask for what the job needs before you start on it, and say why. Many programs reopen the user's documents or tabs when they start, as Notepad does: unless the job is about those, make a new document or tab for your work (often Ctrl+N) and leave the user's as they are.").Append(cfg.OtherApps ? "" : " Programs the user already has open are off limits until they switch on \"Programs you opened yourself\" in Settings > Agent > Tools; tell them when a job needs one.")
                     .Append(cfg.RestrictedApps ? " The user has switched on \"Restricted programs\": when they ask for it, you may also use their browsers, File Explorer, terminals, code editors, mail and chat programs and Windows' own tools, each after their OK. For the web, still use your own browser unless they ask for theirs."
                                                : (cfg.OtherApps ? " The user's browsers, File Explorer, terminals and code editors can only be looked at, and their mail and chat programs and Windows' own tools not at all," : " Browsers, File Explorer, terminals, mail and chat programs and Windows' own tools are off limits") + " until they switch on \"Restricted programs\" in Settings > Agent > Tools: when they ask you to use one of these, tell them about that switch.")
                     .Append(Program.Elevated ? "\n" : " A program that runs as administrator, such as Task Manager, is out of reach: to end a program, use run_command.\n");

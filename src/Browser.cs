@@ -37,6 +37,22 @@ namespace MinGent
         public int Invoke(int hr, string json) { try { cb(hr, json); } catch { } return 0; }
     }
 
+    class SiteFrame
+    {
+        public string Id = "", Session;
+        public int World, Nav;
+        public SiteFrame Parent;
+        public int Depth { get { int d = 1; for (SiteFrame p = Parent; p != null; p = p.Parent) d++; return d; } }
+    }
+
+    class FramePlace
+    {
+        public double X, Y;
+        public bool InView = true;
+        public string Covered = "";
+        public readonly List<object> Via = new List<object>();
+    }
+
     [ComVisible(true)]
     class WvNavStarting : ICoreWebView2NavigationStartingEventHandler
     {
@@ -345,7 +361,7 @@ namespace MinGent
             public ICoreWebView2Deferral Deferral;
             public string Name = "", Url = "";
             public long Bytes = -1;
-            public bool Done;
+            public bool Done, Seen, Carried;
         }
 
         readonly FlatButton bBack = new FlatButton("", "left", false);
@@ -392,7 +408,7 @@ namespace MinGent
         readonly List<BrowserPopup> popups = new List<BrowserPopup>();
         Download download;
         volatile bool userDialogOpen;
-        volatile string userDialogText = "";
+        volatile string userDialogText = "", dialogReply;
         readonly List<DateTime> dialogTimes = new List<DateTime>();
         DateTime dialogsMutedUntil = DateTime.MinValue;
         double shotScale, shotX0, shotY0;
@@ -757,6 +773,7 @@ namespace MinGent
             Configure(wv, null);
             HookConsole();
             HookCast();
+            HookFrames();
             long tok;
             WvNavStarting ns = new WvNavStarting(OnNavStarting);
             WvNavCompleted nc = new WvNavCompleted(OnNavCompleted);
@@ -1117,16 +1134,27 @@ namespace MinGent
             string origin = HostOf(uri);
             if (Acting)
             {
-                if (kind != 1 || !Destructive.IsMatch(msg))
+                string reply = dialogReply;
+                bool cancel = reply != null && reply.Trim().Equals("cancel", StringComparison.OrdinalIgnoreCase);
+                string text = reply != null && !cancel && !reply.Trim().Equals("ok", StringComparison.OrdinalIgnoreCase) ? reply : null;
+                if (cancel && kind != 0)
                 {
-                    if (kind == 2) a.SetResultText(def);
+                    if (kind == 3) AddEvent("The page warned that unsaved changes may be lost; MinGent stayed on the page.");
+                    else AddEvent((kind == 2 ? "The page asked for text: \"" : "The page asked \"") + Clip(msg, 300) + "\" and MinGent answered Cancel.");
+                    return;
+                }
+                if (!((kind == 1 || (kind == 2 && text != null)) && Destructive.IsMatch(msg)))
+                {
+                    if (kind == 2) a.SetResultText(text ?? def);
                     a.Accept();
                     if (kind == 0) AddEvent("The page showed a message: \"" + Clip(msg, 300) + "\" (closed automatically).");
-                    else if (kind == 1) AddEvent("The page asked \"" + Clip(msg, 300) + "\" and MinGent answered OK.");
-                    else if (kind == 2) AddEvent("The page asked for text: \"" + Clip(msg, 300) + "\"; MinGent left it at " + (def.Length > 0 ? "\"" + Clip(def, 80) + "\"" : "empty") + ".");
+                    else if (kind == 1) AddEvent("The page asked \"" + Clip(msg, 300) + "\" and MinGent answered OK." + (reply == null ? " To answer Cancel, click with dialog=\"cancel\"." : ""));
+                    else if (kind == 2 && text != null) AddEvent("The page asked for text: \"" + Clip(msg, 300) + "\"; MinGent entered \"" + Clip(text, 80) + "\".");
+                    else if (kind == 2) AddEvent("The page asked for text: \"" + Clip(msg, 300) + "\"; MinGent left it at " + (def.Length > 0 ? "\"" + Clip(def, 80) + "\"" : "empty") + ". To enter text, click with dialog set to the text.");
                     else AddEvent("The page warned that unsaved changes may be lost; MinGent left the page.");
                     return;
                 }
+                if (text != null) def = text;
                 AddEvent("The page asked \"" + Clip(msg, 300) + "\". That looks like it deletes, cancels or pays for something, so the question is shown to the user to answer.");
             }
             else
@@ -1287,7 +1315,13 @@ namespace MinGent
             pageNote = null;
             pageNeedsUser = false;
             Download stale;
-            lock (events) { events.Clear(); stale = download; download = null; }
+            lock (events)
+            {
+                events.Clear();
+                stale = download != null && download.Seen ? download : null;
+                if (stale != null) download = null;
+                else if (download != null) download.Carried = true;
+            }
             if (stale != null)
             {
                 string ignored;
@@ -1295,7 +1329,7 @@ namespace MinGent
             }
         }
 
-        bool HasDownload { get { lock (events) return download != null; } }
+        bool HasDownload { get { lock (events) return download != null && !download.Carried; } }
 
         public bool PendingDownload(out string name, out string url, out long bytes)
         {
@@ -1304,6 +1338,7 @@ namespace MinGent
             lock (events)
             {
                 if (download == null) return false;
+                download.Seen = true;
                 name = download.Name;
                 url = download.Url;
                 bytes = download.Bytes;
@@ -1651,6 +1686,373 @@ namespace MinGent
             return null;
         }
 
+        readonly Dictionary<string, string> frameSessions = new Dictionary<string, string>();
+        readonly Dictionary<string, SiteFrame> siteFrames = new Dictionary<string, SiteFrame>();
+        readonly Dictionary<string, SiteFrame> refFrames = new Dictionary<string, SiteFrame>();
+        readonly List<object> frameHold = new List<object>();
+        readonly Queue<string> frameOrder = new Queue<string>();
+        const string AutoAttach = "{\"autoAttach\":true,\"waitForDebuggerOnStart\":false,\"flatten\":true,\"filter\":[{\"type\":\"iframe\",\"exclude\":false}]}";
+        const int FramesPerRead = 6;
+        int frameChars = 8000, frameMisses;
+        static readonly Regex FrameMark = new Regex("\\[frame from ([^\\n\\]]*): its content cannot be read here\\]\uE000(\\d+)(s?)(v?)\uE000\\n?", RegexOptions.CultureInvariant);
+        static readonly Regex FrameStray = new Regex("(?<=: its content cannot be read here\\])\uE000[0-9sv]{0,6}\uE000?", RegexOptions.CultureInvariant);
+        static readonly Regex AdHost = new Regex(@"(^|\.)(doubleclick\.net|googlesyndication\.com|googleadservices\.com|adnxs\.com|amazon-adsystem\.com|adform\.net|criteo\.(com|net)|taboola\.com|outbrain\.com|rubiconproject\.com|pubmatic\.com|openx\.net|smartadserver\.com|adsrvr\.org|teads\.tv|moatads\.com|casalemedia\.com|3lift\.com|yieldmo\.com|sharethrough\.com|media\.net|bidswitch\.net|quantserve\.com|scorecardresearch\.com)$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        void HookFrames()
+        {
+            frameHold.Clear();
+            lock (frameSessions) { frameSessions.Clear(); frameOrder.Clear(); }
+            if (!(wv is ICoreWebView2_13)) return;
+            foreach (string name in new string[] { "Target.attachedToTarget", "Target.detachedFromTarget" })
+            {
+                try
+                {
+                    IntPtr p;
+                    if (wv.GetDevToolsProtocolEventReceiver(name, out p) < 0 || p == IntPtr.Zero) continue;
+                    ICoreWebView2DevToolsProtocolEventReceiver r;
+                    try { r = (ICoreWebView2DevToolsProtocolEventReceiver)Marshal.GetObjectForIUnknown(p); }
+                    finally { Marshal.Release(p); }
+                    string which = name;
+                    WvCdpEvent h = new WvCdpEvent(delegate (string json) { OnFrameTarget(which, json); });
+                    long tok;
+                    if (r.add_DevToolsProtocolEventReceived(h, out tok) >= 0) frameHold.AddRange(new object[] { r, h });
+                }
+                catch { }
+            }
+            Fire("Target.setAutoAttach", AutoAttach);
+        }
+
+        void OnFrameTarget(string method, string json)
+        {
+            object p = Json.TryParse(json ?? "");
+            string session = Json.Str(p, "sessionId") ?? "";
+            if (session.Length == 0) return;
+            if (method == "Target.detachedFromTarget")
+            {
+                lock (frameSessions)
+                {
+                    string gone = null;
+                    foreach (KeyValuePair<string, string> kv in frameSessions) if (kv.Value == session) { gone = kv.Key; break; }
+                    if (gone != null) frameSessions.Remove(gone);
+                }
+                return;
+            }
+            string id = Json.Str(p, "targetInfo", "targetId") ?? "";
+            if (Json.Str(p, "targetInfo", "type") != "iframe" || id.Length == 0) return;
+            lock (frameSessions)
+            {
+                if (!frameSessions.ContainsKey(id)) frameOrder.Enqueue(id);
+                frameSessions[id] = session;
+                while (frameSessions.Count > 400 && frameOrder.Count > 0) frameSessions.Remove(frameOrder.Dequeue());
+                if (frameOrder.Count > 4000) { frameOrder.Clear(); foreach (string k in frameSessions.Keys) frameOrder.Enqueue(k); }
+            }
+            ICoreWebView2_13 v13 = wv as ICoreWebView2_13;
+            if (v13 == null) return;
+            try { v13.CallDevToolsProtocolMethodForSession(session, "Target.setAutoAttach", AutoAttach, new WvScriptDone(delegate (int hr, string r) { })); } catch { }
+        }
+
+        void FireFor(string session, string method, string json)
+        {
+            try
+            {
+                BeginInvoke(new Action(delegate
+                {
+                    ICoreWebView2_13 v13 = wv as ICoreWebView2_13;
+                    if (v13 == null) return;
+                    try { v13.CallDevToolsProtocolMethodForSession(session, method, json, new WvScriptDone(delegate (int hr, string r) { })); } catch { }
+                }));
+            }
+            catch { }
+        }
+
+        void CdpFor(string session, string method, string paramsJson, Pending p)
+        {
+            ICoreWebView2_13 v13 = wv as ICoreWebView2_13;
+            if (v13 == null) { p.Fail("the browser is not running"); return; }
+            WvScriptDone d = new WvScriptDone(delegate (int hr, string json)
+            {
+                if (hr < 0) { p.Fail(CdpError(method, hr, json)); return; }
+                object o = Json.TryParse(json ?? "");
+                Dictionary<string, object> obj = o as Dictionary<string, object>;
+                if (obj != null && obj.ContainsKey("code") && obj.ContainsKey("message") && obj.Count <= 3) { p.Fail(CdpError(method, hr, json)); return; }
+                p.Ok(json);
+            });
+            int r = v13.CallDevToolsProtocolMethodForSession(session, method, paramsJson, d);
+            if (r < 0) p.Fail(method + " failed (0x" + r.ToString("X8") + ")");
+        }
+
+        string CdpIn(string session, string method, Dictionary<string, object> args, CancelToken ct, out object result)
+        {
+            if (string.IsNullOrEmpty(session)) return CdpCall(method, args, ct, out result);
+            result = null;
+            string json;
+            string err = Ui(delegate (Pending p) { CdpFor(session, method, Json.Write(args), p); }, 20000, ct, out json);
+            if (err != null) return err;
+            result = Json.TryParse(json ?? "{}");
+            return null;
+        }
+
+        string JsIn(SiteFrame f, string js, CancelToken ct, out object value) { return JsIn(f, js, ct, false, out value); }
+
+        string JsIn(SiteFrame f, string js, CancelToken ct, bool wait, out object value)
+        {
+            if (f == null) return Js(js, ct, wait, out value);
+            value = null;
+            if (userDialogOpen) return "the page is waiting for the user to answer a question (\"" + userDialogText + "\"). Wait for the user, then try again.";
+            string last = null;
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                if (ct != null && ct.IsCancelled) return "stopped by the user";
+                object res;
+                if (f.World == 0)
+                {
+                    string own;
+                    lock (frameSessions) frameSessions.TryGetValue(f.Id, out own);
+                    f.Session = own ?? (f.Parent != null ? f.Parent.Session : null);
+                    last = CdpIn(f.Session, "Page.createIsolatedWorld", Json.O("frameId", f.Id, "worldName", worldName, "grantUniveralAccess", false), ct, out res);
+                    if (last == null && Json.Int(res, "executionContextId") == 0) last = "no script context";
+                    if (last != null)
+                    {
+                        if (attempt == 0 && ct != null && frameMisses < 3) ct.Sleep(200);
+                        else if (attempt == 1) frameMisses++;
+                        continue;
+                    }
+                    frameMisses = 0;
+                    f.World = Json.Int(res, "executionContextId");
+                    if (own != null && Acting) FireFor(own, "Emulation.setFocusEmulationEnabled", "{\"enabled\":true}");
+                }
+                last = CdpIn(f.Session, "Runtime.evaluate", Json.O("expression", js, "contextId", f.World, "returnByValue", true, "silent", true, "awaitPromise", wait), ct, out res);
+                if (last != null) { f.World = 0; continue; }
+                object ex = Json.Get(res, "exceptionDetails");
+                if (ex != null)
+                {
+                    string desc = Json.Str(ex, "exception", "description") ?? Json.Str(ex, "text") ?? "unknown error";
+                    if (desc.Length > 300) desc = desc.Substring(0, 300);
+                    return "a script in the frame failed: " + desc;
+                }
+                value = Unwrap(Json.Get(res, "result", "value"));
+                return null;
+            }
+            return "MinGent could not reach this frame (" + Clip(last ?? "", 120) + ")";
+        }
+
+        string FrameFor(SiteFrame parent, string elementJs, CancelToken ct, out SiteFrame f)
+        {
+            f = null;
+            string session = parent != null ? parent.Session : null;
+            int world = parent != null ? parent.World : worldId;
+            if (world == 0) return "the page was not read yet";
+            object res;
+            string err = CdpIn(session, "Runtime.evaluate", Json.O("expression", elementJs, "contextId", world, "returnByValue", false, "silent", true), ct, out res);
+            if (err != null) return err;
+            string obj = Json.Str(res, "result", "objectId");
+            if (string.IsNullOrEmpty(obj)) return "there is no frame";
+            object ignored;
+            try
+            {
+                object node;
+                err = CdpIn(session, "DOM.describeNode", Json.O("objectId", obj), ct, out node);
+                if (err != null) return err;
+                string id = Json.Str(node, "node", "frameId");
+                if (string.IsNullOrEmpty(id)) return "it is not a frame";
+                err = CdpIn(session, "Runtime.callFunctionOn", Json.O("objectId", obj, "functionDeclaration", "function (id) { var S = globalThis.__jpState || (globalThis.__jpState = {}); (S.fo || (S.fo = {}))[id] = this; }",
+                    "arguments", new List<object> { Json.O("value", id) }, "silent", true), ct, out ignored);
+                if (err != null) return err;
+                lock (siteFrames)
+                {
+                    if (!siteFrames.TryGetValue(id, out f) || f.Nav != navStarts || f.Parent != parent)
+                    {
+                        if (siteFrames.Count > 200)
+                        {
+                            List<string> old = new List<string>();
+                            foreach (KeyValuePair<string, SiteFrame> kv in siteFrames) if (kv.Value.Nav != navStarts) old.Add(kv.Key);
+                            foreach (string k in old) siteFrames.Remove(k);
+                            if (siteFrames.Count > 200) siteFrames.Clear();
+                        }
+                        f = new SiteFrame();
+                        f.Id = id;
+                        f.Parent = parent;
+                        f.Nav = navStarts;
+                        siteFrames[id] = f;
+                    }
+                }
+                return null;
+            }
+            finally { CdpIn(session, "Runtime.releaseObject", Json.O("objectId", obj), ct, out ignored); }
+        }
+
+        string PlaceOf(SiteFrame f, bool scroll, bool point, double lx, double ly, CancelToken ct, out FramePlace place)
+        {
+            place = new FramePlace();
+            double px = lx, py = ly;
+            for (SiteFrame cur = f; cur != null; cur = cur.Parent)
+            {
+                object v;
+                string args = Json.Quote(cur.Id) + "," + (scroll ? "true" : "false") + "," + (point ? px.ToString("0.##", CultureInfo.InvariantCulture) + "," + py.ToString("0.##", CultureInfo.InvariantCulture) : "null,null");
+                string err = JsIn(cur.Parent, "(" + BrowserScripts.FrameBox + ")(" + args + ")", ct, out v);
+                if (err != null) return err;
+                if (!(v is Dictionary<string, object>) || Json.Str(v, "err") != null) return "the frame is no longer on the page";
+                if (!Json.Bool(v, "shown") || Json.Bool(v, "outside")) place.InView = false;
+                string cov = Json.Str(v, "covered") ?? "";
+                if (cov.Length > 0 && place.Covered.Length == 0) place.Covered = cov;
+                place.Via.Add(Json.Str(v, "src") ?? "");
+                List<object> via = Json.List(v, "via");
+                if (via != null) place.Via.AddRange(via);
+                px += Json.Num(v, "x");
+                py += Json.Num(v, "y");
+            }
+            place.X = px - lx;
+            place.Y = py - ly;
+            return null;
+        }
+
+        SiteFrame FrameOfRef(string r)
+        {
+            SiteFrame f;
+            if (string.IsNullOrEmpty(r)) return null;
+            lock (refFrames) return refFrames.TryGetValue(r, out f) ? f : null;
+        }
+
+        string PrepIn(SiteFrame f, string r, bool scroll, CancelToken ct, out Dictionary<string, object> info)
+        {
+            string err = PrepOnce(f, r, scroll, ct, out info);
+            if (err != null || !scroll) return err;
+            for (int i = 0; i < 3; i++)
+            {
+                ct.Sleep(60);
+                Dictionary<string, object> again;
+                if (PrepOnce(f, r, false, ct, out again) != null) break;
+                bool still = Math.Abs(Json.Num(again, "x") - Json.Num(info, "x")) < 1 && Math.Abs(Json.Num(again, "y") - Json.Num(info, "y")) < 1;
+                info = again;
+                if (still) break;
+            }
+            return null;
+        }
+
+        string PrepOnce(SiteFrame f, string r, bool scroll, CancelToken ct, out Dictionary<string, object> info)
+        {
+            info = null;
+            string gone = r + " is no longer on the page (it changed or was reloaded). Call browser_read to get fresh refs.";
+            if (f.Nav != navStarts) return gone;
+            FramePlace place;
+            if (scroll) PlaceOf(f, true, false, 0, 0, ct, out place);
+            object v;
+            string err = JsIn(f, "(" + BrowserScripts.Prep + ")(" + Json.Quote(r) + "," + (scroll ? "true" : "false") + ")", ct, out v);
+            if (err != null) return err.StartsWith("MinGent could not reach this frame", StringComparison.Ordinal) ? gone : err;
+            info = v as Dictionary<string, object>;
+            if (info == null) return "could not find " + r + " on the page";
+            if (Json.Str(info, "err") == "stale") return gone;
+            double lx = Json.Num(info, "x"), ly = Json.Num(info, "y");
+            if (PlaceOf(f, false, true, lx, ly, ct, out place) != null) return gone;
+            info["x"] = lx + place.X;
+            info["y"] = ly + place.Y;
+            info["inView"] = Json.Bool(info, "inView") && place.InView;
+            if ((Json.Str(info, "covered") ?? "").Length == 0 && place.Covered.Length > 0) info["covered"] = place.Covered;
+            List<object> via = Json.List(info, "via") ?? new List<object>();
+            via.AddRange(place.Via);
+            info["via"] = via;
+            info["framed"] = true;
+            return null;
+        }
+
+        string WithFrames(SiteFrame parent, string text, int count, CancelToken ct, ref int left)
+        {
+            if (string.IsNullOrEmpty(text) || text.IndexOf('\uE000') < 0) return text;
+            MatchCollection found = FrameMark.Matches(text);
+            List<Match> order = new List<Match>();
+            foreach (Match m in found) order.Add(m);
+            order.Sort(delegate (Match a, Match b)
+            {
+                int c = b.Groups[4].Length.CompareTo(a.Groups[4].Length);
+                if (c == 0) c = a.Groups[3].Length.CompareTo(b.Groups[3].Length);
+                return c != 0 ? c : a.Index.CompareTo(b.Index);
+            });
+            Dictionary<int, string> inner = new Dictionary<int, string>();
+            foreach (Match m in order)
+            {
+                int i;
+                if (!int.TryParse(m.Groups[2].Value, NumberStyles.None, CultureInfo.InvariantCulture, out i) || i >= count) continue;
+                string got = FrameText(parent, i, m.Groups[1].Value, m.Groups[3].Length > 0, ct, ref left);
+                if (got != null) inner[m.Index] = got;
+            }
+            StringBuilder sb = new StringBuilder();
+            int at = 0;
+            foreach (Match m in found)
+            {
+                sb.Append(text, at, m.Index - at);
+                at = m.Index + m.Length;
+                string got;
+                if (inner.TryGetValue(m.Index, out got)) sb.Append(got).Append('\n');
+                else if (m.Groups[3].Length == 0) sb.Append("[frame from ").Append(m.Groups[1].Value).Append(": its content cannot be read here]\n");
+            }
+            sb.Append(text, at, text.Length - at);
+            return FrameStray.Replace(sb.ToString(), "");
+        }
+
+        string FrameText(SiteFrame parent, int index, string label, bool small, CancelToken ct, ref int left)
+        {
+            int comma = label.LastIndexOf(',');
+            string host = (comma > 0 ? label.Substring(0, comma) : label).Trim();
+            int port = host.LastIndexOf(':');
+            if (AdHost.IsMatch(port > 0 ? host.Substring(0, port) : host)) return small ? null : "[frame from " + label + ": advertising, not read]";
+            if (left <= 0 || (ct != null && ct.IsCancelled)) return null;
+            left--;
+            SiteFrame f;
+            if (FrameFor(parent, "globalThis.__jpState.xf[" + index.ToString(CultureInfo.InvariantCulture) + "]", ct, out f) != null || f == null || f.Depth > 3) return null;
+            object v;
+            string err = JsIn(f, "(" + BrowserScripts.Snapshot + ")(" + frameChars.ToString(CultureInfo.InvariantCulture) + ", " + lastRef.ToString(CultureInfo.InvariantCulture) + ", " + (f.Depth < 3 ? "true" : "false") + ", true)", ct, out v);
+            if (err != null || !(v is Dictionary<string, object>)) return null;
+            lastRef = Math.Max(lastRef, Json.Int(v, "last"));
+            List<object> ids = Json.List(v, "ids");
+            if (ids != null)
+                lock (refFrames)
+                {
+                    if (refFrames.Count > 20000)
+                    {
+                        List<string> old = new List<string>();
+                        foreach (KeyValuePair<string, SiteFrame> kv in refFrames) if (kv.Value.Nav != navStarts) old.Add(kv.Key);
+                        foreach (string k in old) refFrames.Remove(k);
+                        if (refFrames.Count > 20000) refFrames.Clear();
+                    }
+                    foreach (object o in ids) refFrames["e" + Json.Int(o).ToString(CultureInfo.InvariantCulture)] = f;
+                }
+            string body = WithFrames(f, Json.Str(v, "text") ?? "", Json.Int(v, "xf"), ct, ref left);
+            if (body.Trim().Length == 0) return small ? null : "[frame from " + label + ": it shows no text]";
+            string title = Clip(Json.Str(v, "title") ?? "", 60).Replace('"', '\'').Replace('\n', ' ');
+            return "[frame from " + host + (title.Length > 0 ? " \"" + title + "\"" : "") + "]\n" + body.TrimEnd() + "\n" + (Json.Bool(v, "cut") ? "(the frame has more text than MinGent reads here)\n" : "") + "[end of frame]";
+        }
+
+        string FocusedDeep(CancelToken ct, out object v)
+        {
+            string err = Js("(" + BrowserScripts.Focused + ")()", ct, out v);
+            if (err != null) return err;
+            SiteFrame parent = null;
+            List<object> via = new List<object>();
+            for (int depth = 0; depth < 3 && Json.Bool(v, "frame"); depth++)
+            {
+                string src = Json.Str(v, "src") ?? "";
+                if (FrameKind.Of(src) != null) break;
+                SiteFrame f;
+                object inner;
+                if (FrameFor(parent, "globalThis.__jpState.af", ct, out f) != null || f == null) break;
+                if (JsIn(f, "(" + BrowserScripts.Focused + ")()", ct, out inner) != null || !(inner is Dictionary<string, object>)) break;
+                List<object> outer = Json.List(v, "via");
+                if (outer != null) via.AddRange(outer);
+                via.Add(src);
+                v = inner;
+                parent = f;
+            }
+            Dictionary<string, object> d = v as Dictionary<string, object>;
+            if (d != null && via.Count > 0)
+            {
+                List<object> own = Json.List(d, "via");
+                if (own != null) via.AddRange(own);
+                d["via"] = via;
+            }
+            return null;
+        }
+
         string CreateWorld(CancelToken ct, out int id, out bool unsupported)
         {
             id = 0;
@@ -1741,6 +2143,14 @@ namespace MinGent
                     keep.Add(d);
                     if (keep.Count > 400) keep.RemoveRange(0, 100);
                     try { wv.CallDevToolsProtocolMethod("Emulation.setFocusEmulationEnabled", Json.Write(Json.O("enabled", on)), d); } catch { }
+                    ICoreWebView2_13 v13 = wv as ICoreWebView2_13;
+                    if (v13 == null) return;
+                    List<string> sessions = new List<string>();
+                    lock (siteFrames)
+                        foreach (SiteFrame f in siteFrames.Values)
+                            if (f.World != 0 && f.Nav == navStarts && !string.IsNullOrEmpty(f.Session) && !sessions.Contains(f.Session)) sessions.Add(f.Session);
+                    foreach (string session in sessions)
+                        try { v13.CallDevToolsProtocolMethodForSession(session, "Emulation.setFocusEmulationEnabled", Json.Write(Json.O("enabled", on)), d); } catch { }
                 }));
             }
             catch { }
@@ -1873,6 +2283,11 @@ namespace MinGent
                 if (DateTime.UtcNow > until) { note = " (the page is still loading)"; break; }
                 Thread.Sleep(50);
             }
+            if (navStarts != startCount && !lastNavOk && !loading && !HasDownload && lastNavError == 9)
+            {
+                DateTime grace = DateTime.UtcNow.AddMilliseconds(1500);
+                while (!HasDownload && !lastNavOk && !loading && DateTime.UtcNow < grace && !ct.IsCancelled && !userDialogOpen) Thread.Sleep(40);
+            }
             if (navStarts != startCount && !lastNavOk && !loading && !HasDownload)
             {
                 string here = null;
@@ -1944,10 +2359,13 @@ namespace MinGent
             int size = Math.Max(4000, Math.Min(40000, SnapshotChars));
             part = Math.Max(1, Math.Min(MaxParts, part));
             int max = size * part;
-            string err = Js("(" + BrowserScripts.Snapshot + ")(" + max.ToString(CultureInfo.InvariantCulture) + ", " + lastRef.ToString(CultureInfo.InvariantCulture) + ")", ct, out v);
+            string err = Js("(" + BrowserScripts.Snapshot + ")(" + max.ToString(CultureInfo.InvariantCulture) + ", " + lastRef.ToString(CultureInfo.InvariantCulture) + ", true)", ct, out v);
             if (err != null) return err;
             if (!(v is Dictionary<string, object>)) return "could not read the page";
             lastRef = Math.Max(lastRef, Json.Int(v, "last"));
+            int framesLeft = FramesPerRead;
+            frameChars = size;
+            string pageText = WithFrames(null, Json.Str(v, "text") ?? "", Json.Int(v, "xf"), ct, ref framesLeft);
             StringBuilder sb = new StringBuilder();
             string title = Clip(Json.Str(v, "title") ?? "", 200), url = Json.Str(v, "url") ?? currentUrl;
             if (url.Length > 2000) url = url.Substring(0, 2000) + "...";
@@ -1999,11 +2417,11 @@ namespace MinGent
                            (!CaptchaMode ? "When you get to the point where the form needs it, ask the user to solve it with ask_user; MinGent leaves CAPTCHAs to the user."
                             : AgentCanSee ? "CAPTCHA mode is on, so when the form needs it you may try it yourself: take browser_screenshot (MinGent adds a zoomed copy of the CAPTCHA)" + (box.Length == 0 && typed ? ", then type the characters it shows into its answer box with browser_type." : ", then do what it asks with browser_click or browser_drag by position.") + " If it does not let you through, ask the user."
                             : "CAPTCHA mode is on, but this model can't see pictures, so ask the user to solve it with ask_user when the form needs it.");
-            if (Json.Bool(v, "modal")) sb.Append("Note: a dialog is open on top of the page. Deal with it first (for example accept or close it).\n");
-            if (Json.Int(v, "xframes") > 0) sb.Append("Note: parts of this page are frames from other sites, which can't be read as text here").Append(AgentCanSee ? "; browser_screenshot shows them.\n" : ".\n");
+            if (Json.Bool(v, "modal")) sb.Append("Note: a dialog is open on top of the page. Deal with it first: answer or close it, and to a question about cookies, turn down the optional ones.\n");
+            if (Json.Int(v, "xframes") > 0 && pageText.IndexOf(": its content cannot be read here]", StringComparison.Ordinal) >= 0) sb.Append("Note: parts of this page are frames from other sites, which can't be read as text here").Append(AgentCanSee ? "; browser_screenshot shows them.\n" : ".\n");
             sb.Append('\n');
-            string body = pdfText ?? Json.Str(v, "text") ?? "";
-            bool more = pdfText != null ? pdfText.Length > size * part : Json.Bool(v, "cut"), past;
+            string body = pdfText ?? pageText;
+            bool more = pdfText != null ? pdfText.Length > size * part : Json.Bool(v, "cut") || pageText.Length > size * part, past;
             string shown = Part(body, size, part, out past);
             if (part > 1 && !past) sb.Append("(part ").Append(part).Append(" of the page's text)\n");
             if (past) sb.Append("(the page's text ended before part ").Append(part).Append("; it has ").Append(Math.Max(1, (body.Length + size - 1) / size)).Append(body.Length > size ? " parts" : " part").Append(")\n");
@@ -2084,6 +2502,8 @@ namespace MinGent
             info = null;
             string r = NormRef(refId);
             if (!Regex.IsMatch(r, "^e\\d{1,9}$")) return "\"" + refId + "\" is not an element ref. Use a ref like e12 from browser_read.";
+            SiteFrame site = FrameOfRef(r);
+            if (site != null) return PrepIn(site, r, scroll, ct, out info);
             object v;
             string err = Js("(" + BrowserScripts.Prep + ")(" + Json.Quote(r) + "," + (scroll ? "true" : "false") + ")", ct, out v);
             if (err != null) return err;
@@ -2753,6 +3173,43 @@ namespace MinGent
 
         public void ShowToUser() { Reveal(); }
 
+        public string TextRef(string text, CancelToken ct, out string refId, out int places)
+        {
+            refId = "";
+            places = 0;
+            string err = Ensure(ct);
+            if (err != null) return err;
+            lock (opLock)
+            {
+                string call = "(" + BrowserScripts.Find + ")(" + Json.Quote(text ?? "") + ", ";
+                object v;
+                err = Js(call + lastRef.ToString(CultureInfo.InvariantCulture) + ")", ct, out v);
+                if (err != null) return err;
+                SiteFrame owner = null;
+                if (Json.Str(v, "ref") == null)
+                {
+                    List<SiteFrame> frames = new List<SiteFrame>();
+                    lock (siteFrames)
+                        foreach (SiteFrame f in siteFrames.Values) if (f.World != 0 && f.Nav == navStarts) frames.Add(f);
+                    foreach (SiteFrame f in frames)
+                    {
+                        object fv;
+                        if (JsIn(f, call + lastRef.ToString(CultureInfo.InvariantCulture) + ")", ct, out fv) != null || Json.Str(fv, "ref") == null) continue;
+                        v = fv;
+                        owner = f;
+                        break;
+                    }
+                }
+                string found = Json.Str(v, "ref");
+                if (found == null) return "the page shows no \"" + Clip(text ?? "", 80) + "\" right now. Give the words as browser_read shows them, or a ref.";
+                lastRef = Math.Max(lastRef, Json.Int(v, "last"));
+                if (owner != null) lock (refFrames) refFrames[found] = owner;
+                refId = found;
+                places = Json.Int(v, "count");
+                return null;
+            }
+        }
+
         public string ElementInfo(string refId, CancelToken ct, out string kind, out bool sensitive)
         {
             kind = "";
@@ -2805,7 +3262,7 @@ namespace MinGent
                     {
                         if (!plain) return r + " is not visible on the screen, so it can't be " + mouse.Describe().ToLowerInvariant() + ". Scroll to it first, or use a plain click.";
                         object v;
-                        err = Js("(" + BrowserScripts.Click + ")(" + Json.Quote(r) + ")", ct, out v);
+                        err = JsIn(FrameOfRef(r), "(" + BrowserScripts.Click + ")(" + Json.Quote(r) + ")", ct, out v);
                         if (err != null) return err;
                         if (v as string == "stale") return r + " is no longer on the page. Call browser_read to get fresh refs.";
                     }
@@ -2858,6 +3315,26 @@ namespace MinGent
                 sensitive = true;
                 kind = "a spot MinGent could not check";
                 return null;
+            }
+            SiteFrame under = null;
+            List<object> through = new List<object>();
+            for (int depth = 0; depth < 3 && Json.Bool(v, "frame") && FrameKind.Of(Json.Str(v, "src")) == null && Json.Get(v, "fx") != null; depth++)
+            {
+                SiteFrame f;
+                object inner;
+                if (FrameFor(under, "globalThis.__jpState.pf", ct, out f) != null || f == null) break;
+                if (JsIn(f, "(" + BrowserScripts.Point + ")(" + Json.Num(v, "fx").ToString("0.##", CultureInfo.InvariantCulture) + "," + Json.Num(v, "fy").ToString("0.##", CultureInfo.InvariantCulture) + ")", ct, out inner) != null || !(inner is Dictionary<string, object>)) break;
+                List<object> outer = Json.List(v, "via");
+                if (outer != null) through.AddRange(outer);
+                through.Add(Json.Str(v, "src") ?? "");
+                v = inner;
+                under = f;
+            }
+            if (through.Count > 0 && v is Dictionary<string, object>)
+            {
+                List<object> own = Json.List(v, "via");
+                if (own != null) through.AddRange(own);
+                ((Dictionary<string, object>)v)["via"] = through;
             }
             if (Json.Bool(v, "frame"))
             {
@@ -3089,6 +3566,8 @@ namespace MinGent
             return Js("(" + BrowserScripts.CaptchaRect + ")()", ct, out v) == null && Json.Bool(v, "found");
         }
 
+        public void DialogReply(string reply) { dialogReply = string.IsNullOrEmpty(reply) ? null : reply; }
+
         public string ClickAt(double x, double y, MouseSpec mouse, CancelToken ct, out string summary)
         {
             summary = null;
@@ -3201,7 +3680,9 @@ namespace MinGent
                     if (!string.IsNullOrEmpty(fromRef))
                     {
                         Dictionary<string, object> info;
-                        if (Prep(NormRef(fromRef), false, ct, out info) == null && Json.Bool(info, "draggable"))
+                        SiteFrame dragIn = FrameOfRef(NormRef(fromRef));
+                        bool together = string.IsNullOrEmpty(toRef) ? dragIn == null : FrameOfRef(NormRef(toRef)) == dragIn;
+                        if (together && Prep(NormRef(fromRef), false, ct, out info) == null && Json.Bool(info, "draggable"))
                         {
                             err = Point(toRef, toX, toY, ct, out bx, out by, out to);
                             if (err != null) return err;
@@ -3210,12 +3691,12 @@ namespace MinGent
                             System.Drawing.Point dropAt;
                             if (ScreenOf(bx, by, ct, out dropAt)) AgentCursor.PointAt(dropAt, false);
                             string target = string.IsNullOrEmpty(toRef) ? "null" : Json.Quote(NormRef(toRef));
-                            err = Js("(" + BrowserScripts.DragDrop + ")(" + Json.Quote(NormRef(fromRef)) + "," + target + "," + bx.ToString("0.##", CultureInfo.InvariantCulture) + "," + by.ToString("0.##", CultureInfo.InvariantCulture) + ")", ct, out v);
+                            err = JsIn(dragIn, "(" + BrowserScripts.DragDrop + ")(" + Json.Quote(NormRef(fromRef)) + "," + target + "," + bx.ToString("0.##", CultureInfo.InvariantCulture) + "," + by.ToString("0.##", CultureInfo.InvariantCulture) + ")", ct, out v);
                             if (err != null) return err;
                             string de = Json.Str(v, "err");
                             if (de == "stale") return (Json.Str(v, "which") ?? "that ref") + " is no longer on the page. Call browser_read to get fresh refs.";
                             if (de == "none") return "there is nothing at the drop position";
-                            string how = Json.Bool(v, "dropped") ? "The page accepted the drop." : Json.Bool(v, "accepted") ? "The target accepted the drag but did not handle the drop." : "The target did not accept the drop.";
+                            string how = Json.Bool(v, "dropped") || Json.Bool(v, "changed") ? "The page took the drop." : Json.Bool(v, "accepted") ? "The target accepted the drag; read the page to check that the drop did something." : "The target did not accept the drop.";
                             return AfterAction(start, before, ct, "Dragged " + from + " to " + to + " (drag and drop). " + how, out summary);
                         }
                     }
@@ -3258,10 +3739,10 @@ namespace MinGent
             lock (opLock)
             {
                 object v;
-                err = Js("(" + BrowserScripts.Focused + ")()", ct, out v);
+                err = FocusedDeep(ct, out v);
                 if (err != null) return err;
                 if (Json.Bool(v, "none")) return "nothing on the page has the keyboard focus. Click the field first, or give its ref.";
-                if (Json.Bool(v, "frame")) { kind = "a field inside a frame from another site"; sensitive = true; return null; }
+                if (Json.Bool(v, "frame")) { kind = FrameKind.Of(Json.Str(v, "src")) ?? "a field inside a frame from another site"; sensitive = true; return null; }
                 kind = Json.Str(v, "kind") ?? "";
                 sensitive = Json.Bool(v, "sensitive");
                 FrameKind.Inside(v, ref kind, ref sensitive);
@@ -3316,7 +3797,7 @@ namespace MinGent
                     if (Json.Bool(info, "disabled")) return Disabled(r, Json.Str(info, "name"), "typing");
                     if (Json.Bool(info, "select"))
                     {
-                        err = Js("(" + BrowserScripts.Select + ")(" + Json.Quote(r) + "," + Json.Quote(text ?? "") + ")", ct, out v);
+                        err = JsIn(FrameOfRef(r), "(" + BrowserScripts.Select + ")(" + Json.Quote(r) + "," + Json.Quote(text ?? "") + ")", ct, out v);
                         if (err != null) return err;
                         string se = Json.Str(v, "err");
                         if (se == "none")
@@ -3333,7 +3814,7 @@ namespace MinGent
                     string ftype = Json.Str(info, "type") ?? "";
                     if (Json.Str(info, "tag") == "INPUT" && PickerField(ftype) && !string.IsNullOrEmpty(text))
                     {
-                        err = Js("(" + BrowserScripts.SetField + ")(" + Json.Quote(r) + "," + Json.Quote(text) + ")", ct, out v);
+                        err = JsIn(FrameOfRef(r), "(" + BrowserScripts.SetField + ")(" + Json.Quote(r) + "," + Json.Quote(text) + ")", ct, out v);
                         if (err != null) return err;
                         string fe = Json.Str(v, "err");
                         if (fe == "stale") return r + " is no longer on the page. Call browser_read to get fresh refs.";
@@ -3360,14 +3841,14 @@ namespace MinGent
                         if (err != null) return err;
                         ct.Sleep(80);
                     }
-                    err = Js("(" + BrowserScripts.Focus + ")(" + Json.Quote(r) + "," + (clear ? "true" : "false") + ")", ct, out v);
+                    err = JsIn(FrameOfRef(r), "(" + BrowserScripts.Focus + ")(" + Json.Quote(r) + "," + (clear ? "true" : "false") + ")", ct, out v);
                     if (err != null) return err;
                     if (Json.Str(v, "err") == "stale") return r + " is no longer on the page. Call browser_read to get fresh refs.";
                     if (!Json.Bool(v, "ok") && Json.Bool(info, "sensitive")) return "the cursor did not land in " + r + " (the page moved it elsewhere), so nothing was typed. Call browser_read and try again.";
                     if (!Json.Bool(info, "sensitive") && !string.IsNullOrEmpty(text))
                     {
                         object fv;
-                        if (Js("(" + BrowserScripts.Focused + ")()", ct, out fv) == null && !Json.Bool(fv, "none"))
+                        if (FocusedDeep(ct, out fv) == null && !Json.Bool(fv, "none"))
                         {
                             string fk = Json.Str(fv, "kind") ?? "";
                             bool fs = Json.Bool(fv, "sensitive") || Json.Bool(fv, "frame");
@@ -3465,13 +3946,14 @@ namespace MinGent
                         summary = "Scrolled " + dir + " by " + amount + " pixels at " + label + ". " + SeeAfterScroll;
                         return null;
                     }
-                    if (pixels <= 0 && (dir == "up" || dir == "down")) err = Js("(" + BrowserScripts.Scroll + ")(" + Json.Quote(dir) + ")", ct, out v);
-                    else err = Js("(" + BrowserScripts.ScrollBy + ")(" + Json.Quote(dir) + "," + Math.Max(0, Math.Min(20000, pixels)).ToString(CultureInfo.InvariantCulture) + ")", ct, out v);
+                    if (pixels <= 0 && (dir == "up" || dir == "down")) err = Js("(" + BrowserScripts.Scroll + ")(" + Json.Quote(dir) + ")", ct, true, out v);
+                    else err = Js("(" + BrowserScripts.ScrollBy + ")(" + Json.Quote(dir) + "," + Math.Max(0, Math.Min(20000, pixels)).ToString(CultureInfo.InvariantCulture) + ")", ct, true, out v);
                     if (err != null) return err;
-                    ct.Sleep(400);
                     bool moved = Json.Bool(v, "moved");
                     bool sideways = dir == "left" || dir == "right";
-                    summary = moved ? "Scrolled " + dir + "; now " + Json.Int(v, "at") + "% of the way " + (sideways ? "across" : "down") + ". " + SeeAfterScroll
+                    string grew = !Json.Bool(v, "grew") ? "" : sideways ? " More loaded as it scrolled, so there is more to the right now."
+                                : " More loaded as it scrolled: the page is about " + Json.Int(v, "screens") + " screens long now.";
+                    summary = moved ? "Scrolled " + dir + "; now " + Json.Int(v, "at") + "% of the way " + (sideways ? "across" : "down") + "." + grew + " " + SeeAfterScroll
                                     : "The page did not scroll " + dir + " (already at the " + (dir == "up" ? "top" : dir == "down" ? "bottom" : dir == "left" ? "left edge" : "right edge") + ").";
                     return null;
                 }
@@ -3540,26 +4022,29 @@ namespace MinGent
                     string before = currentUrl;
                     int start = navStarts;
                     string r = string.IsNullOrEmpty(refId) ? "" : NormRef(refId);
+                    SiteFrame site = FrameOfRef(r);
+                    if (site != null && site.Nav != navStarts) return r + " is no longer on the page (it changed or was reloaded). Call browser_read to get fresh refs.";
                     object v;
-                    err = Js("(" + BrowserScripts.FileField + ")(" + Json.Quote(r) + "," + field.ToString(System.Globalization.CultureInfo.InvariantCulture) + ")", ct, out v);
+                    err = JsIn(site, "(" + BrowserScripts.FileField + ")(" + Json.Quote(r) + "," + field.ToString(System.Globalization.CultureInfo.InvariantCulture) + ")", ct, out v);
                     if (err != null) return err;
                     string bad = Json.Str(v, "err");
                     if (bad != null) return FileFields.Problem(bad, r, v);
                     if (Json.Bool(v, "folder")) return "this file field takes a whole folder, which only the user can choose. Ask the user to do it in the browser pane.";
                     if (files.Count > 1 && !Json.Bool(v, "multiple")) return "this file field takes one file, and you gave " + files.Count + ". Give one file.";
                     object res;
-                    err = CdpCall("Runtime.evaluate", Json.O("expression", "globalThis.__jpUpload", "contextId", worldId, "returnByValue", false, "silent", true), ct, out res);
+                    string session = site != null ? site.Session : null;
+                    err = CdpIn(session, "Runtime.evaluate", Json.O("expression", "globalThis.__jpUpload", "contextId", site != null ? site.World : worldId, "returnByValue", false, "silent", true), ct, out res);
                     if (err != null) return "the page changed while the file was being given to it; call browser_read and try again";
                     string handle = Json.Str(res, "result", "objectId");
                     if (string.IsNullOrEmpty(handle)) return "the file field is no longer on the page. Call browser_read and try again.";
                     List<object> list = new List<object>();
                     foreach (string f in files) list.Add(f);
-                    err = CdpCall("DOM.setFileInputFiles", Json.O("files", list, "objectId", handle), ct, out res);
+                    err = CdpIn(session, "DOM.setFileInputFiles", Json.O("files", list, "objectId", handle), ct, out res);
                     if (err != null) return "the page did not take the file (" + Clip(err, 160) + ")";
                     ct.Sleep(150);
                     string fieldName = Json.Str(v, "name") ?? "";
                     object got;
-                    Js(BrowserScripts.FileTaken, ct, out got);
+                    JsIn(site, BrowserScripts.FileTaken, ct, out got);
                     List<object> names = Json.List(got, "names");
                     List<string> shown = new List<string>();
                     if (names != null) foreach (object n in names) shown.Add(Clip(n as string ?? "", 80));
@@ -4067,9 +4552,12 @@ namespace MinGent
                         }
                         return why;
                     }
+                    object parsed = Json.TryParse(json ?? "{}");
+                    string whole = AsJson(parsed, ct);
                     try { BeginInvoke(new Action(delegate { Fire("Runtime.releaseObjectGroup", Json.Write(Json.O("objectGroup", "mingent"))); })); } catch { }
                     bool failed;
-                    string value = ConsoleFormat.Result(Json.TryParse(json ?? "{}"), out failed);
+                    string value = ConsoleFormat.Result(parsed, out failed);
+                    if (!failed && whole != null) value = whole;
                     ct.Sleep(80);
                     string stuck = StopIfBusy();
                     List<ConsoleEntry> during = consoleLog.Since(mark);
@@ -4082,6 +4570,25 @@ namespace MinGent
                 }
                 finally { agentRunning = false; Busy(false); }
             }
+        }
+
+        string AsJson(object parsed, CancelToken ct)
+        {
+            if (Json.Get(parsed, "exceptionDetails") != null) return null;
+            object r = Json.Get(parsed, "result");
+            string sub = Json.Str(r, "subtype"), id = Json.Str(r, "objectId");
+            if (Json.Str(r, "type") != "object" || id == null || !(sub == "array" || (sub == null && Json.Str(r, "className") == "Object"))) return null;
+            string res;
+            string err = Ui(delegate (Pending p)
+            {
+                Cdp("Runtime.callFunctionOn", Json.Write(Json.O("objectId", id, "returnByValue", true, "silent", true,
+                    "functionDeclaration", "function () { try { var v = this; if (!Array.isArray(v) && typeof v.length === 'number' && Object.prototype.toString.call(v) !== '[object Object]') v = Array.prototype.slice.call(v); " +
+                    "var s = JSON.stringify(v, function (k, x) { if (typeof Node !== 'undefined' && x instanceof Node) { var n = (x.nodeName || '').toLowerCase(); if (x.id) n += '#' + x.id; if (typeof x.className === 'string' && x.className.trim()) n += '.' + x.className.trim().split(/\\s+/).join('.'); return n; } return x; }); " +
+                    "return s && s.length > 2 && s.length <= 200000 ? s : undefined; } catch (e) { return undefined; } }")), p);
+            }, 5000, ct, out res);
+            if (err != null) return null;
+            string s = Json.Str(Json.TryParse(res ?? "{}"), "result", "value");
+            return string.IsNullOrEmpty(s) ? null : s;
         }
 
         string Moved(string was) { return MovedFrom(was, currentUrl, loading ? goingUrl : ""); }

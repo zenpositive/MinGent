@@ -103,7 +103,6 @@ namespace MinGent
         [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int index);
         [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out WinRect r);
         [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int w, int hgt, uint flags);
-        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, System.Text.StringBuilder sb, int max);
         [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int attr, out WinRect r, int size);
         [StructLayout(LayoutKind.Sequential)] struct WinRect { public int Left, Top, Right, Bottom; }
 
@@ -141,6 +140,21 @@ namespace MinGent
 
         public static bool Arrange(IntPtr app)
         {
+            return OnUi(app, delegate { return ArrangeNow(app); });
+        }
+
+        public static bool Unzoom(IntPtr app)
+        {
+            return OnUi(app, delegate
+            {
+                if (!placed.Contains(app) || !IsZoomed(app)) return false;
+                seen.Remove(app);
+                return ArrangeNow(app);
+            });
+        }
+
+        static bool OnUi(IntPtr app, Func<bool> act)
+        {
             if (app == IntPtr.Zero || broken || Environment.OSVersion.Platform != PlatformID.Win32NT) return false;
             Control c = invoker;
             if (c == null || c.IsDisposed || !c.IsHandleCreated) return false;
@@ -149,7 +163,7 @@ namespace MinGent
             {
                 MethodInvoker work = delegate
                 {
-                    try { moved = ArrangeNow(app); }
+                    try { moved = act(); }
                     catch (Exception) { moved = false; }
                     finally { try { done.Set(); } catch (Exception) { } }
                 };
@@ -171,10 +185,8 @@ namespace MinGent
             Form main = invoker as Form ?? invoker.FindForm();
             if (main == null || !main.Visible || main.WindowState == FormWindowState.Minimized || !IsWindow(app) || !IsWindowVisible(app)) return false;
             seen.Add(app);
-            if (GetWindow(app, 4) != IntPtr.Zero) return false;
-            System.Text.StringBuilder cls = new System.Text.StringBuilder(64);
-            GetClassName(app, cls, 64);
-            if (cls.ToString() == "#32770") return false;
+            IntPtr owner = GetWindow(app, 4);
+            if (owner != IntPtr.Zero && IsWindowVisible(owner)) return false;
             int ex = GetWindowLong(app, -20);
             if ((ex & 0x80) != 0 || (ex & 0x8) != 0) return false;
             if (IsIconic(app)) ShowWindow(app, 4);
@@ -280,8 +292,20 @@ namespace MinGent
             if (showing) { misses = 0; return; }
             if (++misses < 2) return;
             misses = 0;
+            PutBack();
+        }
+
+        public static void Release()
+        {
+            if (broken || Environment.OSVersion.Platform != PlatformID.Win32NT) return;
+            seen.Clear();
+            PutBack();
+        }
+
+        static void PutBack()
+        {
             placed.Clear();
-            watch.Stop();
+            if (watch != null) watch.Stop();
             if (!restorePending) return;
             restorePending = false;
             Form main = invoker as Form ?? (invoker != null ? invoker.FindForm() : null);

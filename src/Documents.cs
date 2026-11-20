@@ -751,11 +751,12 @@ namespace MinGent
         {
             const int MaxCols = 60, MaxRows = 5000;
             List<List<string>> rows = new List<List<string>>();
+            List<List<string>> kinds = new List<List<string>>();
             int rowsSeen = 0;
             using (MemoryStream ms = new MemoryStream(data))
             using (XmlReader r = XmlReader.Create(ms, Safe()))
             {
-                List<string> row = null;
+                List<string> row = null, kindRow = null;
                 string type = null, cref = null, val = null, inline = null, formula = null;
                 int style = 0;
                 bool held = false;
@@ -768,7 +769,8 @@ namespace MinGent
                         {
                             case "row":
                                 row = new List<string>();
-                                if (r.IsEmptyElement) row = null;
+                                kindRow = new List<string>();
+                                if (r.IsEmptyElement) row = kindRow = null;
                                 break;
                             case "c":
                                 type = r.GetAttribute("t");
@@ -801,6 +803,8 @@ namespace MinGent
                                 if (shown.Length == 0 && !string.IsNullOrEmpty(formula)) shown = "=" + formula;
                                 while (row.Count <= col) row.Add("");
                                 row[col] = shown;
+                                while (kindRow.Count <= col) kindRow.Add("");
+                                kindRow[col] = shown.Length == 0 ? "" : string.IsNullOrEmpty(formula) ? CellKind(type, val, style, dateStyle, percentStyle) : val == null ? "=" : CellKind(type, val, style, dateStyle, percentStyle) + "=";
                             }
                             cref = null;
                         }
@@ -811,9 +815,9 @@ namespace MinGent
                             if (any)
                             {
                                 rowsSeen++;
-                                if (rows.Count < MaxRows) rows.Add(row);
+                                if (rows.Count < MaxRows) { rows.Add(row); kinds.Add(kindRow); }
                             }
-                            row = null;
+                            row = kindRow = null;
                         }
                     }
                 }
@@ -828,6 +832,47 @@ namespace MinGent
             }
             Table(rows, sb);
             if (rowsSeen > rows.Count) sb.Append("(").Append(rowsSeen - rows.Count).Append(" more rows not shown)\n");
+            string holds = Holds(kinds, lastCol);
+            if (holds != null) sb.Append(holds).Append('\n');
+        }
+
+        static string CellKind(string type, string val, int style, List<bool> dateStyle, List<int> percentStyle)
+        {
+            switch (type)
+            {
+                case "s": case "inlineStr": case "str": return "text";
+                case "b": return "true/false";
+                case "e": return "error";
+            }
+            double d;
+            if (val == null || !double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out d)) return "text";
+            if (style >= 0 && style < dateStyle.Count && dateStyle[style]) return "date";
+            if (style >= 0 && style < percentStyle.Count && percentStyle[style] >= 0) return "percent";
+            return "number";
+        }
+
+        public static string Holds(List<List<string>> kinds, int lastCol)
+        {
+            if (kinds.Count < 2) return null;
+            List<string> parts = new List<string>();
+            bool typed = false;
+            for (int c = 0; c <= lastCol && c < 60; c++)
+            {
+                List<string> seen = new List<string>();
+                bool formulas = false;
+                for (int i = 1; i < kinds.Count; i++)
+                {
+                    string k = c < kinds[i].Count ? kinds[i][c] : "";
+                    if (k.Length == 0) continue;
+                    if (k.EndsWith("=", StringComparison.Ordinal)) { formulas = true; k = k.Substring(0, k.Length - 1); }
+                    if (k.Length > 0 && !seen.Contains(k)) seen.Add(k);
+                }
+                if (seen.Count == 0 && !formulas) continue;
+                if (formulas || seen.Count > 1 || seen[0] != "text") typed = true;
+                string col = c < 26 ? ((char)('A' + c)).ToString() : ((char)('A' + c / 26 - 1)).ToString() + (char)('A' + c % 26);
+                parts.Add(col + " " + (seen.Count == 0 ? "formulas" : string.Join(" and ", seen.ToArray()) + (formulas ? " (formulas)" : "")));
+            }
+            return typed ? "Cells below the first row hold: " + string.Join(", ", parts.ToArray()) + "." : null;
         }
 
         static string CellText(string type, string val, string inline, int style, List<string> shared, List<bool> dateStyle, List<int> percentStyle, bool date1904)

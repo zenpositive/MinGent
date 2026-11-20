@@ -574,7 +574,7 @@ namespace MinGent
                             return none;
                         }
                         text = doc.Text;
-                        foreign = true;
+                        lock (ctx.Session.DocSources) foreign = !ctx.Session.DocSources.ContainsKey(t.Full);
                     }
                     else
                     {
@@ -738,7 +738,7 @@ namespace MinGent
                 PermissionAsk ask = new PermissionAsk();
                 ask.Kind = "write";
                 bool own = AgentPaths.InProgram(full) || (through && AgentPaths.InProgram(realPath));
-                ask.Category = ctx.Guarded(own ? PermissionCategory.Credentials : PermissionCategory.Delete);
+                ctx.Guard(ask, own ? PermissionCategory.Credentials : PermissionCategory.Delete);
                 ask.Title = own ? (isDir ? "Delete a folder of MinGent itself" : "Delete a file of MinGent itself") : isDir ? "Delete a folder outside the work folder" : "Delete a file outside the work folder";
                 ask.High = true;
                 ask.Detail = full + (through ? " (really " + realPath + ")" : "") + (isDir && !link ? (tooMany ? " (a large folder)" : " (" + files.Count + (files.Count == 1 ? " file)" : " files)")) : "");
@@ -1645,7 +1645,7 @@ namespace MinGent
                 ask.Reason = "This command " + danger + ".";
                 ask.AllowRemember = false;
                 if (category == PermissionCategory.Never) ask.Never = true;
-                else ask.Category = ctx.Guarded(category ?? "");
+                else ctx.Guard(ask, category ?? "");
             }
             else if (askOut)
             {
@@ -1660,7 +1660,7 @@ namespace MinGent
                 ask = new PermissionAsk();
                 ask.Reason = "";
             }
-            else if (ps.WebGuard && ps.Tainted && !plainWait)
+            else if (ps.WebGuard && ps.Tainted && !plainWait && (bg || !CommandSafety.OnlyReads(original, shell, cwd, ctx.Workspace)))
             {
                 ask = new PermissionAsk();
                 ask.Reason = ps.HasRead + " (" + ps.TaintSource + "), so commands need your OK in case " + ps.Planter + " tried to slip in instructions.";
@@ -1919,6 +1919,20 @@ namespace MinGent
             return a;
         }
 
+        static PermissionAsk ReadAsk(PermissionState ps, string title, string detail, string where)
+        {
+            PermissionAsk a = new PermissionAsk();
+            a.Kind = "web";
+            a.High = true;
+            a.AllowRemember = false;
+            a.Title = title;
+            string shown = ps.Hide(Decoded(detail));
+            a.Detail = shown.Length > 600 ? shown.Substring(0, 600) + "..." : shown;
+            a.Where = where ?? "";
+            a.Reason = "This contains a password, key or token the agent read on this PC in this chat. Sending it gives that website the secret.";
+            return a;
+        }
+
         public static string ExfilText(ToolContext ctx, string text, string title, string where)
         {
             if (string.IsNullOrEmpty(text)) return null;
@@ -1926,6 +1940,8 @@ namespace MinGent
             if (SecretWatch.Leaks(text) || SecretWatch.Leaks(plain))
                 return ctx.Approve(KeyAsk(title, text, where)) ? null : "The user did not allow sending this text.";
             PermissionState ps = ctx.Session.Perms;
+            if ((ps.Holds(text) || ps.Holds(plain)) && !(where != null && where.IndexOf(':') > 0 && BrowserPane.ThisPc(where)))
+                return ctx.Approve(ReadAsk(ps, "Send a password the agent read to a website", text, where)) ? null : "The user did not allow sending this text.";
             if (!ps.WebGuard || !ps.Tainted) return null;
             bool heavy = text.Length > 300 || Regex.IsMatch(text, "[A-Za-z0-9+/_=%-]{48,}") || SecretShape.IsMatch(plain);
             if (!heavy) return null;
@@ -1948,6 +1964,8 @@ namespace MinGent
             if (SecretWatch.Leaks(url) || SecretWatch.Leaks(plain))
                 return ctx.Approve(KeyAsk("Open an address that contains your API key", url, null)) ? null : "The user did not allow opening this address.";
             PermissionState ps = ctx.Session.Perms;
+            if ((ps.Holds(url) || ps.Holds(plain)) && !BrowserPane.ThisPc(url))
+                return ctx.Approve(ReadAsk(ps, "Open an address that contains a password the agent read", url, null)) ? null : "The user did not allow opening this address.";
             if (!ps.WebGuard || !ps.Tainted) return null;
             bool longLabel = false;
             foreach (string label in u.Host.Split('.')) if (label.Length >= 32) longLabel = true;
@@ -3692,11 +3710,11 @@ namespace MinGent
             PermissionState ps = ctx.Session.Perms;
             bool risky = RiskyFile.IsMatch(name ?? "");
             bool ok = true;
-            if (!ps.Auto || risky || (ps.WebGuard && ps.Tainted))
+            if (!ps.Auto || risky)
             {
                 PermissionAsk a = new PermissionAsk();
                 a.Kind = "download";
-                if (risky && ps.Auto && !(ps.WebGuard && ps.Tainted)) a.Category = PermissionCategory.Downloads;
+                if (ps.Auto) ctx.Guard(a, PermissionCategory.Downloads);
                 a.High = risky;
                 a.AllowRemember = false;
                 a.Title = "Download " + name;
@@ -3712,7 +3730,7 @@ namespace MinGent
             string err = ctx.Browser.ResolveDownload(ok, Path.Combine(ctx.Workspace, "downloads"), ctx.Ct, out saved);
             if (!ok) return ws != null ? "The page started a download of " + name + ", but " + ws + "." : "The page started a download of " + name + ", which the user did not allow.";
             if (err != null) return "The download of " + name + " failed: " + err + ".";
-            if (!ps.Tainted) { ps.Tainted = true; ps.TaintSource = "the download of " + name; }
+            ps.Taint("the download of " + name, false, null, false);
             string path = saved ?? "";
             int cut = path.IndexOf(" (still downloading", StringComparison.Ordinal);
             string clean = cut > 0 ? path.Substring(0, cut) : path;
@@ -3982,8 +4000,16 @@ namespace MinGent
     {
         public override string Name { get { return "browser_read"; } }
         public override string Description { get { return "Read the page open in the browser: its text and a numbered list of interactive elements (links, buttons, fields) with refs like e12 for browser_click and browser_type. A long page comes in parts: ask for the next one with part."; } }
-        public override Dictionary<string, object> Schema { get { return Obj("part", P("integer", "Which part of a long page to read: 1, 2, 3... (default 1)"), false); } }
-        public override string Label(Dictionary<string, object> a) { int p = I(a, "part", 1); return p > 1 ? "Read the page (part " + p + ")" : "Read the page"; }
+        public override Dictionary<string, object> Schema
+        {
+            get
+            {
+                return Obj("part", P("integer", "Which part of a long page to read: 1, 2, 3... (default 1)"), false,
+                           "wait", P("integer", "Seconds to wait before reading, up to 30, when the page is still loading or changing (default 0)"), false);
+            }
+        }
+        public override string Label(Dictionary<string, object> a) { int p = I(a, "part", 1), w = Pause(a); return (w > 0 ? "Wait " + w + " s, then read" : "Read") + " the page" + (p > 1 ? " (part " + p + ")" : ""); }
+        public static int Pause(Dictionary<string, object> a) { return Math.Max(0, Math.Min(30, I(a, "wait", 0))); }
         public override bool Untrusted { get { return true; } }
 
         public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
@@ -3991,12 +4017,13 @@ namespace MinGent
             string g = Gate(ctx, null);
             if (g != null) { ToolOutcome d = ToolOutcome.Fail(g); d.Denied = true; return d; }
             string text;
-            int part = Math.Max(1, I(a, "part", 1));
+            int part = Math.Max(1, I(a, "part", 1)), pause = Pause(a);
+            if (pause > 0) ctx.Ct.Sleep(pause * 1000);
             BrowserPane pane = ctx.Browser as BrowserPane;
             string err = part > 1 && pane != null ? pane.Read(ctx.Ct, part, out text) : ctx.Browser.Read(ctx.Ct, out text);
             Looked(ctx);
             if (err == null) ctx.Session.BrowserMovedTo = null;
-            return PageNotes(ctx, Result(err, FrameHint(ctx, text), part > 1 ? "Read the page (part " + part + ")" : "Read the page", true));
+            return Act(ctx, err, FrameHint(ctx, text), part > 1 ? "Read the page (part " + part + ")" : "Read the page");
         }
     }
 
@@ -4009,8 +4036,8 @@ namespace MinGent
         {
             get
             {
-                return "Click an element in the browser by its ref from browser_read (for example e12)." +
-                       (byPosition ? " For things browser_read can't list (inside frames or drawings), give x and y instead: pixel positions in the last browser_screenshot." : "") +
+                return "Click an element in the browser by its ref from browser_read (for example e12). For words on the page that have no ref, give text instead." +
+                       (byPosition ? " For things browser_read can't list at all (drawings), give x and y: pixel positions in the last browser_screenshot." : "") +
                        " Optional: button right or middle, double=true (or clicks=3), modifiers such as \"ctrl\" or \"shift\" held during the click, hold_ms to press and hold.";
             }
         }
@@ -4021,7 +4048,8 @@ namespace MinGent
                 Dictionary<string, object> button = P("string", "left (default), right or middle");
                 button["enum"] = Json.A("left", "right", "middle");
                 List<object> props = new List<object>();
-                props.AddRange(new object[] { "ref", P("string", "Element ref, e.g. e12"), !byPosition });
+                props.AddRange(new object[] { "ref", P("string", "Element ref, e.g. e12"), false });
+                props.AddRange(new object[] { "text", P("string", "Words shown on the page, to click something that has no ref"), false });
                 if (byPosition)
                 {
                     props.AddRange(new object[] { "x", P("number", "Pixels from the left of the last screenshot (only when there is no ref)"), false });
@@ -4035,6 +4063,7 @@ namespace MinGent
                 props.AddRange(new object[] { "clicks", P("integer", "Number of clicks (1-3; 3 selects a paragraph)"), false });
                 props.AddRange(new object[] { "modifiers", P("string", "Keys held during the click: ctrl, shift, alt, or combined like \"ctrl+shift\""), false });
                 props.AddRange(new object[] { "hold_ms", P("integer", "Hold the button down this many milliseconds (up to 15000) before releasing"), false });
+                props.AddRange(new object[] { "dialog", P("string", "If the click opens a page dialog: \"cancel\" to answer Cancel, or the text to enter into a prompt. Without it MinGent answers OK and leaves prompts empty"), false });
                 return Obj(props.ToArray());
             }
         }
@@ -4045,6 +4074,8 @@ namespace MinGent
             if (many != null && many.Count > 0) return "Click " + many.Count + (many.Count == 1 ? " spot" : " spots") + " in the CAPTCHA";
             string verb = B(a, "double", false) || I(a, "clicks", 1) == 2 ? "Double-click " : (S(a, "button") ?? "").StartsWith("right", StringComparison.OrdinalIgnoreCase) || B(a, "right", false) ? "Right-click " : "Click ";
             if (string.IsNullOrEmpty(r) && a != null && a.ContainsKey("x")) return verb + "at " + D(a, "x", 0).ToString("0", CultureInfo.InvariantCulture) + ", " + D(a, "y", 0).ToString("0", CultureInfo.InvariantCulture);
+            string words = (S(a, "text") ?? "").Trim();
+            if (string.IsNullOrEmpty(r) && words.Length > 0) return verb + "\"" + (words.Length > 40 ? words.Substring(0, 37) + "..." : words) + "\"";
             return verb + r;
         }
 
@@ -4110,7 +4141,8 @@ namespace MinGent
                 return ClickMany(ctx, many, pm);
             }
             bool pos = byPosition && r.Length == 0 && a != null && a.ContainsKey("x") && a.ContainsKey("y");
-            if (r.Length == 0 && !pos) return ToolOutcome.Fail((byPosition ? "give ref (like e12, from browser_read), or x and y (pixels in the last browser_screenshot)." : "ref is required.") + Sent(a));
+            string words = r.Length == 0 && !pos ? (S(a, "text") ?? "").Trim() : "";
+            if (r.Length == 0 && !pos && words.Length == 0) return ToolOutcome.Fail((byPosition ? "give ref (like e12, from browser_read), text (words shown on the page), or x and y (pixels in the last browser_screenshot)." : "give ref (like e12, from browser_read) or text (words shown on the page).") + Sent(a) + (byPosition ? Lost(ctx, a, "x", "y") : ""));
             string merr;
             MouseSpec mouse = MouseSpec.From(S(a, "button"), B(a, "right", false), B(a, "double", false), I(a, "clicks", 1), S(a, "modifiers"), I(a, "hold_ms", 0), out merr);
             if (mouse == null) return ToolOutcome.Fail(merr);
@@ -4118,6 +4150,14 @@ namespace MinGent
             if (stale != null) return stale;
             string g = Gate(ctx, null);
             if (g != null) { ToolOutcome d = ToolOutcome.Fail(g); d.Denied = true; return d; }
+            string several = null;
+            if (words.Length > 0)
+            {
+                int places;
+                string fe = ctx.Browser.TextRef(words, ctx.Ct, out r, out places);
+                if (fe != null) return ToolOutcome.Fail(fe);
+                if (places > 1) several = "The page shows \"" + (words.Length > 60 ? words.Substring(0, 57) + "..." : words) + "\" in " + places + " places; this was the first one in view. If you meant another, give more of its words or its ref.";
+            }
             if (pos)
             {
                 double x = D(a, "x", -1), y = D(a, "y", -1);
@@ -4136,7 +4176,7 @@ namespace MinGent
                 {
                     PermissionAsk pask = new PermissionAsk();
                     pask.Kind = "browser";
-                    pask.Category = ctx.Guarded(PermissionCategory.BrowserSensitive);
+                    ctx.Guard(pask, PermissionCategory.BrowserSensitive);
                     pask.High = true;
                     pask.AllowRemember = false;
                     pask.Title = "Click \"" + pkind + "\"";
@@ -4146,7 +4186,10 @@ namespace MinGent
                 }
                 string ps;
                 bool sent = false;
-                string pe = captcha ? ctx.Browser.CaptchaClick(new List<double[]> { new double[] { x, y } }, mouse, ctx.Ct, out ps, out sent) : ctx.Browser.ClickAt(x, y, mouse, ctx.Ct, out ps);
+                string pe;
+                ctx.Browser.DialogReply(S(a, "dialog"));
+                try { pe = captcha ? ctx.Browser.CaptchaClick(new List<double[]> { new double[] { x, y } }, mouse, ctx.Ct, out ps, out sent) : ctx.Browser.ClickAt(x, y, mouse, ctx.Ct, out ps); }
+                finally { ctx.Browser.DialogReply(null); }
                 if (sent) ctx.Session.CaptchaSubmitted = true;
                 ToolOutcome po = Act(ctx, pe, FrameHint(ctx, ps), mouse.Describe() + " at " + x.ToString("0", CultureInfo.InvariantCulture) + ", " + y.ToString("0", CultureInfo.InvariantCulture));
                 if (captcha) LookAfterCaptcha(ctx, po, true);
@@ -4167,7 +4210,7 @@ namespace MinGent
             {
                 PermissionAsk ask = new PermissionAsk();
                 ask.Kind = "browser";
-                ask.Category = ctx.Guarded(PermissionCategory.BrowserSensitive);
+                ctx.Guard(ask, PermissionCategory.BrowserSensitive);
                 ask.High = true;
                 ask.AllowRemember = false;
                 ask.Title = "Click \"" + kind + "\"";
@@ -4176,9 +4219,13 @@ namespace MinGent
                 if (!ctx.Approve(ask)) { ToolOutcome d = ToolOutcome.Fail("The user did not allow this click."); d.Denied = true; return d; }
             }
             string summary;
-            string err = ctx.Browser.ClickElement(r, mouse, ctx.Ct, out summary);
+            string err;
+            ctx.Browser.DialogReply(S(a, "dialog"));
+            try { err = ctx.Browser.ClickElement(r, mouse, ctx.Ct, out summary); }
+            finally { ctx.Browser.DialogReply(null); }
             if (isCaptcha && err == null && kind.StartsWith("a CAPTCHA box", StringComparison.Ordinal)) ctx.Session.CaptchaSubmitted = true;
             ToolOutcome ro = Act(ctx, err, FrameHint(ctx, summary), mouse.Describe() + " " + r);
+            if (several != null && !ro.Error) ro.AddNote(several);
             if (ro.Error && BrowserPane.WasDisabled(err)) ro.Summary = "Disabled, not clicked";
             if (isCaptcha) LookAfterCaptcha(ctx, ro, true);
             return ro;
@@ -4208,7 +4255,7 @@ namespace MinGent
         {
             string r = (S(a, "ref") ?? "").Trim();
             bool pos = byPosition && r.Length == 0 && a != null && a.ContainsKey("x") && a.ContainsKey("y");
-            if (r.Length == 0 && !pos) return ToolOutcome.Fail((byPosition ? "give ref (like e12), or x and y from the last browser_screenshot." : "ref is required.") + Sent(a));
+            if (r.Length == 0 && !pos) return ToolOutcome.Fail((byPosition ? "give ref (like e12), or x and y from the last browser_screenshot." : "ref is required.") + Sent(a) + (byPosition ? Lost(ctx, a, "x", "y") : ""));
             ToolOutcome stale = Stale(ctx);
             if (stale != null) return stale;
             string g = Gate(ctx, null);
@@ -4256,7 +4303,7 @@ namespace MinGent
             string r = (S(a, "ref") ?? "").Trim(), t = (S(a, "to_ref") ?? "").Trim();
             bool fromPos = byPosition && r.Length == 0 && a != null && a.ContainsKey("x") && a.ContainsKey("y");
             bool toPos = byPosition && t.Length == 0 && a != null && a.ContainsKey("to_x") && a.ContainsKey("to_y");
-            if (r.Length == 0 && !fromPos) return ToolOutcome.Fail("give the start: ref" + (byPosition ? " or x and y." : ".") + Sent(a));
+            if (r.Length == 0 && !fromPos) return ToolOutcome.Fail("give the start: ref" + (byPosition ? " or x and y." : ".") + Sent(a) + (byPosition ? Lost(ctx, a, "x", "y") : ""));
             if (t.Length == 0 && !toPos) return ToolOutcome.Fail("give the end: to_ref" + (byPosition ? " or to_x and to_y" : ""));
             ToolOutcome stale = Stale(ctx);
             if (stale != null) return stale;
@@ -4281,7 +4328,7 @@ namespace MinGent
                 {
                     PermissionAsk ask = new PermissionAsk();
                     ask.Kind = "browser";
-                    ask.Category = ctx.Guarded(PermissionCategory.BrowserSensitive);
+                    ctx.Guard(ask, PermissionCategory.BrowserSensitive);
                     ask.High = true;
                     ask.AllowRemember = false;
                     ask.Title = "Drag \"" + kind + "\"";
@@ -4308,7 +4355,7 @@ namespace MinGent
                 {
                     PermissionAsk pask = new PermissionAsk();
                     pask.Kind = "browser";
-                    pask.Category = ctx.Guarded(PermissionCategory.BrowserSensitive);
+                    ctx.Guard(pask, PermissionCategory.BrowserSensitive);
                     pask.High = true;
                     pask.AllowRemember = false;
                     pask.Title = "Drag \"" + pkind + "\"";
@@ -4371,7 +4418,7 @@ namespace MinGent
             {
                 PermissionAsk ask = new PermissionAsk();
                 ask.Kind = "browser";
-                ask.Category = ctx.Guarded(PermissionCategory.BrowserSensitive);
+                ctx.Guard(ask, PermissionCategory.BrowserSensitive);
                 ask.High = true;
                 ask.AllowRemember = false;
                 ask.Title = kind.StartsWith("a ", StringComparison.Ordinal) ? "Type into " + kind : "Type into a " + kind + " field";
@@ -4429,7 +4476,7 @@ namespace MinGent
                 if (!ClipboardGuard.IsPaste(k) || ClipboardGuard.AgentOwns()) continue;
                 PermissionAsk ask = new PermissionAsk();
                 ask.Kind = "browser";
-                ask.Category = ctx.Guarded(PermissionCategory.Credentials);
+                ctx.Guard(ask, PermissionCategory.Credentials);
                 ask.High = true;
                 ask.Title = "Paste your clipboard into " + (WebFetchTool.Host(ctx.Browser.CurrentUrl) ?? "the page");
                 ask.Detail = ctx.Browser.CurrentUrl;
@@ -4588,7 +4635,7 @@ namespace MinGent
             string shown = files.Count == 1 ? Path.GetFileName(files[0]) : files.Count + " files";
             PermissionAsk ask = new PermissionAsk();
             ask.Kind = "browser";
-            ask.Category = ctx.Guarded(PermissionCategory.Publish);
+            ctx.Guard(ask, PermissionCategory.Publish);
             ask.AllowRemember = false;
             ask.Title = "Give " + shown + " to " + (site.Length > 0 ? site : "the page");
             ask.Detail = string.Join("\n", files.ToArray());
@@ -4752,7 +4799,7 @@ namespace MinGent
             string place = BrowserPane.PlaceName(url);
             PermissionAsk ask = new PermissionAsk();
             ask.Kind = "console";
-            ask.Category = ctx.Guarded(PermissionCategory.Console);
+            ctx.Guard(ask, PermissionCategory.Console);
             ask.Detail = code;
             ConsoleWords.Explain(ask, description, code, url);
             if (website)
@@ -4766,6 +4813,7 @@ namespace MinGent
             {
                 ask.Title = "Run code in the console of " + place;
                 ask.Key = "console:" + place.ToLowerInvariant();
+                if (ctx.Session.Perms.Tainted) ask.AllowRemember = false;
                 ask.Reason = "It runs in the page like code typed into the developer tools, and can change the page and the data it keeps.";
             }
             return ask;
@@ -4795,7 +4843,7 @@ namespace MinGent
                 return r;
             }
             PermissionState ps = ctx.Session.Perms;
-            bool quiet = OwnPage(ctx, url) || (ps.Auto && !(ps.WebGuard && ps.Tainted) && LocalOnly(ctx));
+            bool quiet = OwnPage(ctx, url) || (ps.Auto && !(ps.WebGuard && ps.Tainted) && LocalOnly(ctx)) || (ps.Auto && ConsoleCheck.Read(code, url).OnlyReads);
             if (!quiet && !ctx.Approve(Ask(ctx, url, code, S(a, "description")))) { ToolOutcome d = ToolOutcome.Fail("The user did not allow running this code."); d.Denied = true; return d; }
             string result;
             string e2 = ctx.Browser.ConsoleRun(code, url, ctx.Ct, out result);

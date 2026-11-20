@@ -549,7 +549,7 @@ namespace MinGent
         [PreserveSig] int SetDefaultDownloadDialogMargin(WvPoint p0);
         [PreserveSig] int add_BasicAuthenticationRequested(IntPtr p0, out long p1);
         [PreserveSig] int remove_BasicAuthenticationRequested(long p0);
-        [PreserveSig] int CallDevToolsProtocolMethodForSession([MarshalAs(UnmanagedType.LPWStr)] string p0, [MarshalAs(UnmanagedType.LPWStr)] string p1, [MarshalAs(UnmanagedType.LPWStr)] string p2, IntPtr p3);
+        [PreserveSig] int CallDevToolsProtocolMethodForSession([MarshalAs(UnmanagedType.LPWStr)] string p0, [MarshalAs(UnmanagedType.LPWStr)] string p1, [MarshalAs(UnmanagedType.LPWStr)] string p2, [MarshalAs(UnmanagedType.Interface)] ICoreWebView2CallDevToolsProtocolMethodCompletedHandler p3);
         [PreserveSig] int add_ContextMenuRequested(IntPtr p0, out long p1);
         [PreserveSig] int remove_ContextMenuRequested(long p0);
         [PreserveSig] int add_StatusBarTextChanged(IntPtr p0, out long p1);

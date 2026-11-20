@@ -1853,6 +1853,11 @@ namespace MinGent
         public readonly List<string> Hosts = new List<string>();
         public readonly List<string> Calls = new List<string>();
 
+        public bool OnlyReads
+        {
+            get { return !Failed && !Requests && !Unwritten && !Messages && !CookiesRead && !CookiesChanged && !StoreRead && !StoreChanged && !SignIns && !Fields && !Changes && !Lingers && Calls.Count == 0; }
+        }
+
         public static string Clip(string name)
         {
             string n = (name ?? "").Trim();

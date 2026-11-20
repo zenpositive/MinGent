@@ -267,6 +267,68 @@ namespace MinGent
         public override bool CanSelect { get { return false; } }
     }
 
+    class MeterMenuItem : DetailMenuItem
+    {
+        public readonly double Fraction;
+        public readonly string Below;
+        public int TextLeft = -1, TextRight = -1;
+
+        public MeterMenuItem(string text, string detail, double fraction, string below) : base(text, detail)
+        {
+            Fraction = double.IsNaN(fraction) ? 0 : Math.Max(0, Math.Min(1, fraction));
+            Below = below ?? "";
+            Enabled = false;
+            AccessibleRole = AccessibleRole.ProgressBar;
+            AccessibleName = text;
+            AccessibleDescription = detail + (Below.Length > 0 ? ", " + Below : "");
+        }
+
+        public override bool CanSelect { get { return false; } }
+
+        int BarHeight { get { return Math.Max(4, UI.S(6)); } }
+
+        public int Extra { get { return UI.S(5) + BarHeight + (Below.Length > 0 ? UI.S(4) + Fonts.Note.Height : 0) + UI.S(8); } }
+
+        public static Color Level(Theme t, double fraction, Color normal)
+        {
+            if (t.HighContrast) return t.MenuFore;
+            if (fraction >= 0.9) return t.Error;
+            if (fraction >= 0.7) return t.Dark ? Color.FromArgb(0xF5, 0x9E, 0x0B) : Color.FromArgb(0xB4, 0x53, 0x09);
+            return normal;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            ThemedRenderer r = Owner != null ? Owner.Renderer as ThemedRenderer : null;
+            if (r == null || TextLeft < 0) return;
+            Theme t = r.Th;
+            int left = TextLeft, right = TextRight > TextLeft + UI.S(40) ? TextRight : Width - UI.S(12);
+            Rectangle bar = new Rectangle(left, Height - Padding.Bottom + UI.S(5), Math.Max(1, right - left), BarHeight);
+            Graphics g = e.Graphics;
+            SmoothingMode old = g.SmoothingMode;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            Glyphs.FillRound(g, t.HighContrast ? t.ChromeDim : Theme.Blend(t.ChromeDim, t.MenuBack, t.Dark ? 0.62 : 0.72), bar, bar.Height / 2);
+            if (Fraction > 0)
+            {
+                int fw = Math.Max(bar.Height, (int)Math.Round(bar.Width * Fraction));
+                Glyphs.FillRound(g, Level(t, Fraction, t.Accent), new Rectangle(bar.X, bar.Y, fw, bar.Height), bar.Height / 2);
+            }
+            g.SmoothingMode = old;
+            if (Below.Length > 0)
+                TextRenderer.DrawText(g, Below, Fonts.Note, new Rectangle(left, bar.Bottom + UI.S(4), bar.Width, Fonts.Note.Height + UI.S(2)), t.HighContrast ? t.MenuFore : t.ChromeDim,
+                    TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+        }
+
+        public static int Inset(Font f, TextFormatFlags flags, bool right)
+        {
+            if ((flags & TextFormatFlags.NoPadding) != 0) return 0;
+            float over = f.Height / 6f;
+            if ((flags & TextFormatFlags.LeftAndRightPadding) != 0) over *= 2;
+            return (int)Math.Ceiling(right ? over + f.Height / 12f : over);
+        }
+    }
+
     class ThemedRenderer : ToolStripProfessionalRenderer
     {
         readonly Theme t;
@@ -302,15 +364,22 @@ namespace MinGent
             {
                 DetailMenuItem dm = it as DetailMenuItem;
                 NoteMenuItem note = it as NoteMenuItem;
+                MeterMenuItem meter = it as MeterMenuItem;
                 bool detail = dm != null && dm.Detail.Length > 0 && e.Text == dm.Detail && e.Text != dm.Text;
                 Color c;
                 if (note != null) c = t.HighContrast ? t.MenuFore : t.ChromeDim;
+                else if (meter != null) c = detail ? MeterMenuItem.Level(t, meter.Fraction, t.ChromeDim) : t.MenuFore;
                 else if (!it.Enabled) c = t.MenuDisabled;
                 else if (HoverFore(it)) c = t.MenuHoverFore;
                 else c = detail ? t.ChromeDim : t.MenuFore;
                 Font font = detail ? Fonts.Note : e.TextFont ?? it.Font;
-                TextFormatFlags fl = detail ? TextFormatFlags.Right | TextFormatFlags.NoPrefix : (e.TextFormat & ~(TextFormatFlags.Top | TextFormatFlags.Bottom | TextFormatFlags.WordBreak)) | TextFormatFlags.EndEllipsis;
-                TextRenderer.DrawText(e.Graphics, e.Text, font, Content(it, e.TextRectangle), c, fl | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
+                TextFormatFlags fl = (detail ? TextFormatFlags.Right | TextFormatFlags.NoPrefix : (e.TextFormat & ~(TextFormatFlags.Top | TextFormatFlags.Bottom | TextFormatFlags.WordBreak)) | TextFormatFlags.EndEllipsis) | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine;
+                if (meter != null)
+                {
+                    if (detail) meter.TextRight = e.TextRectangle.Right - MeterMenuItem.Inset(font, fl, true);
+                    else meter.TextLeft = e.TextRectangle.X + MeterMenuItem.Inset(font, fl, false);
+                }
+                TextRenderer.DrawText(e.Graphics, e.Text, font, Content(it, e.TextRectangle), c, fl);
                 return;
             }
             if (it is ToolStripStatusLabel) e.TextColor = t.StatusFore;
