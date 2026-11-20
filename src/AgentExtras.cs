@@ -265,7 +265,7 @@ namespace MinGent
 
         static string Clip(string s, int n) { s = (s ?? "").Replace('\n', ' '); return s.Length > n ? s.Substring(0, n) + "\u2026" : s; }
 
-        static readonly Regex Secretish = new Regex(@"(?i)(password|passwd|pwd|secret|api[_ -]?key|token|bearer|sk-[a-z0-9]{8,}|private key|-----BEGIN|\b[A-Za-z0-9+/]{40,}={0,2}\b)");
+        static readonly Regex Secretish = new Regex(@"(?i)(password|passwd|pwd|secret|api[_ -]?key|token|bearer|sk-[a-z0-9]{8,}|private key|-----BEGIN|\b[A-Za-z0-9+/]{40,}={0,2}\b)", RegexOptions.CultureInvariant);
 
         public override ToolOutcome Run(ToolContext ctx, Dictionary<string, object> a)
         {
@@ -638,7 +638,7 @@ namespace MinGent
                 foreach (string d in Directory.GetDirectories(dir))
                     if (Path.GetFileName(d).StartsWith("PythonSoftwareFoundation.", StringComparison.OrdinalIgnoreCase)) return false;
                 foreach (string f in Directory.GetFiles(dir))
-                    if (Regex.IsMatch(Path.GetFileName(f), @"^(python3\.\d+|py|pyw|pymanager|pip\d*(\.\d+)?)\.exe$", RegexOptions.IgnoreCase)) return false;
+                    if (Regex.IsMatch(Path.GetFileName(f), @"^(python3\.\d+|py|pyw|pymanager|pip\d*(\.\d+)?)\.exe$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) return false;
                 return true;
             }
             catch { return false; }
@@ -948,7 +948,7 @@ namespace MinGent
             List<KeyPress> res = new List<KeyPress>();
             string s = spec ?? "";
             if (s.Length > 0 && s.Trim().Length == 0) s = "Space";
-            s = Regex.Replace(s, @"\b(page|arrow|caps|num|scroll|print|context|space)\s+(up|down|left|right|lock|screen|menu|bar)\b", "$1$2", RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"\b(page|arrow|caps|num|scroll|print|context|space)\s+(up|down|left|right|lock|screen|menu|bar)\b", "$1$2", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             s = Regex.Replace(s, @"(?<=\S)[ \t]*\+[ \t]*(?=\S)", "+");
             List<string> tokens = new List<string>();
             foreach (string t in Regex.Split(s.Trim(), @"\s+"))
@@ -2594,7 +2594,7 @@ namespace MinGent
                 error = "Say which window to use with window=\"w...\"" + (users ? ": windows of the user's own programs are never picked by default." : ".") + "\n" + ListText(all);
                 return null;
             }
-            Match m = Regex.Match(w, @"^w(\d+)$", RegexOptions.IgnoreCase);
+            Match m = Regex.Match(w, @"^w(\d+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             if (m.Success)
             {
                 int n;

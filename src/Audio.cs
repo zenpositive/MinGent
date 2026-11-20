@@ -40,7 +40,11 @@ namespace MinGent
             return def;
         }
 
-        static double Num(string s) { return double.Parse(s, CultureInfo.InvariantCulture); }
+        static double Num(string s)
+        {
+            double d;
+            return double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out d) ? d : double.NaN;
+        }
 
         static double Sane(double s) { return double.IsNaN(s) || s < 0 ? 0 : Math.Min(s, 1e12); }
 

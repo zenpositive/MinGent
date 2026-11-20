@@ -1715,7 +1715,7 @@ namespace MinGent
 
         static readonly System.Text.RegularExpressions.Regex UserLead = new System.Text.RegularExpressions.Regex(
             @"^the user (just |simply |now |also )?(wants|would like|is asking|asks|asked|needs|is requesting|requested|requests)( for)?( me| us)?( to)?( know| find out| understand| learn)?( about)? ",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
         void PaintActivity(Graphics g, ChatItem it, int idx, int x, int y, int w)
         {
@@ -2384,7 +2384,7 @@ namespace MinGent
                     }
                     return;
                 }
-                CultureInfo here = CultureInfo.CurrentCulture;
+                CultureInfo here = Program.Regional;
                 d.SetText(Charts.Tsv(spec, here), TextDataFormat.UnicodeText);
                 d.SetText(HtmlClip(Charts.Html(spec, here)), TextDataFormat.Html);
                 Clipboard.SetDataObject(d, true);
@@ -2911,7 +2911,7 @@ namespace MinGent
             int found = -1;
             for (int i = 0; i < Items.Count && found < 0; i++)
                 if (Said(Items[i]) && !Items[i].Hidden && FindIn(i, q)) found = i;
-            CompareInfo cmp = CultureInfo.CurrentCulture.CompareInfo;
+            CompareInfo cmp = Program.Regional.CompareInfo;
             for (int i = 0; i < Items.Count && found < 0; i++)
             {
                 ChatItem it = Items[i];
@@ -2954,7 +2954,7 @@ namespace MinGent
             }
             for (int c = 0; c < sb.Length; c++) if (char.IsWhiteSpace(sb[c])) sb[c] = ' ';
             string flat = sb.ToString();
-            int at = CultureInfo.CurrentCulture.CompareInfo.IndexOf(flat, q, CompareOptions.IgnoreCase);
+            int at = Program.Regional.CompareInfo.IndexOf(flat, q, CompareOptions.IgnoreCase);
             if (at < 0) return false;
             selA = PosAt(i, L, ops, starts, at, false);
             selB = PosAt(i, L, ops, starts, Math.Min(flat.Length, at + q.Length), true);

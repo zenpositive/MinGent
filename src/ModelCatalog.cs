@@ -452,7 +452,7 @@ namespace MinGent
                         }
                     }
                     m.AnthropicBinding = AnthropicBinds(id);
-                    m.AnthropicInterleaved = Regex.IsMatch(id, @"^claude-(opus|sonnet|haiku)-4", RegexOptions.IgnoreCase);
+                    m.AnthropicInterleaved = Regex.IsMatch(id, @"^claude-(opus|sonnet|haiku)-4", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
                     m.Detail = (m.Context >= 1000000 ? (m.Context / 1000000) + "M" : (m.Context / 1000) + "K") + " context";
                     list.Add(m);
                 }
@@ -483,7 +483,7 @@ namespace MinGent
 
         static bool AnthropicBinds(string id)
         {
-            Match v = Regex.Match(id ?? "", @"^claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2}))?(?:-|$)", RegexOptions.IgnoreCase);
+            Match v = Regex.Match(id ?? "", @"^claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2}))?(?:-|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             if (!v.Success) return false;
             int major = int.Parse(v.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture);
             int minor = v.Groups[3].Success ? int.Parse(v.Groups[3].Value, System.Globalization.CultureInfo.InvariantCulture) : 0;

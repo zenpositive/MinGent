@@ -425,9 +425,10 @@ namespace MinGent
                 int gt = url.IndexOf('>');
                 if (gt > 0) return url.Substring(1, gt - 1).Trim();
             }
+            if (url.Length > 2100) return url;
             Match t = Regex.Match(url, "^(\\S.*?)\\s+(\"[^\"]*\"|'[^']*')$");
             if (t.Success) return t.Groups[1].Value;
-            if (url.IndexOf(' ') > 0 && Regex.IsMatch(url, "^https?://", RegexOptions.IgnoreCase)) return url.Substring(0, url.IndexOf(' '));
+            if (url.IndexOf(' ') > 0 && Regex.IsMatch(url, "^https?://", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) return url.Substring(0, url.IndexOf(' '));
             return url;
         }
 

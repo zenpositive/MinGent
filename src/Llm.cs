@@ -683,18 +683,18 @@ namespace MinGent
 
         public static int Affordable(string error)
         {
-            Match m = Regex.Match(error ?? "", @"can only afford\s+(\d{1,9})", RegexOptions.IgnoreCase);
+            Match m = Regex.Match(error ?? "", @"can only afford\s+(\d{1,9})", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             int n;
             return m.Success && int.TryParse(m.Groups[1].Value, out n) ? n : 0;
         }
 
         public static List<string> AcceptedFrom(string error)
         {
-            Match lead = Regex.Match(error, "\\b(supported|allowed|valid|expected|one of|must be|possible|accepted)\\b", RegexOptions.IgnoreCase);
+            Match lead = Regex.Match(error, "\\b(supported|allowed|valid|expected|one of|must be|possible|accepted)\\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             if (lead.Success) error = error.Substring(lead.Index);
             List<string> found = new List<string>();
             foreach (string v in new string[] { "none", "minimal", "low", "medium", "high", "xhigh", "max" })
-                if (Regex.IsMatch(error, "(?<![A-Za-z0-9_-])" + v + "(?![A-Za-z0-9_-])", RegexOptions.IgnoreCase)) found.Add(v);
+                if (Regex.IsMatch(error, "(?<![A-Za-z0-9_-])" + v + "(?![A-Za-z0-9_-])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) found.Add(v);
             return found.Count >= 1 ? found : null;
         }
 

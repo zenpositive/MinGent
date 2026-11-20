@@ -80,7 +80,7 @@ namespace MinGent
                     if (bytes.Length > DocPictures.MaxBytes) { problem = "an embedded image is larger than 32 MB"; return null; }
                     return DocPictures.FromBytes(bytes, "image", out problem);
                 }
-                if (Regex.IsMatch(s, @"^(https?|ftp)://", RegexOptions.IgnoreCase))
+                if (Regex.IsMatch(s, @"^(https?|ftp)://", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
                 {
                     problem = "web images are not downloaded into documents (" + (s.Length > 80 ? s.Substring(0, 80) + "..." : s) + "); save the image to a file first and use its path";
                     return null;

@@ -686,13 +686,14 @@ namespace MinGent
                 if (k.Text == "]" && !NumberIndex(t, i) && StoredThenCalled(t, i)) return Message(Hidden, "a call through a computed name");
                 if (k.Text == "[" && i > 0 && t[i - 1].Kind == Punct && (t[i - 1].Text == "{" || t[i - 1].Text == ",") && ComputedPattern(t, i)) return Message(Hidden, "a name taken through a computed key");
                 if (k.Text == "[" && i > 0 && MemberBase(t[i - 1]) && PiecedKey(t, i)) return Message(Hidden, "a name put together from pieces");
+                if (web && k.Text == "[" && i > 0 && MemberBase(t[i - 1])) return PickedKey(t, i, f);
                 return null;
             }
             if (k.Kind != Ident) return null;
             string n = k.Text;
             bool member = IsMember(t, i);
             bool called = Called(t, i) || GroupCalled(t, i);
-            bool assigned = Assigned(t, i) || f.Targets[i] || PrefixUpdate(t, i);
+            bool assigned = Assigned(t, i) || (f.Targets[i] && !Indexing(t, i)) || PrefixUpdate(t, i);
             string recv = member ? f.Canon(Receiver(t, i)) : "";
             string kind;
             if (Anywhere.TryGetValue(n, out kind)) return Message(kind, Show(n, member, called));
@@ -700,6 +701,11 @@ namespace MinGent
             if (web && n.IndexOf("password", StringComparison.OrdinalIgnoreCase) >= 0) return Message(Secrets, n);
             string special = Special(t, i, n, member, called);
             if (special != null) return special;
+            if (web && member && called && n == "stringify" && recv == "JSON")
+            {
+                string listed = ListedNames(t, i);
+                if (listed != null) return listed;
+            }
             if (member && (n == "call" || n == "apply" || n == "bind")) return Message(Hidden, "." + n);
             if (n == "__proto__" && (Assigned(t, i) || IsKey(t, i))) return Message(Hidden, "__proto__");
             if (member && n == "submit") return Message(Submits, ".submit");
@@ -742,6 +748,68 @@ namespace MinGent
         static string Show(string n, bool member, bool called)
         {
             return (member ? "." : "") + n + (called ? "()" : "");
+        }
+
+        static readonly HashSet<string> Roots = Set("document window self top parent globalThis frames opener content navigator location history");
+
+        static string NamedSecret(string name)
+        {
+            string kind;
+            if (Anywhere.TryGetValue(name, out kind) || OnWebsites.TryGetValue(name, out kind)) return Message(kind, "." + name);
+            if (name.IndexOf("password", StringComparison.OrdinalIgnoreCase) >= 0 || name == "value") return Message(Secrets, "." + name);
+            return null;
+        }
+
+        static string PickedKey(List<Tok> t, int open, Facts f)
+        {
+            int close = Close(t, open);
+            if (close >= t.Count || close == open + 1) return null;
+            if (close == open + 2 && t[open + 1].Kind == Num) return null;
+            Tok b = t[open - 1];
+            if (b.Kind == Ident)
+            {
+                string root = IsMember(t, open - 1) ? (Globals.Contains(f.Canon(Receiver(t, open - 1))) ? b.Text : null) : f.Own(b.Text) ? null : f.Canon(b.Text);
+                if (root != null && Roots.Contains(root)) return Message(Hidden, "a name of " + root + " taken through a computed key");
+            }
+            if (close != open + 2 || t[open + 1].Kind != Ident) return null;
+            string key = t[open + 1].Text;
+            for (int j = 0; j + 3 < t.Count; j++)
+            {
+                if (t[j].Kind != Ident || (t[j].Text != "const" && t[j].Text != "let" && t[j].Text != "var")) continue;
+                if (t[j + 1].Kind != Ident || t[j + 1].Text != key || t[j + 2].Kind != Punct || t[j + 2].Text != "=") continue;
+                Tok v = t[j + 3];
+                if (v.Kind != Str && !(v.Kind == Tmpl && v.Opens && v.Closes)) continue;
+                string no = NamedSecret(v.Text);
+                if (no != null) return no;
+            }
+            return null;
+        }
+
+        static string ListedNames(List<Tok> t, int i)
+        {
+            int open = i + 1;
+            if (open >= t.Count || t[open].Kind != Punct || t[open].Text != "(") return null;
+            int close = Close(t, open), depth = 0;
+            for (int j = open + 1; j < close && j < t.Count; j++)
+            {
+                if (t[j].Kind != Punct) continue;
+                string x = t[j].Text;
+                if (x == "(" || x == "[" || x == "{") depth++;
+                else if (x == ")" || x == "]" || x == "}") depth--;
+                else if (x == "," && depth == 0)
+                {
+                    if (j + 1 >= close || t[j + 1].Kind != Punct || t[j + 1].Text != "[") return null;
+                    int end = Close(t, j + 1);
+                    for (int q = j + 2; q < end && q < t.Count; q++)
+                    {
+                        if (t[q].Kind != Str && !(t[q].Kind == Tmpl && t[q].Opens && t[q].Closes)) continue;
+                        string no = NamedSecret(t[q].Text);
+                        if (no != null) return no;
+                    }
+                    return null;
+                }
+            }
+            return null;
         }
 
         static string Special(List<Tok> t, int i, string n, bool member, bool called)

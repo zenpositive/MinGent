@@ -481,7 +481,7 @@ namespace MinGent
 
         public static string OutputsNote(string dir, int files)
         {
-            string n = files == 1 ? "1 file" : files.ToString("N0") + (files >= Eraser.CountCap ? "+ files" : " files");
+            string n = files == 1 ? "1 file" : files.ToString("N0", Program.Regional) + (files >= Eraser.CountCap ? "+ files" : " files");
             string s = n + " in " + dir + ", where the agent saves its work.";
             if (dir.IndexOf("\\OneDrive", StringComparison.OrdinalIgnoreCase) >= 0) s += " OneDrive keeps its own copies of deleted files online.";
             return s + " Files in your other folders stay either way.";
@@ -576,7 +576,7 @@ namespace MinGent
             {
                 RowItem it = new RowItem();
                 it.Title = e.Host;
-                it.Sub = e.What + "  ·  " + (e.Count == 1 ? "once" : e.Count.ToString("N0") + " times") + "  ·  last at " + e.Last.ToString("HH:mm:ss");
+                it.Sub = e.What + "  ·  " + (e.Count == 1 ? "once" : e.Count.ToString("N0", Program.Regional) + " times") + "  ·  last at " + e.Last.ToString("HH:mm:ss", Program.Regional);
                 list.Items.Add(it);
             }
             list.Changed();

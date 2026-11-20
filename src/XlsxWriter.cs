@@ -467,7 +467,7 @@ namespace MinGent
                     for (int ci = 0; ci < b.Rows[r].Count && ci < MaxCols; ci++)
                     {
                         List<MdRun> runs = Markdown.Inline(b.Rows[r][ci]);
-                        string plain = Regex.Replace(Markdown.PlainText(runs), @"<br\s*/?>", "\n", RegexOptions.IgnoreCase);
+                        string plain = Regex.Replace(Markdown.PlainText(runs), @"<br\s*/?>", "\n", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
                         string link = null;
                         bool bold = runs.Count > 0;
                         foreach (MdRun run in runs)

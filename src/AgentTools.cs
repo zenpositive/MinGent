@@ -1354,10 +1354,10 @@ namespace MinGent
             Regex rx = null;
             if (isRegex)
             {
-                try { rx = new Regex(q, (cs ? RegexOptions.None : RegexOptions.IgnoreCase) | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(200)); }
+                try { rx = new Regex(q, (cs ? RegexOptions.None : RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(200)); }
                 catch (Exception ex) { note = "(\"" + q + "\" is not a valid regular expression (" + ex.Message.Split('\n')[0] + "), so it was searched as plain text.) "; isRegex = false; }
             }
-            if (rx == null) rx = new Regex(Regex.Escape(q), (cs ? RegexOptions.None : RegexOptions.IgnoreCase) | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(200));
+            if (rx == null) rx = new Regex(Regex.Escape(q), (cs ? RegexOptions.None : RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(200));
             string fp = S(a, "file_pattern");
             Regex nameRx = null;
             if (!string.IsNullOrEmpty(fp)) { try { nameRx = ToolKit.Glob(fp, true); } catch { } }
@@ -1370,7 +1370,7 @@ namespace MinGent
             if (st.Total == 0 && !isRegex && LooksLikeRegex(q))
             {
                 Regex r2 = null;
-                try { r2 = new Regex(q, (cs ? RegexOptions.None : RegexOptions.IgnoreCase) | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(200)); } catch { }
+                try { r2 = new Regex(q, (cs ? RegexOptions.None : RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(200)); } catch { }
                 if (r2 != null)
                 {
                     Find s2 = SearchAll(ctx, root, r2, nameRx, context, skip, fileList);
@@ -2900,11 +2900,11 @@ namespace MinGent
         static string Landing(string body)
         {
             DateTime until = DateTime.UtcNow + PageTime;
-            Match m = Regex.Match(body, "<meta[^>]+http-equiv=[\"']?refresh[^>]+content=\"[^\"]*?url=\\s*'?([^\"'>\\s]+)", RegexOptions.IgnoreCase, Scan(until));
-            if (!m.Success) m = Regex.Match(body, "<meta[^>]+http-equiv=[\"']?refresh[^>]+content='[^']*?url=\\s*\"?([^\"'>\\s]+)", RegexOptions.IgnoreCase, Scan(until));
+            Match m = Regex.Match(body, "<meta[^>]+http-equiv=[\"']?refresh[^>]+content=\"[^\"]*?url=\\s*'?([^\"'>\\s]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, Scan(until));
+            if (!m.Success) m = Regex.Match(body, "<meta[^>]+http-equiv=[\"']?refresh[^>]+content='[^']*?url=\\s*\"?([^\"'>\\s]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, Scan(until));
             if (m.Success) return Outside(WebUtility.HtmlDecode(m.Groups[1].Value));
             if (body.IndexOf("Redirect Notice", StringComparison.OrdinalIgnoreCase) < 0 && body.IndexOf("trying to send you to", StringComparison.OrdinalIgnoreCase) < 0) return null;
-            foreach (Match a in Regex.Matches(body, "<a\\b[^>]*\\bhref=\"(https?://[^\"]+)\"", RegexOptions.IgnoreCase, Scan(until)))
+            foreach (Match a in Regex.Matches(body, "<a\\b[^>]*\\bhref=\"(https?://[^\"]+)\"", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, Scan(until)))
             {
                 if (DateTime.UtcNow > until) return null;
                 string href = WebUtility.HtmlDecode(a.Groups[1].Value);
@@ -3189,17 +3189,17 @@ namespace MinGent
         {
             List<Hit> hits = new List<Hit>();
             HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            string[] blocks = Regex.Split(html ?? "", "<li\\b[^>]*\\bclass=\"[^\"]*\\bb_algo\\b[^\"]*\"", RegexOptions.IgnoreCase);
+            string[] blocks = Regex.Split(html ?? "", "<li\\b[^>]*\\bclass=\"[^\"]*\\bb_algo\\b[^\"]*\"", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             for (int i = 1; i < blocks.Length && hits.Count < MaxHits; i++)
             {
                 string block = blocks[i];
                 int end = block.IndexOf("</li>", StringComparison.OrdinalIgnoreCase);
                 if (end > 0) block = block.Substring(0, end);
-                Match a = Regex.Match(block, "<h2[^>]*>\\s*<a[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+                Match a = Regex.Match(block, "<h2[^>]*>\\s*<a[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>", RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
                 if (!a.Success) continue;
                 string url = BingUrl(WebUtility.HtmlDecode(a.Groups[1].Value));
                 if (url == null || !seen.Add(url.TrimEnd('/'))) continue;
-                Match p = Regex.Match(block, "<p[^>]*>(.*?)</p>", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+                Match p = Regex.Match(block, "<p[^>]*>(.*?)</p>", RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
                 Hit h = new Hit();
                 h.Url = url;
                 h.Title = Clean(a.Groups[2].Value);
@@ -3246,7 +3246,7 @@ namespace MinGent
         static string TitleOf(string body)
         {
             if (string.IsNullOrEmpty(body)) return "";
-            Match tm = Regex.Match(body.Length > 60000 ? body.Substring(0, 60000) : body, "<title[^>]*>(.*?)</title>", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+            Match tm = Regex.Match(body.Length > 60000 ? body.Substring(0, 60000) : body, "<title[^>]*>(.*?)</title>", RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             if (!tm.Success) return "";
             string t = Clean(tm.Groups[1].Value);
             return t.Length > 100 ? t.Substring(0, 100) + "..." : t;
@@ -3393,7 +3393,7 @@ namespace MinGent
                         Encoding enc = null;
                         try { if (!string.IsNullOrEmpty(resp.CharacterSet)) enc = Encoding.GetEncoding(resp.CharacterSet.Trim('"')); } catch { }
                         string head = Encoding.ASCII.GetString(b, 0, Math.Min(b.Length, 2048));
-                        Match m = Regex.Match(head, "charset=[\"']?([\\w-]+)", RegexOptions.IgnoreCase);
+                        Match m = Regex.Match(head, "charset=[\"']?([\\w-]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
                         if (m.Success) { try { enc = Encoding.GetEncoding(m.Groups[1].Value); } catch { } }
                         w.Body = (enc ?? Encoding.UTF8).GetString(b);
                         w.Title = TitleOf(w.Body);
@@ -3449,8 +3449,8 @@ namespace MinGent
         {
             if (!string.IsNullOrEmpty(disposition))
             {
-                Match m = Regex.Match(disposition, @"filename\*=(?:UTF-8'')?""?([^"";]+)", RegexOptions.IgnoreCase);
-                if (!m.Success) m = Regex.Match(disposition, @"filename=""?([^"";]+)", RegexOptions.IgnoreCase);
+                Match m = Regex.Match(disposition, @"filename\*=(?:UTF-8'')?""?([^"";]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+                if (!m.Success) m = Regex.Match(disposition, @"filename=""?([^"";]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
                 if (m.Success) { try { return Uri.UnescapeDataString(m.Groups[1].Value.Trim()); } catch { return m.Groups[1].Value.Trim(); } }
             }
             try { return Uri.UnescapeDataString(at.AbsolutePath); } catch { return at.AbsolutePath; }
@@ -3504,12 +3504,12 @@ namespace MinGent
         static string Shape(string html, DateTime until)
         {
             string s = TimedReplace(html, "<!--.*?-->", "", RegexOptions.Singleline, until);
-            s = TimedReplace(s, "<(script|style|noscript|svg|template|iframe|head|nav|footer|form|button|select)\\b[^>]*>.*?</\\1\\s*>", " ", RegexOptions.Singleline | RegexOptions.IgnoreCase, until);
-            s = TimedReplace(s, "<a\\b[^>]*href=\"(https?://[^\"]+)\"[^>]*>(.*?)</a>", "$2 ($1)", RegexOptions.Singleline | RegexOptions.IgnoreCase, until);
-            s = TimedReplace(s, "<li\\b[^>]*>", "\n- ", RegexOptions.IgnoreCase, until);
-            s = TimedReplace(s, "<h([1-6])\\b[^>]*>", "\n\n# ", RegexOptions.IgnoreCase, until);
-            s = TimedReplace(s, "<(br|/p|/div|/li|/tr|/h[1-6]|/pre|/table|/section|/article|/blockquote)[^>]*>", "\n", RegexOptions.IgnoreCase, until);
-            s = TimedReplace(s, "<(td|th)\\b[^>]*>", " | ", RegexOptions.IgnoreCase, until);
+            s = TimedReplace(s, "<(script|style|noscript|svg|template|iframe|head|nav|footer|form|button|select)\\b[^>]*>.*?</\\1\\s*>", " ", RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, until);
+            s = TimedReplace(s, "<a\\b[^>]*href=\"(https?://[^\"]+)\"[^>]*>(.*?)</a>", "$2 ($1)", RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, until);
+            s = TimedReplace(s, "<li\\b[^>]*>", "\n- ", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, until);
+            s = TimedReplace(s, "<h([1-6])\\b[^>]*>", "\n\n# ", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, until);
+            s = TimedReplace(s, "<(br|/p|/div|/li|/tr|/h[1-6]|/pre|/table|/section|/article|/blockquote)[^>]*>", "\n", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, until);
+            s = TimedReplace(s, "<(td|th)\\b[^>]*>", " | ", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, until);
             s = TimedReplace(s, "<[^>]+>", "", RegexOptions.None, until);
             return WebUtility.HtmlDecode(s);
         }

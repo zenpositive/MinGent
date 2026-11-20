@@ -99,7 +99,7 @@ namespace MinGent
             if (target != null) return;
             if (Hosts.Count == 0)
             {
-                if (Regex.IsMatch(cmd, @"^(wsl|wsl\.exe|bash|bash\.exe)(\s+(-d|--distribution|-u|--user)\s+\S+)*\s*$", RegexOptions.IgnoreCase)) Hosts.Add("WSL");
+                if (Regex.IsMatch(cmd, @"^(wsl|wsl\.exe|bash|bash\.exe)(\s+(-d|--distribution|-u|--user)\s+\S+)*\s*$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) Hosts.Add("WSL");
                 return;
             }
             if (TerminalRules.Leaves(cmd)) { Hosts.RemoveAt(Hosts.Count - 1); return; }

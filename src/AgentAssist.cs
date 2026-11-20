@@ -241,7 +241,7 @@ namespace MinGent
             {
                 string u = null;
                 if (args != null) foreach (KeyValuePair<string, object> kv in args) { string s = kv.Value as string; if (s != null) { u = s; break; } }
-                if (u != null && Regex.IsMatch(u.Trim(), @"^(https?://|www\.)", RegexOptions.IgnoreCase)) return Known(known, "browser_navigate") ?? Known(known, "web_fetch");
+                if (u != null && Regex.IsMatch(u.Trim(), @"^(https?://|www\.)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) return Known(known, "browser_navigate") ?? Known(known, "web_fetch");
                 return Known(known, "read_file");
             }
             return null;
@@ -1120,11 +1120,11 @@ namespace MinGent
             string s = r is double ? ((int)(double)r).ToString(CultureInfo.InvariantCulture) : Str(r);
             string t = s.Trim().Trim('[', ']', '"', '\'', '#', '(', ')', ' ');
             string res = null;
-            Match m = Regex.Match(t, @"\b" + prefix + @"(\d+)\b", RegexOptions.IgnoreCase);
+            Match m = Regex.Match(t, @"\b" + prefix + @"(\d+)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             if (m.Success) res = prefix + m.Groups[1].Value;
             else
             {
-                Match d = Regex.Match(t, @"^(?:ref\s*[=:]?\s*)?(\d+)$", RegexOptions.IgnoreCase);
+                Match d = Regex.Match(t, @"^(?:ref\s*[=:]?\s*)?(\d+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
                 if (d.Success) res = prefix + d.Groups[1].Value;
             }
             if (res != null && res != s) { a[key] = res; changed = true; }
@@ -1449,7 +1449,7 @@ namespace MinGent
         {
             if (name == "tsconfig.json" || name == "jsconfig.json" || name.StartsWith("tsconfig.") || name == "settings.json" || name == "launch.json" || name == "tasks.json" ||
                 name == "extensions.json" || name == "devcontainer.json" || name == ".eslintrc.json" || name == "keybindings.json" || name.EndsWith(".code-workspace")) return true;
-            return Regex.IsMatch(text, @"(^|\n)\s*(//|/\*)", RegexOptions.CultureInvariant);
+            return Regex.IsMatch(text, @"^[ \t]*(//|/\*)", RegexOptions.Multiline | RegexOptions.CultureInvariant);
         }
 
         static bool IsXml(string ext)
@@ -1716,13 +1716,13 @@ namespace MinGent
             return res;
         }
 
-        static readonly Regex NotCmdlet = new Regex(@"The term '([^']+)' is not recognized as (?:the )?name of a cmdlet|The term '([^']+)' is not recognized as a name of a cmdlet", RegexOptions.IgnoreCase);
-        static readonly Regex NotCmd = new Regex(@"'([^']+)' is not recognized as an internal or external command", RegexOptions.IgnoreCase);
-        static readonly Regex BadParam = new Regex(@"A parameter cannot be found that matches parameter name '([^']+)'", RegexOptions.IgnoreCase);
+        static readonly Regex NotCmdlet = new Regex(@"The term '([^']+)' is not recognized as (?:the )?name of a cmdlet|The term '([^']+)' is not recognized as a name of a cmdlet", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex NotCmd = new Regex(@"'([^']+)' is not recognized as an internal or external command", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex BadParam = new Regex(@"A parameter cannot be found that matches parameter name '([^']+)'", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         static readonly Regex PyModule = new Regex(@"ModuleNotFoundError: No module named '([\w\.]+)'", RegexOptions.CultureInvariant);
-        static readonly Regex NpmScript = new Regex(@"(?:npm ERR!|npm error) Missing script: ""?([\w:\-\.]+)""?", RegexOptions.IgnoreCase);
-        static readonly Regex Prompt = new Regex(@"(\(y/n\)|\[y/n\]|\(yes/no\)|\[yes/no\]|password\s*:|passphrase|press any key|press enter|continue\?|are you sure|overwrite\b.*\?|username for|enter (a |the )?(value|choice|selection|number|name)|select an option|choose an option|\(Y/n\)|\[Y/n\]|\[y/N\]|\? \u203a|\?\s*$)", RegexOptions.IgnoreCase);
-        static readonly Regex LocalUrl = new Regex(@"https?://(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\])(:\d{2,5})?(/[^\s'""<>)\]]*)?", RegexOptions.IgnoreCase);
+        static readonly Regex NpmScript = new Regex(@"(?:npm ERR!|npm error) Missing script: ""?([\w:\-\.]+)""?", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex Prompt = new Regex(@"(\(y/n\)|\[y/n\]|\(yes/no\)|\[yes/no\]|password\s*:|passphrase|press any key|press enter|continue\?|are you sure|overwrite\b.*\?|username for|enter (a |the )?(value|choice|selection|number|name)|select an option|choose an option|\(Y/n\)|\[Y/n\]|\[y/N\]|\? \u203a|\?\s*$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        static readonly Regex LocalUrl = new Regex(@"https?://(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\])(:\d{2,5})?(/[^\s'""<>)\]]*)?", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
         static readonly Dictionary<string, string> BashToPs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -1812,13 +1812,13 @@ namespace MinGent
                 hints.Add("Windows PowerShell 5.1 has no && or ||. Separate commands with ';' and use 'if ($?) { ... }' to run the next one only after success.");
             if (o.IndexOf("cannot be loaded because running scripts is disabled", StringComparison.OrdinalIgnoreCase) >= 0)
                 hints.Add("PowerShell blocks this .ps1 script. Use the .cmd version (for example npm.cmd, npx.cmd), or run: powershell -ExecutionPolicy Bypass -File <script.ps1>.");
-            if (Regex.IsMatch(o, @"Device Guard|Application Control policy has blocked|Smart App Control|blocked by group policy|This program is blocked", RegexOptions.IgnoreCase))
+            if (Regex.IsMatch(o, @"Device Guard|Application Control policy has blocked|Smart App Control|blocked by group policy|This program is blocked", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
                 hints.Add("Windows blocked this program (Smart App Control or an application control policy). Do not retry it or look for a way around the block; tell the user which program Windows blocked.");
-            else if (Regex.IsMatch(o, @"Access (to the path .{1,200} )?is denied|UnauthorizedAccessException|Permission denied|EACCES|EPERM", RegexOptions.IgnoreCase))
+            else if (Regex.IsMatch(o, @"Access (to the path .{1,200} )?is denied|UnauthorizedAccessException|Permission denied|EACCES|EPERM", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
                 hints.Add("This is a permission problem: the file may be read-only, open in another program, or need administrator rights. Do not try to get around it; tell the user if it is needed.");
-            if (Regex.IsMatch(o, @"being used by another process|EBUSY|resource busy or locked", RegexOptions.IgnoreCase))
+            if (Regex.IsMatch(o, @"being used by another process|EBUSY|resource busy or locked", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
                 hints.Add("Another program has the file open - often a program you started earlier is still running. Stop it (command_status with stop=true) and try again.");
-            if (Regex.IsMatch(o, @"EADDRINUSE|address already in use|Only one usage of each socket address", RegexOptions.IgnoreCase))
+            if (Regex.IsMatch(o, @"EADDRINUSE|address already in use|Only one usage of each socket address", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
                 hints.Add("The port is already in use, probably by a server you started earlier. Stop it with command_status (stop=true) or use another port.");
             m = PyModule.Match(o);
             if (m.Success)
@@ -1830,14 +1830,14 @@ namespace MinGent
             }
             m = NpmScript.Match(o);
             if (m.Success) hints.Add("package.json has no \"" + m.Groups[1].Value + "\" script. Read package.json to see which scripts it has.");
-            if (Regex.IsMatch(cmd ?? "", @"\\Microsoft\.NET\\Framework(64)?\\v4\.0\.30319\\csc(\.exe)?\b", RegexOptions.IgnoreCase) && Regex.IsMatch(o, @"\berror CS\d{4}\b"))
+            if (Regex.IsMatch(cmd ?? "", @"\\Microsoft\.NET\\Framework(64)?\\v4\.0\.30319\\csc(\.exe)?\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) && Regex.IsMatch(o, @"\berror CS\d{4}\b"))
                 hints.Add("This csc.exe knows only C# 5. If an error points at newer syntax, rewrite it in C# 5: string.Format or + instead of $\"...\", explicit null checks instead of ?. and ??=, \"Name\" instead of nameof, full bodies instead of => on methods and properties, a declared variable before out instead of out var, a small class instead of a tuple, and a separate method instead of a local function.");
             if (exitCode == -1073741515) hints.Add("The program could not start because a DLL it needs is missing (0xC0000135).");
             if (exitCode == 9009 && missing == null) hints.Add("cmd.exe could not find the program (exit code 9009). It is not installed or not on PATH.");
             if (timedOut)
             {
                 string url = DetectUrl(o);
-                if (url != null || Regex.IsMatch(o, @"listening|server (is )?(running|started)|ready in|compiled successfully|watching for", RegexOptions.IgnoreCase))
+                if (url != null || Regex.IsMatch(o, @"listening|server (is )?(running|started)|ready in|compiled successfully|watching for", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
                     hints.Add("This is a server or watcher that keeps running. Start it with background=true, then check it with command_status" + (url != null ? " and open " + url + " with browser_navigate" : "") + ".");
             }
             if (hints.Count == 0) return null;
@@ -1861,7 +1861,7 @@ namespace MinGent
             Match m = LocalUrl.Match(Shell.StripAnsi(output));
             if (!m.Success) return null;
             string u = m.Value.TrimEnd('.', ',', ';', ':');
-            return Regex.Replace(u, @"^(https?://)(0\.0\.0\.0|\[::1?\])", "$1localhost", RegexOptions.IgnoreCase);
+            return Regex.Replace(u, @"^(https?://)(0\.0\.0\.0|\[::1?\])", "$1localhost", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         }
     }
 

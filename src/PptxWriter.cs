@@ -277,8 +277,8 @@ namespace MinGent
             string rest = Comment.Replace(plain.ToString(), delegate(Match m)
             {
                 string c = m.Groups[1].Value.Trim();
-                if (c.Length == 0 || Directive.IsMatch(c) || Regex.IsMatch(c, @"^\s*(page\s*-?\s*break|pagebreak)\s*$", RegexOptions.IgnoreCase)) return "";
-                if (Regex.IsMatch(c, @"^\s*notes?\s*:", RegexOptions.IgnoreCase)) c = Regex.Replace(c, @"^\s*notes?\s*:\s*", "", RegexOptions.IgnoreCase);
+                if (c.Length == 0 || Directive.IsMatch(c) || Regex.IsMatch(c, @"^\s*(page\s*-?\s*break|pagebreak)\s*$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) return "";
+                if (Regex.IsMatch(c, @"^\s*notes?\s*:", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) c = Regex.Replace(c, @"^\s*notes?\s*:\s*", "", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
                 notes.Append(c).Append('\n');
                 return "";
             });

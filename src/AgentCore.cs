@@ -133,6 +133,21 @@ namespace MinGent
         public static readonly string[] Balanced = { Launch, Downloads };
         public const string BalancedList = "launch,downloads";
 
+        public static List<string> Listed(string stored)
+        {
+            List<string> l = new List<string>();
+            foreach (string c in (stored ?? "").Split(','))
+                if (Array.IndexOf(All, c.Trim()) >= 0 && !l.Contains(c.Trim())) l.Add(c.Trim());
+            return l;
+        }
+
+        public static List<string> LevelAllows(string level, List<string> own)
+        {
+            if (level == "balanced") return new List<string>(Balanced);
+            if (level == "careful") return new List<string>();
+            return own == null ? new List<string>(Balanced) : new List<string>(own);
+        }
+
         public static string PresetOf(IList<string> allowed)
         {
             if (allowed == null || allowed.Count == 0) return "careful";
@@ -164,10 +179,10 @@ namespace MinGent
             {
                 case Install: return "pip, npm, winget, dotnet tools, installers, npx and docker run, and downloads of programs or runtimes.";
                 case Launch: return "Opening apps, files and web pages in other programs, and controlling programs that aren't part of the work.";
-                case Delete: return "Deleting, replacing or moving files outside the work folder, emptying the work folder, throwing away git changes, links to other folders, robocopy /MIR.";
+                case Delete: return "Deleting, replacing, moving or renaming files outside the work folder, emptying the work folder, throwing away git changes, links to other folders, robocopy /MIR.";
                 case System: return "Registry, services, scheduled tasks, firewall and antivirus settings, user accounts, admin rights, and commands hidden in encoded or generated text.";
                 case Credentials: return "Reading or changing key and password files and credential stores, pasting your clipboard into web pages, MinGent's settings and chats.";
-                case Publish: return "Uploading files, publishing packages, force-pushing and resetting git history.";
+                case Publish: return "Uploading files, also with scp, rsync and cloud storage tools, publishing packages and sites, force-pushing and resetting git history.";
                 case Remote: return "Commands that may change a server the agent reached with ssh, or Linux in WSL. Commands that only look around (ls, cat, logs, status) don't ask.";
                 case BrowserSensitive: return "Buy, pay and delete-account buttons, and password or payment fields, in the browser and in programs.";
                 case Downloads: return "Files the browser would save that can run code: programs, scripts and archives.";
@@ -284,12 +299,15 @@ namespace MinGent
             string s = (p ?? "").Trim().Trim('"', '\'', '`').Trim();
             if (s.StartsWith("file:///", StringComparison.OrdinalIgnoreCase)) { try { s = new Uri(s).LocalPath; } catch { } }
             s = Environment.ExpandEnvironmentVariables(s);
-            Match m = Regex.Match(s, @"^\$\{?env:(\w+)\}?", RegexOptions.IgnoreCase);
+            Match m = Regex.Match(s, @"^\$\{?env:(\w+)\}?", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             if (m.Success) { string v = Environment.GetEnvironmentVariable(m.Groups[1].Value); if (v != null) s = v + s.Substring(m.Length); }
-            Match h = Regex.Match(s, @"^\$(home|\{home\})(?=$|[\\/])", RegexOptions.IgnoreCase);
+            Match h = Regex.Match(s, @"^\$(home|\{home\})(?=$|[\\/])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             if (h.Success) s = "~" + s.Substring(h.Length);
             if (s == "~" || s.StartsWith("~/") || s.StartsWith("~\\"))
-                s = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), s.Length > 2 ? s.Substring(2) : "");
+            {
+                try { s = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), s.Length > 2 ? s.Substring(2) : ""); }
+                catch (ArgumentException) { }
+            }
             if (IsWindows)
             {
                 s = s.Replace('/', '\\');
@@ -2592,15 +2610,15 @@ namespace MinGent
 
         static readonly Regex[] PromptCounts =
         {
-            new Regex(@"request \((\d[\d,]*) tokens\)", RegexOptions.IgnoreCase),
-            new Regex(@"input \((\d[\d,]*) tokens\)", RegexOptions.IgnoreCase),
-            new Regex(@"resulted in (\d[\d,]*) tokens", RegexOptions.IgnoreCase),
-            new Regex(@"(\d[\d,]*) in the messages", RegexOptions.IgnoreCase),
-            new Regex(@"(\d[\d,]*) of text input", RegexOptions.IgnoreCase),
-            new Regex(@"has (\d[\d,]*) input tokens", RegexOptions.IgnoreCase),
-            new Regex(@"prompt is too long: (\d[\d,]*) tokens", RegexOptions.IgnoreCase),
-            new Regex(@"input token count \((\d[\d,]*)\)", RegexOptions.IgnoreCase),
-            new Regex(@"prompt contains (\d[\d,]*) tokens", RegexOptions.IgnoreCase)
+            new Regex(@"request \((\d[\d,]*) tokens\)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant),
+            new Regex(@"input \((\d[\d,]*) tokens\)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant),
+            new Regex(@"resulted in (\d[\d,]*) tokens", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant),
+            new Regex(@"(\d[\d,]*) in the messages", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant),
+            new Regex(@"(\d[\d,]*) of text input", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant),
+            new Regex(@"has (\d[\d,]*) input tokens", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant),
+            new Regex(@"prompt is too long: (\d[\d,]*) tokens", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant),
+            new Regex(@"input token count \((\d[\d,]*)\)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant),
+            new Regex(@"prompt contains (\d[\d,]*) tokens", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
         };
 
         static int PromptTokensFrom(string error)

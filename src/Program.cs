@@ -12,9 +12,9 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("MinGent - an AI agent for Windows with its own notepad and browser")]
 [assembly: AssemblyProduct("MinGent")]
 [assembly: AssemblyCopyright("Built locally from source")]
-[assembly: AssemblyVersion("1.6.0.0")]
-[assembly: AssemblyFileVersion("1.6.0.0")]
-[assembly: AssemblyInformationalVersion("1.6.0")]
+[assembly: AssemblyVersion("1.7.0.0")]
+[assembly: AssemblyFileVersion("1.7.0.0")]
+[assembly: AssemblyInformationalVersion("1.7.0")]
 
 namespace MinGent
 {
@@ -26,10 +26,24 @@ namespace MinGent
         public static bool Elevated, Primary = true;
         public static volatile bool Erased, KeepErrorLog;
         public static MainForm MainWindow;
+        static System.Globalization.CultureInfo regional;
+
+        public static System.Globalization.CultureInfo Regional
+        {
+            get { return regional ?? System.Globalization.CultureInfo.CurrentCulture; }
+        }
+
+        public static void OneCulture()
+        {
+            if (regional == null) regional = System.Globalization.CultureInfo.CurrentCulture;
+            System.Globalization.CultureInfo.DefaultThreadCurrentCulture = System.Globalization.CultureInfo.InvariantCulture;
+            Thread.CurrentThread.CurrentCulture = System.Globalization.CultureInfo.InvariantCulture;
+        }
 
         [STAThread]
         static void Main(string[] args)
         {
+            OneCulture();
             Native.SafeDllSearch();
             if (args.Length == 2 && args[0] == Eraser.FinishArg)
             {
@@ -233,7 +247,7 @@ namespace MinGent
                 FileInfo fi = new FileInfo(ErrorLog);
                 if (fi.Exists && fi.Length > 4L * 1024 * 1024) SecureFile.Erase(ErrorLog);
                 File.AppendAllText(ErrorLog,
-                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  " + ex + "\r\n\r\n");
+                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture) + "  " + ex + "\r\n\r\n");
             }
             catch { }
         }

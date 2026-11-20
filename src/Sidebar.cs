@@ -58,7 +58,7 @@ namespace MinGent
         public static HashSet<string> Find(List<string> paths, string query, Func<bool> stale)
         {
             HashSet<string> hits = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            CompareInfo cmp = CultureInfo.CurrentCulture.CompareInfo;
+            CompareInfo cmp = Program.Regional.CompareInfo;
             foreach (string p in paths)
             {
                 if (stale != null && stale()) return null;
@@ -354,7 +354,7 @@ namespace MinGent
             }
             foreach (ChatInfo c in chats)
             {
-                if (filter.Length > 0 && (c.Title ?? "").IndexOf(filter, StringComparison.CurrentCultureIgnoreCase) < 0 && !(hitsFor == filter && contentHits.Contains(c.Path))) continue;
+                if (filter.Length > 0 && Program.Regional.CompareInfo.IndexOf(c.Title ?? "", filter, CompareOptions.IgnoreCase) < 0 && !(hitsFor == filter && contentHits.Contains(c.Path))) continue;
                 string g = GroupOf(c.When);
                 if (g != last)
                 {

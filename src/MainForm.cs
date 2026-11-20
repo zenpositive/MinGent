@@ -29,6 +29,7 @@ namespace MinGent
         public string AiMode = "ask";
         public bool AiAutoExplained, AiPlanExplained, AiFullExplained;
         public string AiAutoAllow = PermissionCategory.BalancedList;
+        public string AiAutoLevel, AiAutoOwn;
         public bool AiCaptcha;
         public bool AiSandbox;
         public bool AiOtherApps = true;
@@ -151,6 +152,8 @@ namespace MinGent
                         case "aiFullExplained": s.AiFullExplained = v == "1"; break;
                         case "aiAutoAllow": s.AiAutoAllow = v; break;
                         case "aiAutoPreset": sawPreset = true; break;
+                        case "aiAutoLevel": if (v == "balanced" || v == "careful" || v == "own") s.AiAutoLevel = v; break;
+                        case "aiAutoOwn": s.AiAutoOwn = v; break;
                         case "aiCaptcha": s.AiCaptcha = v == "1"; break;
                         case "aiSandbox": s.AiSandbox = v == "1"; break;
                         case "aiOpenApps": s.AiOtherApps = v == "1"; break;
@@ -216,6 +219,9 @@ namespace MinGent
                 }
                 s.AiModel = newRef ?? (oldRef == null || oldRef == "lmstudio:" ? "" : oldRef);
                 if (!sawPreset && (s.AiAutoAllow ?? "").Trim().Length == 0) s.AiAutoAllow = PermissionCategory.BalancedList;
+                if (s.AiAutoLevel == "balanced") s.AiAutoAllow = PermissionCategory.BalancedList;
+                else if (s.AiAutoLevel == "careful") s.AiAutoAllow = "";
+                else if (s.AiAutoLevel == "own" && s.AiAutoOwn != null) s.AiAutoAllow = s.AiAutoOwn;
                 if (oldMode == "custom" && !string.IsNullOrEmpty(oldBase) && string.IsNullOrEmpty(s.CustomUrl))
                 {
                     string b = oldBase.Trim().TrimEnd('/');
@@ -262,6 +268,8 @@ namespace MinGent
                 w("aiFullExplained", AiFullExplained ? "1" : "0");
                 w("aiAutoAllow", AiAutoAllow);
                 w("aiAutoPreset", "1");
+                w("aiAutoLevel", AutoLevel);
+                if (AutoOwnList != null) w("aiAutoOwn", string.Join(",", AutoOwnList.ToArray()));
                 w("aiCaptcha", AiCaptcha ? "1" : "0");
                 w("aiSandbox", AiSandbox ? "1" : "0");
                 w("aiOpenApps", AiOtherApps ? "1" : "0");
@@ -317,14 +325,24 @@ namespace MinGent
             catch { }
         }
 
-        public List<string> AutoAllowList
+        public List<string> AutoAllowList { get { return PermissionCategory.Listed(AiAutoAllow); } }
+
+        public string AutoLevel
         {
             get
             {
-                List<string> l = new List<string>();
-                foreach (string c in (AiAutoAllow ?? "").Split(','))
-                    if (Array.IndexOf(PermissionCategory.All, c.Trim()) >= 0 && !l.Contains(c.Trim())) l.Add(c.Trim());
-                return l;
+                if (AiAutoLevel == "balanced" || AiAutoLevel == "careful" || AiAutoLevel == "own") return AiAutoLevel;
+                string preset = PermissionCategory.PresetOf(AutoAllowList);
+                return preset == "custom" ? "own" : preset;
+            }
+        }
+
+        public List<string> AutoOwnList
+        {
+            get
+            {
+                if (AutoLevel == "own") return AutoAllowList;
+                return AiAutoOwn == null ? null : PermissionCategory.Listed(AiAutoOwn);
             }
         }
 
@@ -2737,8 +2755,8 @@ namespace MinGent
             Document d = CurDoc;
             if (d == null || stPos == null) return;
             Pos c = d.Caret;
-            string pos = "Ln " + (c.Line + 1).ToString("N0") + ", Col " + (c.Col + 1);
-            if (d.Caret != d.Anchor) pos += "    " + d.CountChars(d.Caret, d.Anchor).ToString("N0") + " selected";
+            string pos = "Ln " + (c.Line + 1).ToString("N0", Program.Regional) + ", Col " + (c.Col + 1);
+            if (d.Caret != d.Anchor) pos += "    " + d.CountChars(d.Caret, d.Anchor).ToString("N0", Program.Regional) + " selected";
             stPos.Text = pos;
             stLang.Text = d.Lang.Name;
             stEnc.Text = Document.EncNames[Math.Max(0, Math.Min(4, d.EncKind))];
@@ -2888,8 +2906,8 @@ namespace MinGent
                 foreach (int h in hits) if (h < s0.Col) before++;
             }
             bool onMatch = s0.Line == s1.Line && s1.Col - s0.Col == term.Length && Finder.IsMatch(d.Lines[s0.Line], s0.Col, term, mc, ww);
-            lastCountText = onMatch ? (before + 1).ToString("N0") + " of " + fcTotal.ToString("N0")
-                                    : fcTotal.ToString("N0") + (fcTotal == 1 ? " match" : " matches");
+            lastCountText = onMatch ? (before + 1).ToString("N0", Program.Regional) + " of " + fcTotal.ToString("N0", Program.Regional)
+                                    : fcTotal.ToString("N0", Program.Regional) + (fcTotal == 1 ? " match" : " matches");
             findBar.SetInfo(lastCountText, false);
             editor.Invalidate();
         }
@@ -2909,7 +2927,7 @@ namespace MinGent
             int n = editor.ReplaceAll(term, findBar.Replacement, findBar.MatchCase, findBar.WholeWord);
             UpdateFindCount();
             findTimer.Stop();
-            findBar.SetInfo(n == 0 ? "No results" : "Replaced " + n.ToString("N0"), n == 0);
+            findBar.SetInfo(n == 0 ? "No results" : "Replaced " + n.ToString("N0", Program.Regional), n == 0);
         }
 
         void GoToLine()

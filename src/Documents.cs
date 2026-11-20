@@ -506,8 +506,8 @@ namespace MinGent
             string name;
             if (!ctx.Names.TryGetValue(sid, out name)) name = sid.ToLowerInvariant();
             string prefix = "";
-            Match h = Regex.Match(name, "^heading ?(\\d)$");
-            if (h.Success) prefix = new string('#', Math.Max(1, Math.Min(6, int.Parse(h.Groups[1].Value)))) + " ";
+            Match h = Regex.Match(name, "^heading ?([1-9])$");
+            if (h.Success) prefix = new string('#', Math.Min(6, h.Groups[1].Value[0] - '0')) + " ";
             else if (name == "title") prefix = "# ";
             else if (name == "subtitle") prefix = "## ";
             if (text.Trim().Length == 0) { sb.Append('\n'); return; }

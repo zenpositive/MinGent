@@ -369,7 +369,7 @@ namespace MinGent
             "Q4_K_S", "Q4_K_M", "Q5_K_S", "Q5_K_M", "Q6_K", "IQ2_XXS", "IQ2_XS", "Q2_K_S", "IQ3_XS", "IQ3_XXS", "IQ1_S",
             "IQ4_NL", "IQ3_S", "IQ3_M", "IQ2_S", "IQ2_M", "IQ4_XS", "IQ1_M", "BF16", "", "", "", "TQ1_0", "TQ2_0", "MXFP4" };
 
-        public static readonly Regex QuantInName = new Regex(@"(?<![A-Za-z0-9])(I?Q\d(?:_[A-Z0-9]+)*|BF16|F16|F32|MXFP4|UD-[A-Z0-9_]+)(?![A-Za-z0-9])", RegexOptions.IgnoreCase);
+        public static readonly Regex QuantInName = new Regex(@"(?<![A-Za-z0-9])(I?Q\d(?:_[A-Z0-9]+)*|BF16|F16|F32|MXFP4|UD-[A-Z0-9_]+)(?![A-Za-z0-9])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
         public static bool Helper(string path, long size)
         {
@@ -410,7 +410,7 @@ namespace MinGent
         static List<LocalModel> cache;
         static DateTime cacheWhen;
         static readonly Dictionary<string, KeyValuePair<long, LocalModel>> parsed = new Dictionary<string, KeyValuePair<long, LocalModel>>(StringComparer.OrdinalIgnoreCase);
-        static readonly Regex Part = new Regex(@"-(\d{5})-of-(\d{5})\.gguf$", RegexOptions.IgnoreCase);
+        static readonly Regex Part = new Regex(@"-(\d{5})-of-(\d{5})\.gguf$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
         public static string DefaultRoot { get { return System.IO.Path.Combine(Program.DataDir ?? System.IO.Path.GetTempPath(), "models"); } }
 
@@ -931,13 +931,13 @@ namespace MinGent
 
         public static bool LooksIntegrated(string name, long vramBytes)
         {
-            string n = Regex.Replace(name ?? "", @"\((TM|R|C)\)|\u2122|\u00AE", " ", RegexOptions.IgnoreCase);
+            string n = Regex.Replace(name ?? "", @"\((TM|R|C)\)|\u2122|\u00AE", " ", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             n = Regex.Replace(n, @"\s+", " ").Trim();
             if (n.IndexOf("NVIDIA", StringComparison.OrdinalIgnoreCase) >= 0) return false;
-            if (Regex.IsMatch(n, @"\bIntel\b", RegexOptions.IgnoreCase))
-                return !Regex.IsMatch(n, @"\bArc (Pro )?[AB]\d{2,3}M?\b", RegexOptions.IgnoreCase);
-            if (Regex.IsMatch(n, @"\b(AMD|ATI|Radeon)\b", RegexOptions.IgnoreCase))
-                return Regex.IsMatch(n, @"\bRadeon ((RX )?Vega \d+ Graphics|R[2-7] Graphics|Graphics|\d{3,4}[MS]\b)", RegexOptions.IgnoreCase);
+            if (Regex.IsMatch(n, @"\bIntel\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                return !Regex.IsMatch(n, @"\bArc (Pro )?[AB]\d{2,3}M?\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (Regex.IsMatch(n, @"\b(AMD|ATI|Radeon)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                return Regex.IsMatch(n, @"\bRadeon ((RX )?Vega \d+ Graphics|R[2-7] Graphics|Graphics|\d{3,4}[MS]\b)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             return vramBytes < (2L << 30);
         }
 
@@ -1420,7 +1420,7 @@ namespace MinGent
             HubFile proj = null;
             foreach (HubFile f in projs) if (proj == null || f.Path.IndexOf("f16", StringComparison.OrdinalIgnoreCase) >= 0 || f.Path.IndexOf("F16", StringComparison.Ordinal) >= 0) proj = f;
             Dictionary<string, HubVariant> byKey = new Dictionary<string, HubVariant>(StringComparer.OrdinalIgnoreCase);
-            Regex part = new Regex(@"-(\d{5})-of-(\d{5})\.gguf$", RegexOptions.IgnoreCase);
+            Regex part = new Regex(@"-(\d{5})-of-(\d{5})\.gguf$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             foreach (HubFile f in ggufs)
             {
                 string key = part.Replace(f.Path, ".gguf");
@@ -1640,11 +1640,11 @@ namespace MinGent
             }
             t = Web.TimedReplace(t, @"<!--.*?-->", " ", RegexOptions.Singleline, until);
             t = Web.TimedReplace(t, @"```.*?```", "\n\n", RegexOptions.Singleline, until);
-            t = Web.TimedReplace(t, @"<(script|style)\b.*?</\1>", " ", RegexOptions.Singleline | RegexOptions.IgnoreCase, until);
+            t = Web.TimedReplace(t, @"<(script|style)\b.*?</\1>", " ", RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, until);
             t = Web.TimedReplace(t, @"!\[[^\]]*\]\([^)]*\)", " ", RegexOptions.None, until);
             t = Web.TimedReplace(t, @"\[([^\]]*)\]\([^)]*\)", "$1", RegexOptions.None, until);
-            t = Web.TimedReplace(t, @"<br\s*/?>", "\n", RegexOptions.IgnoreCase, until);
-            t = Web.TimedReplace(t, @"</?(p|div|h\d|ul|ol|li|table|tr)\b[^>]*>", "\n\n", RegexOptions.IgnoreCase, until);
+            t = Web.TimedReplace(t, @"<br\s*/?>", "\n", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, until);
+            t = Web.TimedReplace(t, @"</?(p|div|h\d|ul|ol|li|table|tr)\b[^>]*>", "\n\n", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, until);
             t = Web.TimedReplace(t, @"<[^>]+>", " ", RegexOptions.None, until);
             t = System.Net.WebUtility.HtmlDecode(t);
             foreach (string block in Regex.Split(t, @"\n\s*\n", RegexOptions.None, Web.Scan(until)))

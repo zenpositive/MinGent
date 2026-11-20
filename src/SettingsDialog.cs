@@ -183,7 +183,8 @@ namespace MinGent
         readonly Dictionary<string, SwitchRow> autoAsk = new Dictionary<string, SwitchRow>();
         readonly List<string> pageTitles = new List<string>();
         ThemedCombo autoLevel;
-        int lastLevel;
+        int lastLevel, autoChoice;
+        List<string> ownAllow;
         bool settingLevel;
         bool FullAutoOn;
         public bool? FullAuto;
@@ -385,7 +386,7 @@ namespace MinGent
             return GeminiHelper.StatusLine(out good) + ".";
         }
 
-        static string Words(int tokens) { return "about " + (tokens * 3 / 4).ToString("N0") + " words"; }
+        static string Words(int tokens) { return "about " + (tokens * 3 / 4).ToString("N0", Program.Regional) + " words"; }
 
         static int Round(int tokens) { return Math.Max(50, (int)Math.Round(tokens / 50.0) * 50); }
 
@@ -825,9 +826,9 @@ namespace MinGent
             Card c;
             Section(p, "Auto mode", "Auto, the switch under the message box, lets the agent edit files, run commands and browse without asking, except before the steps chosen here. With the switch off, it asks before commands, web access and changes outside the work folder.");
             c = NewCard(p);
-            List<string> allowed = s.AutoAllowList;
-            string preset = PermissionCategory.PresetOf(allowed);
-            lastLevel = FullAutoOn ? LevelFull : preset == "balanced" ? LevelBalanced : preset == "careful" ? LevelCareful : LevelCustom;
+            ownAllow = s.AutoOwnList;
+            autoChoice = s.AutoLevel == "balanced" ? LevelBalanced : s.AutoLevel == "careful" ? LevelCareful : LevelCustom;
+            lastLevel = FullAutoOn ? LevelFull : autoChoice;
             autoLevel = MakeCombo(AutoLevels, lastLevel);
             autoLevel.SetBadge(LevelBalanced, "Recommended");
             autoLevel.SetNote(LevelCustom, "the switches below");
@@ -836,13 +837,14 @@ namespace MinGent
             guard = Switch(c, "Prompt-injection guard (recommended)", "After the agent reads anything from the web, a program's window or a file it didn't write, Auto asks again before commands that could change things or reach the internet, writing outside the work folder, sending a lot of data to an address, and everything below, even rows you switched off.", s.AiWebGuard);
             Place(p, c);
 
-            Section(p, "What Auto asks about", "Auto asks you first about the rows switched on here. Ask mode always asks.");
+            Section(p, "What Auto asks about", "Auto asks first about the rows switched on. To set them, pick Your own choice above. Ask mode always asks.");
             c = NewCard(p);
+            List<string> shown = ShownAllows();
             foreach (string cat in PermissionCategory.All)
             {
-                SwitchRow row = Switch(c, PermissionCategory.Title(cat), PermissionCategory.Note(cat), !allowed.Contains(cat));
+                SwitchRow row = Switch(c, PermissionCategory.Title(cat), PermissionCategory.Note(cat), !shown.Contains(cat));
                 autoAsk[cat] = row;
-                row.CheckedChanged += delegate { SyncLevel(); };
+                row.CheckedChanged += delegate { RowChanged(); };
             }
             SwitchRow console = autoAsk[PermissionCategory.Console];
             console.CheckedChanged += delegate { if (!console.Checked && !reverting) BeginInvoke(new Action(delegate { ConfirmConsoleOff(console); })); };
@@ -885,37 +887,49 @@ namespace MinGent
                 }
                 s.AiFullExplained = true;
                 FullAuto = FullAutoOn ? (bool?)null : true;
-                lastLevel = i;
-                DimRows();
-                return;
             }
-            FullAuto = FullAutoOn ? (bool?)false : null;
-            if (i == LevelBalanced || i == LevelCareful)
+            else
             {
-                settingLevel = true;
-                reverting = true;
-                foreach (KeyValuePair<string, SwitchRow> kv in autoAsk) kv.Value.Checked = i == LevelCareful || Array.IndexOf(PermissionCategory.Balanced, kv.Key) < 0;
-                reverting = false;
-                settingLevel = false;
+                FullAuto = FullAutoOn ? (bool?)false : null;
+                if (i == LevelCustom && ownAllow == null) ownAllow = PermissionCategory.LevelAllows(LevelName(autoChoice), null);
+                autoChoice = i;
             }
             lastLevel = i;
+            ShowRows();
+        }
+
+        static string LevelName(int level) { return level == LevelBalanced ? "balanced" : level == LevelCareful ? "careful" : "own"; }
+
+        List<string> ShownAllows()
+        {
+            int i = autoLevel.SelectedIndex;
+            return i == LevelFull ? new List<string>(PermissionCategory.All) : PermissionCategory.LevelAllows(LevelName(i), ownAllow);
+        }
+
+        void ShowRows()
+        {
+            List<string> allow = ShownAllows();
+            settingLevel = true;
+            reverting = true;
+            foreach (KeyValuePair<string, SwitchRow> kv in autoAsk) kv.Value.Checked = !allow.Contains(kv.Key);
+            reverting = false;
+            settingLevel = false;
             DimRows();
         }
 
         void DimRows()
         {
-            bool on = autoLevel.SelectedIndex != LevelFull;
-            guard.Enabled = on;
-            foreach (SwitchRow row in autoAsk.Values) row.Enabled = on;
+            int i = autoLevel.SelectedIndex;
+            guard.Enabled = i != LevelFull;
+            foreach (SwitchRow row in autoAsk.Values) row.Enabled = i == LevelCustom;
         }
 
-        void SyncLevel()
+        void RowChanged()
         {
-            if (settingLevel || autoLevel == null || autoLevel.SelectedIndex == LevelFull) return;
+            if (settingLevel || autoLevel == null || autoLevel.SelectedIndex != LevelCustom) return;
             List<string> allow = new List<string>();
             foreach (KeyValuePair<string, SwitchRow> kv in autoAsk) if (!kv.Value.Checked) allow.Add(kv.Key);
-            string preset = PermissionCategory.PresetOf(allow);
-            SetLevelBox(preset == "balanced" ? LevelBalanced : preset == "careful" ? LevelCareful : LevelCustom);
+            ownAllow = allow;
         }
 
         void SetLevelBox(int i)
@@ -924,7 +938,7 @@ namespace MinGent
             autoLevel.SelectedIndex = i;
             settingLevel = false;
             lastLevel = i;
-            if (guard != null) DimRows();
+            if (guard != null) ShowRows();
         }
 
         public const string FullAutoWarning = "Full auto asks you nothing. The agent can install software, delete files, change settings, press buy buttons and run any command without your OK, even when a web page tries to trick it.\n\n" +
@@ -1102,9 +1116,9 @@ namespace MinGent
             s.Offline = offline.Checked;
             s.KeepNetLog = netLog.Checked;
             s.KeepErrorLog = errorLog.Checked;
-            List<string> allow = new List<string>();
-            foreach (KeyValuePair<string, SwitchRow> kv in autoAsk) if (!kv.Value.Checked) allow.Add(kv.Key);
-            s.AiAutoAllow = string.Join(",", allow.ToArray());
+            s.AiAutoLevel = LevelName(autoChoice);
+            s.AiAutoOwn = ownAllow == null ? null : string.Join(",", ownAllow.ToArray());
+            s.AiAutoAllow = string.Join(",", PermissionCategory.LevelAllows(s.AiAutoLevel, ownAllow).ToArray());
             s.AiMemory = memoryOn.Checked;
             s.AiHelpers = helpersOn.Checked;
             s.AiAutoReview = autoReview.Checked;

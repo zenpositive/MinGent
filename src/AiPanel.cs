@@ -937,7 +937,7 @@ namespace MinGent
             return to;
         }
 
-        static readonly System.Text.RegularExpressions.Regex BareDone = new System.Text.RegularExpressions.Regex(@"^(?:(?:the|task|work|it|its|it's|is|has|been|all|now|fully|everything|i|i'm|am|done|finished|complete|completed|set|that's|that|ok|okay|great|here|you|go|let|me|know|if|need|anything|else|any|more|changes|want|help|and|of|with|further|questions)\b[\s.!,]*)+$", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        static readonly System.Text.RegularExpressions.Regex BareDone = new System.Text.RegularExpressions.Regex(@"^(?:(?:the|task|work|it|its|it's|is|has|been|all|now|fully|everything|i|i'm|am|done|finished|complete|completed|set|that's|that|ok|okay|great|here|you|go|let|me|know|if|need|anything|else|any|more|changes|want|help|and|of|with|further|questions)\b[\s.!,]*)+$", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
         static bool Bare(string text)
         {
@@ -1683,7 +1683,7 @@ namespace MinGent
             string u = (url ?? "").Trim();
             if (u.Length == 0) return;
             bool web = u.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || u.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
-            bool other = !web && !u.StartsWith("file:", StringComparison.OrdinalIgnoreCase) && System.Text.RegularExpressions.Regex.IsMatch(u, @"^[a-z][a-z0-9+-]+:(?!\d)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            bool other = !web && !u.StartsWith("file:", StringComparison.OrdinalIgnoreCase) && System.Text.RegularExpressions.Regex.IsMatch(u, @"^[a-z][a-z0-9+-]+:(?!\d)", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
             if (web || other || u.StartsWith("#", StringComparison.Ordinal)) { host.OpenLink(u); return; }
             bool def;
             string line;

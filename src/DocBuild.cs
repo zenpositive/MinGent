@@ -802,7 +802,7 @@ namespace MinGent
         {
             get
             {
-                try { return Array.IndexOf(LetterRegions, RegionInfo.CurrentRegion.TwoLetterISORegionName.ToUpperInvariant()) >= 0; }
+                try { return Array.IndexOf(LetterRegions, new RegionInfo(Program.Regional.Name).TwoLetterISORegionName.ToUpperInvariant()) >= 0; }
                 catch { return false; }
             }
         }

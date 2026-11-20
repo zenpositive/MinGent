@@ -438,7 +438,7 @@ namespace MinGent
         {
             try { return Document.NormalizeNewlines(new UTF8Encoding(false, true).GetString(b)); }
             catch (DecoderFallbackException) { }
-            try { return Document.NormalizeNewlines(Encoding.GetEncoding(CultureInfo.CurrentCulture.TextInfo.OEMCodePage).GetString(b)); }
+            try { return Document.NormalizeNewlines(Encoding.GetEncoding(Program.Regional.TextInfo.OEMCodePage).GetString(b)); }
             catch { return Document.NormalizeNewlines(Encoding.Default.GetString(b)); }
         }
 
@@ -507,6 +507,9 @@ namespace MinGent
                 { @"\b(mshta|rundll32|regsvr32|installutil|regasm|regsvcs|msxsl|cmstp|odbcconf)(\.exe)?\b", "uses a Windows tool often abused to run hidden code", PermissionCategory.System },
                 { @"\bcertutil(\.exe)?\b[^\n]*-(urlcache|decode|encode)\b|\bbitsadmin\b|start-bitstransfer", "downloads or decodes files in an unusual way", PermissionCategory.Install },
                 { @"\b(invoke-webrequest|iwr|invoke-restmethod|irm|curl(\.exe)?|wget)\b[^\n]*(-infile|--upload-file|-t\s|-f\s|--data-binary\s+@|-d\s+@|--form)", "uploads files from your PC to the internet", PermissionCategory.Publish },
+                { @"(?<![\w.$-])(scp|pscp|rsync)(\.exe)?\s[^\n;|&]*\s['""]?(?![a-z]:[\\/])[\w.-]+(@[\w.-]+)?:[^\s;|&]*['""]?\s*($|[;|&\r\n])", "copies files from your PC to another computer", PermissionCategory.Publish },
+                { @"\baws(\.exe)?\s+s3\s+(cp|mv|sync)\s+(?:--?[\w-]+(?:[= ](?!s3://)[^\s-]\S*)?\s+)*(?!s3://)[^\s-]\S*\s[^\n;|&]*s3://|\baz(\.cmd)?\s+storage\s+\S+\s+upload(-batch)?\b|\b(gsutil|gcloud\s+storage)(\.cmd)?\s+(?:-\w+\s+)*(cp|mv|rsync)\s+(?:--?[\w-]+\s+)*(?!gs://)[^\s-]\S*\s[^\n;|&]*gs://|\brclone(\.exe)?\s+(copy|copyto|sync|move|moveto)\s+(?:--?[\w-]+(?:[= ]\S+)?\s+)*(?![\w-]{2,}:)[^\s-]\S*\s+[^\n;|&]*?(?<=[\s'""])[\w-]{2,}:", "uploads files from your PC to the internet", PermissionCategory.Publish },
+                { @"(?<![\w.$/\\-])(vercel|netlify|firebase|wrangler)(\.cmd|\.exe)?\s+([^\n;|&]*\s)?(deploy|publish|--prod)\b|\bgh-pages(\.cmd)?\s+-d\b", "puts a site or app online", PermissionCategory.Publish },
                 { @"\b(invoke-webrequest|iwr|invoke-restmethod|irm|curl|wget)\b[^\n|]*\|\s*(sh|bash|pwsh|powershell|cmd|python|node)\b", "downloads and runs a script", PermissionCategory.Install },
                 { @"\bgit\s+push\b[^\n]*(--force|-f\b)|\bgit\s+(reset\s+--hard|clean\s+-[a-z]*f)", "rewrites or discards git history / files", PermissionCategory.Publish },
                 { @"\bgit\s+(checkout\b(?![^\n;|&]*\s-[bB]\b|[^\n;|&]*\s--orphan\b)[^\n;|&]*(\s--(\s|$)|\s-f\b|\s--force\b|\s\.(\s|$)|\s[""']?(\.[\\/]|[^\s""'-][^\s""']*\.[a-z][a-z0-9]{0,7}[""']?(\s|$)|[^\s""']*[*?]))|restore\b(?=[^\n;|&]*(\s--worktree\b|\s(?-i:-[a-zA-Z]*W)))|restore\b(?![^\n;|&]*(\s--staged\b|\s(?-i:-[a-zA-Z]*S)))|stash\s+(drop|clear)\b)", "throws away changes in the work folder that git hasn't saved", PermissionCategory.Delete },
@@ -878,10 +881,10 @@ namespace MinGent
                 if (launch == null) launch = why;
             }
             category = PermissionCategory.Install;
-            Match mp = Regex.Match(c, @"\s-m\s+(pip\s+(\S+\s+)*?(install|download|wheel)|ensurepip)\b", RegexOptions.IgnoreCase);
+            Match mp = Regex.Match(c, @"\s-m\s+(pip\s+(\S+\s+)*?(install|download|wheel)|ensurepip)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             if (mp.Success) return "installs or updates software, a runtime or packages (" + Regex.Replace(mp.Value.Trim(), @"\s+", " ") + ")";
             if (LooksNetwork(c) && ProgramDownload.IsMatch(c)) return "downloads a program, installer, script or archive from the internet";
-            if (Regex.IsMatch(c, @"\b(downloadfile|downloadfiletaskasync)\s*\(", RegexOptions.IgnoreCase) && ProgramDownload.IsMatch(c))
+            if (Regex.IsMatch(c, @"\b(downloadfile|downloadfiletaskasync)\s*\(", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) && ProgramDownload.IsMatch(c))
                 return "downloads a program, installer, script or archive from the internet";
             if (launch != null) category = PermissionCategory.Launch;
             return launch;
@@ -920,7 +923,7 @@ namespace MinGent
             bool viaCmd = false, assigned = false;
             for (int guard = 0; guard < 5; guard++)
             {
-                Match pre = Regex.Match(s, @"^(?:(call|cmd(\.exe)?\s+/[ckr]|start-job\s+-scriptblock|invoke-command\s+-scriptblock)\s+|\$[\w:]+\s*=(?!=)\s*)", RegexOptions.IgnoreCase);
+                Match pre = Regex.Match(s, @"^(?:(call|cmd(\.exe)?\s+/[ckr]|start-job\s+-scriptblock|invoke-command\s+-scriptblock)\s+|\$[\w:]+\s*=(?!=)\s*)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
                 if (!pre.Success || pre.Length == 0) break;
                 string p = pre.Value.ToLowerInvariant();
                 assigned = p.StartsWith("$");
@@ -947,7 +950,7 @@ namespace MinGent
             if (name == "explorer") { category = PermissionCategory.Launch; return "opens a File Explorer window"; }
             if (name == "start-process" || name == "saps" || name == "start" || name == "invoke-item" || name == "ii")
             {
-                if (name == "start" && Regex.IsMatch(rest, @"^-?(sleep|transcript|job|service|bitstransfer)\b", RegexOptions.IgnoreCase)) return null;
+                if (name == "start" && Regex.IsMatch(rest, @"^-?(sleep|transcript|job|service|bitstransfer)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) return null;
                 string target = LaunchTarget(Words(rest));
                 if (string.IsNullOrEmpty(target))
                 {
@@ -980,7 +983,7 @@ namespace MinGent
                 if (!pathTok) return null;
             }
             bool starts = prev == "" || prev == "\n" || prev == "\r\n" || prev == ";" || prev == "&&" || prev == "||" || prev == "{";
-            if (Document.IsMatch(bare) && bare.IndexOf('"') < 0 && bare.IndexOf('\'') < 0 && !Regex.IsMatch(bare, @"^[a-z][\w+.\-]+://", RegexOptions.IgnoreCase) &&
+            if (Document.IsMatch(bare) && bare.IndexOf('"') < 0 && bare.IndexOf('\'') < 0 && !Regex.IsMatch(bare, @"^[a-z][\w+.\-]+://", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) &&
                 (starts || prev == "&" || viaCmd))
             {
                 bool called = prev == "&" || viaCmd;
@@ -993,7 +996,7 @@ namespace MinGent
                 }
             }
             bool pathy = token.IndexOf('\\') >= 0 || token.IndexOf('/') >= 0 || token.StartsWith("$env:", StringComparison.OrdinalIgnoreCase) || token.StartsWith("%");
-            if (pathy && Regex.IsMatch(bare, @"\.(exe|com|bat|cmd|ps1|vbs|msc|cpl|scr|lnk|msi|msix|appx)$", RegexOptions.IgnoreCase))
+            if (pathy && Regex.IsMatch(bare, @"\.(exe|com|bat|cmd|ps1|vbs|msc|cpl|scr|lnk|msi|msix|appx)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
             {
                 if (InstallerName.IsMatch(bare)) return "runs an installer";
                 bool unknown;
@@ -1015,7 +1018,7 @@ namespace MinGent
         {
             string t = target.Trim().Trim('"', '\'').Trim();
             if (t.Length == 0) return null;
-            if (Regex.IsMatch(t, @"^[a-z][\w+.\-]+:", RegexOptions.IgnoreCase))
+            if (Regex.IsMatch(t, @"^[a-z][\w+.\-]+:", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
                 return "opens " + (t.Length > 60 ? t.Substring(0, 60) + "..." : t) + " in another program (use the built-in browser for web pages)";
             if (InstallerName.IsMatch(t)) return "runs an installer";
             string name = BaseName(t);
@@ -1033,7 +1036,7 @@ namespace MinGent
             if (unknown && Document.IsMatch(t)) return "opens " + t.Substring(Math.Max(t.LastIndexOf('\\'), t.LastIndexOf('/')) + 1) + " with another program (for web pages, use the built-in browser)";
             if (unknown) return "starts or opens something whose location comes from a variable, so it cannot be checked";
             if (full == null) return null;
-            bool runnable = Regex.IsMatch(full, @"\.(exe|com|bat|cmd|ps1|py|pyw|js|jar)$", RegexOptions.IgnoreCase);
+            bool runnable = Regex.IsMatch(full, @"\.(exe|com|bat|cmd|ps1|py|pyw|js|jar)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             if (!Inside(full, workspace))
                 return runnable ? "starts a program from outside the work folder (" + Path.GetFileName(full) + ")"
                                 : "opens " + Path.GetFileName(full.TrimEnd('\\')) + " from outside the work folder with another program";
@@ -1139,7 +1142,7 @@ namespace MinGent
                 else
                 {
                     if (mv.Value[0] == "pushd" || mv.Value[0] == "push-location") stack.Add(dir);
-                    string t = Regex.Replace(Pwd(mv.Value[1]), @"^\s*(/d\s+)?(-(path|literalpath|lp|pspath)(:|\s+))?", "", RegexOptions.IgnoreCase).Trim();
+                    string t = Regex.Replace(Pwd(mv.Value[1]), @"^\s*(/d\s+)?(-(path|literalpath|lp|pspath)(:|\s+))?", "", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant).Trim();
                     if (t.Length == 0 || t == "-" || t == "+" || t.IndexOf('(') >= 0 || t.Contains("::") || (dir == null && !Rooted(t))) dir = null;
                     else
                     {
@@ -1196,8 +1199,8 @@ namespace MinGent
             string pipeline = before.Substring(start);
             int bar = pipeline.IndexOf('|');
             string source = Regex.Replace(bar >= 0 ? pipeline.Substring(0, bar) : pipeline, @"""[^""$]*""|'[^']*'", "\"\"");
-            source = Regex.Replace(source, @"\$(_|psitem|true|false|null)\b", "", RegexOptions.IgnoreCase);
-            return source.IndexOf('$') >= 0 || source.IndexOf('(') >= 0 || source.Contains("::") || Regex.IsMatch(source, @"(^|[\s;|&(=])(get-content|gc|cat|type|import-csv)(\s|$)", RegexOptions.IgnoreCase);
+            source = Regex.Replace(source, @"\$(_|psitem|true|false|null)\b", "", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            return source.IndexOf('$') >= 0 || source.IndexOf('(') >= 0 || source.Contains("::") || Regex.IsMatch(source, @"(^|[\s;|&(=])(get-content|gc|cat|type|import-csv)(\s|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         }
 
         static bool IsWorkspace(string full, string workspace)
@@ -1298,7 +1301,7 @@ namespace MinGent
                     int colon = name.IndexOf(':');
                     if (colon >= 0) { val = name.Substring(colon + 1); name = name.Substring(0, colon); }
                     name = name.ToLowerInvariant();
-                    if (val != null && Regex.IsMatch(val, @"^\$?(true|false)$", RegexOptions.IgnoreCase))
+                    if (val != null && Regex.IsMatch(val, @"^\$?(true|false)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
                     {
                         if (val.TrimStart('$').Equals("true", StringComparison.OrdinalIgnoreCase)) flags.Add(name);
                         continue;
@@ -1313,7 +1316,7 @@ namespace MinGent
                     }
                     continue;
                 }
-                if (t.Length > 1 && t[0] == '/' && Regex.IsMatch(t, @"^/[a-z]+(:\S*)?$", RegexOptions.IgnoreCase)) { flags.Add(t.Substring(1).ToLowerInvariant()); continue; }
+                if (t.Length > 1 && t[0] == '/' && Regex.IsMatch(t, @"^/[a-z]+(:\S*)?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) { flags.Add(t.Substring(1).ToLowerInvariant()); continue; }
                 pos.Add(t);
             }
         }
@@ -1353,7 +1356,7 @@ namespace MinGent
         }
 
         static readonly Regex WriteCmd = new Regex(
-            @"(?<![\w:.$-])(set-content|sc|out-file|tee-object|tee|new-item|ni|copy-item|cpi|cp|copy|xcopy|robocopy|move-item|mi|mv|move|export-csv|epcsv|export-clixml|expand-archive|tar|invoke-webrequest|iwr|invoke-restmethod|irm|curl|wget)(?:\.exe)?(?![\w-])([^\n;|&]*)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            @"(?<![\w:.$-])(set-content|sc|out-file|tee-object|tee|new-item|ni|copy-item|cpi|cp|copy|xcopy|robocopy|move-item|mi|mv|move|rename-item|rni|ren|rename|export-csv|epcsv|export-clixml|expand-archive|tar|invoke-webrequest|iwr|invoke-restmethod|irm|curl|wget)(?:\.exe)?(?![\w-])([^\n;|&]*)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         static readonly HashSet<string> ScVerbs = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
             "query", "queryex", "qc", "qdescription", "qfailure", "qfailureflag", "qsidtype", "qprivs", "qtriggerinfo", "qpreferrednode", "qmanagedaccount", "qprotection",
             "create", "config", "start", "stop", "pause", "continue", "delete", "description", "failure", "failureflag", "sidtype", "privs", "managedaccount", "sdshow",
@@ -1483,6 +1486,32 @@ namespace MinGent
                         string full = Replaced(t, here, lost, workspace, out computed, out folder);
                         if (computed) { if (!unknownTarget) unknownAt = m.Index; unknownTarget = true; continue; }
                         if (full != null && !folder) return Writes(full);
+                    }
+                    continue;
+                }
+                if (verb == "rename-item" || verb == "rni" || verb == "ren" || verb == "rename")
+                {
+                    List<string> old = Named(named, "path", 3);
+                    old.AddRange(Named(named, "literalpath", 2));
+                    old.AddRange(Named(named, "lp", 2));
+                    if (old.Count == 0 && pos.Count > 0 && !piped) old.AddRange(Items(pos[0]));
+                    if (old.Count == 0 && piped)
+                    {
+                        if (UncheckedSource(before)) return "renames files that an earlier command picks from a folder that cannot be checked";
+                        string why = Outside(before, workspace, lost ? null : here);
+                        if (why != null) return "renames files that an earlier command picks, and " + why;
+                        continue;
+                    }
+                    foreach (string o in old)
+                    {
+                        string t = o.Trim();
+                        if ((lost && !Rooted(t)) || t.IndexOf('$') >= 0 && !Rooted(t)) { if (!unknownTarget) unknownAt = m.Index; unknownTarget = true; continue; }
+                        bool unknown;
+                        string from = Full(t, here, out unknown);
+                        if (unknown) { if (!unknownTarget) unknownAt = m.Index; unknownTarget = true; continue; }
+                        if (from == null || Inside(from, workspace) || InTemp(from)) continue;
+                        if (Broad(from)) return "renames a whole drive, your user folder or a system folder";
+                        return "renames " + Leaf(from) + " outside the work folder";
                     }
                     continue;
                 }
@@ -1689,7 +1718,7 @@ namespace MinGent
                 List<string> paths = new List<string>();
                 foreach (string a in Args(StripGroups(rest)))
                 {
-                    if (a.Length > 1 && (a[0] == '-' || (a[0] == '/' && Regex.IsMatch(a, @"^/[a-z](:\S*)?$", RegexOptions.IgnoreCase))))
+                    if (a.Length > 1 && (a[0] == '-' || (a[0] == '/' && Regex.IsMatch(a, @"^/[a-z](:\S*)?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))))
                     {
                         string name = a.TrimStart('-', '/').ToLowerInvariant();
                         int colon = name.IndexOf(':');
@@ -1697,7 +1726,7 @@ namespace MinGent
                         {
                             string v = a.Substring(a.IndexOf(':') + 1);
                             name = name.Substring(0, colon);
-                            if (v.Length > 0 && !Regex.IsMatch(v, @"^\$?(true|false)$", RegexOptions.IgnoreCase)) paths.Add(v);
+                            if (v.Length > 0 && !Regex.IsMatch(v, @"^\$?(true|false)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) paths.Add(v);
                         }
                         if (name.Length > 0 && ("recurse".StartsWith(name) || name == "s" || Regex.IsMatch(name, "^[rfvdi]*r[rfvdi]*$"))) recursive = true;
                         continue;
@@ -1733,7 +1762,7 @@ namespace MinGent
                         if (!InTemp(full)) return "deletes a file outside the work folder (" + Leaf(full) + ")";
                     }
                 }
-                if (computed && recursive && !Regex.IsMatch(rest, @"^\s*\$(_|psitem)\b", RegexOptions.IgnoreCase))
+                if (computed && recursive && !Regex.IsMatch(rest, @"^\s*\$(_|psitem)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
                     return "deletes a folder whose location is worked out while it runs, so it cannot be checked";
                 if (computed || piped)
                 {
@@ -1746,7 +1775,7 @@ namespace MinGent
                 bool lost;
                 string here = Here(c, m.Index, cwd, out lost);
                 string args = m.Groups[2].Value;
-                bool recursive = m.Groups[1].Value.Equals("deletedirectory", StringComparison.OrdinalIgnoreCase) || Regex.IsMatch(args, @"\$?\btrue\b", RegexOptions.IgnoreCase);
+                bool recursive = m.Groups[1].Value.Equals("deletedirectory", StringComparison.OrdinalIgnoreCase) || Regex.IsMatch(args, @"\$?\btrue\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
                 bool computed = false, any = false;
                 bool moved = lost || !string.Equals((here ?? "").TrimEnd('\\'), (cwd ?? "").TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
                 foreach (Match q in Regex.Matches(args, @"""([^""]*)""|'([^']*)'"))
@@ -1779,8 +1808,8 @@ namespace MinGent
             }
             foreach (Match m in OtherDelete.Matches(c))
             {
-                bool recursive = Regex.IsMatch(m.Groups[1].Value, @"\$?\btrue\b", RegexOptions.IgnoreCase);
-                string rest = Regex.Replace(c, @"\$(true|false|null|_|psitem)\b", "", RegexOptions.IgnoreCase);
+                bool recursive = Regex.IsMatch(m.Groups[1].Value, @"\$?\btrue\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+                string rest = Regex.Replace(c, @"\$(true|false|null|_|psitem)\b", "", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
                 if (recursive && rest.IndexOf('$') >= 0) return "deletes a folder whose location is worked out while it runs, so it cannot be checked";
                 bool lost;
                 string here = Here(c, m.Index, cwd, out lost);
@@ -1842,18 +1871,18 @@ namespace MinGent
         {
             unknown = false;
             string s = (token ?? "").Trim().Trim('"', '\'').Trim();
-            if (s.Length == 0 || Regex.IsMatch(s, @"^[a-z][\w+.-]*://", RegexOptions.IgnoreCase)) return null;
-            if (Regex.IsMatch(s, @"^(\$\{?env:\w+\}?|%\w+%|\$\{?home\}?|~)([\\/]|$)", RegexOptions.IgnoreCase))
+            if (s.Length == 0 || Regex.IsMatch(s, @"^[a-z][\w+.-]*://", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) return null;
+            if (Regex.IsMatch(s, @"^(\$\{?env:\w+\}?|%\w+%|\$\{?home\}?|~)([\\/]|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
             {
                 string e = s;
-                Match env = Regex.Match(e, @"^\$\{?env:(\w+)\}?", RegexOptions.IgnoreCase);
+                Match env = Regex.Match(e, @"^\$\{?env:(\w+)\}?", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
                 if (env.Success)
                 {
                     string v = Environment.GetEnvironmentVariable(env.Groups[1].Value);
                     if (v == null) { unknown = true; return null; }
                     e = v + e.Substring(env.Length);
                 }
-                Match home = Regex.Match(e, @"^(\$\{?home\}?|~)(?=[\\/]|$)", RegexOptions.IgnoreCase);
+                Match home = Regex.Match(e, @"^(\$\{?home\}?|~)(?=[\\/]|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
                 if (home.Success)
                 {
                     string h = "";
@@ -1863,14 +1892,14 @@ namespace MinGent
                 }
                 s = Environment.ExpandEnvironmentVariables(e);
             }
-            if (s.IndexOf('$') >= 0 || Regex.IsMatch(s, @"%\w+%|^%%?~?[a-z]*[a-z](?![\w%])|%%?~", RegexOptions.IgnoreCase)) { unknown = true; return null; }
+            if (s.IndexOf('$') >= 0 || Regex.IsMatch(s, @"%\w+%|^%%?~?[a-z]*[a-z](?![\w%])|%%?~", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) { unknown = true; return null; }
             s = s.Replace('/', '\\');
             bool unc = s.StartsWith("\\\\");
             s = Regex.Replace(s, @"\\{2,}", "\\");
             if (unc) s = "\\" + s;
             string baseDir = (cwd ?? "").Replace('/', '\\').TrimEnd('\\');
-            if (Regex.IsMatch(s, @"^[a-z]:\\", RegexOptions.IgnoreCase) || unc) { }
-            else if (Regex.IsMatch(s, @"^[a-z]:", RegexOptions.IgnoreCase)) s = s.Substring(0, 2) + "\\" + s.Substring(2);
+            if (Regex.IsMatch(s, @"^[a-z]:\\", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) || unc) { }
+            else if (Regex.IsMatch(s, @"^[a-z]:", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) s = s.Substring(0, 2) + "\\" + s.Substring(2);
             else if (s.StartsWith("\\")) s = (baseDir.Length >= 2 && baseDir[1] == ':' ? baseDir.Substring(0, 2) : "") + s;
             else s = baseDir + "\\" + s;
             return Dots(s);
@@ -1879,7 +1908,7 @@ namespace MinGent
         static bool Broad(string full)
         {
             string f = full.TrimEnd('*', '?', '.').TrimEnd('\\');
-            if (Regex.IsMatch(f, @"^[a-z]:$", RegexOptions.IgnoreCase) || f.Length == 0) return true;
+            if (Regex.IsMatch(f, @"^[a-z]:$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) || f.Length == 0) return true;
             if (Regex.IsMatch(f, @"^\\\\[^\\]+(\\[^\\]+)?$")) return true;
             List<string> roots = new List<string>();
             try
@@ -2025,13 +2054,13 @@ namespace MinGent
         {
             string c = command ?? "";
             if (LooksNetwork(c) || ReachesOut(c)) return true;
-            if (Regex.IsMatch(c, @"\b(certutil(\.exe)?\s+.*-urlcache|bitsadmin(\.exe)?\s+.*/transfer|webrequest|urllib|requests\.(get|post)|fetch\s*\(|xmlhttp|msxml2|winhttp)", RegexOptions.IgnoreCase)) return true;
-            foreach (Match m in Regex.Matches(c, @"\b(https?|wss?|ftp)://[^\s'""`<>|]+", RegexOptions.IgnoreCase))
+            if (Regex.IsMatch(c, @"\b(certutil(\.exe)?\s+.*-urlcache|bitsadmin(\.exe)?\s+.*/transfer|webrequest|urllib|requests\.(get|post)|fetch\s*\(|xmlhttp|msxml2|winhttp)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) return true;
+            foreach (Match m in Regex.Matches(c, @"\b(https?|wss?|ftp)://[^\s'""`<>|]+", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
                 if (!Net.IsLocal(m.Value)) return true;
             foreach (Match m in Regex.Matches(c, @"(^|[\s'""(=])\\\\([A-Za-z0-9.\-]+)\\"))
                 if (!Net.IsLocal("file://" + m.Groups[2].Value + "/")) return true;
-            if (Regex.IsMatch(c, @"\bgit(\.exe)?\s+((-[Cc]\s+(""[^""]*""|'[^']*'|\S+)|--?\S+)\s+)*(clone|fetch|pull|push|ls-remote|submodule\s+update|remote\s+update)\b", RegexOptions.IgnoreCase)) return true;
-            if (Regex.IsMatch(c, @"\s-m\s+(pip\s+(\S+\s+)*?(install|download|wheel)|ensurepip)\b", RegexOptions.IgnoreCase)) return true;
+            if (Regex.IsMatch(c, @"\bgit(\.exe)?\s+((-[Cc]\s+(""[^""]*""|'[^']*'|\S+)|--?\S+)\s+)*(clone|fetch|pull|push|ls-remote|submodule\s+update|remote\s+update)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) return true;
+            if (Regex.IsMatch(c, @"\s-m\s+(pip\s+(\S+\s+)*?(install|download|wheel)|ensurepip)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) return true;
             foreach (string raw in Statement.Split(c))
             {
                 string s = raw.Trim().TrimStart('@').Trim();
@@ -2046,7 +2075,7 @@ namespace MinGent
 
         public static bool LooksNetwork(string command)
         {
-            return Regex.IsMatch(command ?? "", @"\b(invoke-webrequest|iwr|invoke-restmethod|irm|curl|wget|ssh|scp|sftp|ftp|telnet|nc|ncat|mosh|net\.webclient|httpclient|start-bitstransfer)\b|\bgit\s+clone\b", RegexOptions.IgnoreCase);
+            return Regex.IsMatch(command ?? "", @"\b(invoke-webrequest|iwr|invoke-restmethod|irm|curl|wget|ssh|scp|sftp|ftp|telnet|nc|ncat|mosh|net\.webclient|httpclient|start-bitstransfer)\b|\bgit\s+clone\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         }
     }
 
@@ -2277,7 +2306,7 @@ namespace MinGent
                     return false;
                 case "kubectl":
                     if (Has(w, 1, "--kubeconfig*", "--output-directory*", "--raw")) return false;
-                    foreach (string x in w) if (Regex.IsMatch(x, @"(^|,)secrets?(/|,|$)", RegexOptions.IgnoreCase)) return false;
+                    foreach (string x in w) if (Regex.IsMatch(x, @"(^|,)secrets?(/|,|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) return false;
                     return v == "get" || v == "describe" || v == "logs" || v == "top" || v == "version" || v == "cluster-info" || v == "explain" || v == "api-resources" || v == "api-versions" ||
                                        (v == "config" && (Verb(w, w.IndexOf("config") + 1) == "view" || Verb(w, w.IndexOf("config") + 1) == "get-contexts" || Verb(w, w.IndexOf("config") + 1) == "current-context"));
                 case "git":
@@ -2457,7 +2486,7 @@ namespace MinGent
             string p = (path ?? "").Trim().Trim('"', '\'');
             if (p.Length > 2 && p[0] == '.' && (p[1] == '\\' || p[1] == '/')) p = p.Substring(2);
             if (p.Length <= 48) return p;
-            if (Regex.IsMatch(p, @"^[a-z]+://", RegexOptions.IgnoreCase))
+            if (Regex.IsMatch(p, @"^[a-z]+://", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
             {
                 Uri u;
                 if (Uri.TryCreate(p, UriKind.Absolute, out u))
@@ -2485,7 +2514,7 @@ namespace MinGent
             {
                 if (skip) { skip = false; continue; }
                 if (x.Length > 1 && x[0] == '-') { if (ValueFlag.IsMatch(x)) skip = true; continue; }
-                if (x.Length > 1 && x[0] == '/' && Regex.IsMatch(x, @"^/[a-z?]{1,3}(:\S*)?$", RegexOptions.IgnoreCase)) continue;
+                if (x.Length > 1 && x[0] == '/' && Regex.IsMatch(x, @"^/[a-z?]{1,3}(:\S*)?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) continue;
                 if (x == ">" || x == ">>" || x == "2>&1" || x.StartsWith(">") || x.StartsWith("2>") || x.StartsWith("1>")) break;
                 l.Add(x);
             }
@@ -2628,7 +2657,7 @@ namespace MinGent
         {
             weight = -1;
             string s = Regex.Replace(seg.Trim(), @"^(@|[.&](?=\s))\s*", "");
-            Match asg = Regex.Match(s, @"^\$(env:)?([\w:]+)\s*[+-]?=(?!=)\s*(.*)$", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            Match asg = Regex.Match(s, @"^\$(env:)?([\w:]+)\s*[+-]?=(?!=)\s*(.*)$", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.CultureInvariant);
             if (asg.Success)
             {
                 if (asg.Groups[1].Success) { weight = 1; return "Set " + asg.Groups[2].Value + " for the next steps"; }
@@ -2765,13 +2794,13 @@ namespace MinGent
                 case "compress-archive": weight = 4; { string to = After(w, "-destinationpath") ?? (p.Count > 1 ? p[1] : null); return "Pack " + Target(p, "files") + (to != null ? " into " + Short(to) : " into a zip file"); }
                 case "tar":
                     weight = 4;
-                    if (w.Count > 0 && Regex.IsMatch(w[0], @"^-?[a-z]*x", RegexOptions.IgnoreCase)) return "Unpack " + Target(p, "an archive");
-                    if (w.Count > 0 && Regex.IsMatch(w[0], @"^-?[a-z]*c", RegexOptions.IgnoreCase)) return "Pack files into " + Target(p, "an archive");
+                    if (w.Count > 0 && Regex.IsMatch(w[0], @"^-?[a-z]*x", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) return "Unpack " + Target(p, "an archive");
+                    if (w.Count > 0 && Regex.IsMatch(w[0], @"^-?[a-z]*c", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) return "Pack files into " + Target(p, "an archive");
                     weight = 1; return "List what is in " + Target(p, "an archive");
                 case "invoke-webrequest": case "iwr": case "curl": case "wget": case "invoke-restmethod": case "irm":
                     {
                         weight = 3;
-                        string url = After(w, "-uri") ?? p.Find(delegate (string x) { return Regex.IsMatch(x, @"^https?://", RegexOptions.IgnoreCase); }) ?? (p.Count > 0 ? p[0] : null);
+                        string url = After(w, "-uri") ?? p.Find(delegate (string x) { return Regex.IsMatch(x, @"^https?://", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant); }) ?? (p.Count > 0 ? p[0] : null);
                         string to = After(w, "-outfile", "-o", "--output");
                         if (url == null) return "Send a web request";
                         if (to != null) return "Download " + Short(url) + " to " + Short(to);
@@ -2783,7 +2812,7 @@ namespace MinGent
                         weight = 2;
                         string what = After(w, "-filepath") ?? (p.Count > 0 ? p[0] : null);
                         if (what == null) return "Open a program";
-                        if (Regex.IsMatch(what, @"^https?://", RegexOptions.IgnoreCase)) return "Open " + Short(what) + " in your web browser";
+                        if (Regex.IsMatch(what, @"^https?://", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) return "Open " + Short(what) + " in your web browser";
                         return "Open " + Short(what);
                     }
                 case "stop-process": case "kill": case "spps": case "taskkill":
@@ -3163,7 +3192,7 @@ namespace MinGent
         {
             string c = (command ?? "").Trim();
             if (c.Length == 0) return "";
-            if (Regex.IsMatch(c, @"^(exit|logout)(\s+\d+)?$", RegexOptions.IgnoreCase)) return "Close this shell (in a session on a server, this disconnects from it)";
+            if (Regex.IsMatch(c, @"^(exit|logout)(\s+\d+)?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) return "Close this shell (in a session on a server, this disconnects from it)";
             int top;
             List<string> steps;
             try { steps = Steps(c, 0, out top); }

@@ -1887,7 +1887,7 @@ namespace MinGent
             for (int n = 1; n <= items.Count; n++)
             {
                 int i = (hot + n) % items.Count;
-                if (items[i].Title.StartsWith(k, StringComparison.CurrentCultureIgnoreCase)) { SetHot(i); break; }
+                if (Program.Regional.CompareInfo.IsPrefix(items[i].Title, k, System.Globalization.CompareOptions.IgnoreCase)) { SetHot(i); break; }
             }
             e.Handled = true;
         }
