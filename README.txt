@@ -25,7 +25,7 @@ is llama.cpp's prebuilt server (with NVIDIA's CUDA runtime on NVIDIA cards),
 downloaded when you set it up, and the built-in browser is Microsoft Edge
 WebView2.
 
-This is version 1.6.0. Report problems at
+This is version 1.7.0. Report problems at
 https://github.com/zenpositive/MinGent/issues.
 
 MinGent is free software under the MIT license and comes with no warranty.
@@ -95,7 +95,7 @@ sign-ins. MinGent has none of that.
   Full auto asks nothing. The check reads the command; it can't see what a
   script does once it runs.
 To check a download, compare its SHA-256 with the one on the release page.
-In PowerShell: Get-FileHash .\MinGent-1.6.0.zip
+In PowerShell: Get-FileHash .\MinGent-1.7.0.zip
 
 
 THE WINDOW
@@ -732,10 +732,12 @@ ASK, AUTO OR FULL AUTO
   points out that smaller models are easier for a web page to trick, so a
   frontier model such as Claude, GPT or Gemini is the safer choice.
 - "Auto asks before" in Settings > Safety picks how careful Auto is: Risky
-  steps (the default), Most steps, your own choice, or Nothing (Full auto).
+  steps (the default), Most steps, Your own choice, or Nothing (Full auto).
   Risky steps asks about every kind below except starting and using other
   programs and downloading programs and archives in the browser; Most steps
-  asks about all of them. One switch per kind:
+  asks about all of them. The switches under it, one per kind, show what
+  the picked level asks about. You set them with Your own choice, and
+  MinGent keeps your switches while another level is picked:
     Installing software and packages
     Starting and using other programs
     Deleting widely or outside the work folder
@@ -748,12 +750,15 @@ ASK, AUTO OR FULL AUTO
     Running code in the browser console
 - These rows also cover commands that hide what they do or reach outside the
   work folder: deletes of files picked by another command, a loop or a script
-  outside the work folder, commands that delete, empty, replace or move
-  files outside it (except in the temp folder), emptying the whole work
-  folder, throwing away changes git hasn't saved, links or junctions to
-  other folders, robocopy /MIR, emptying the Recycle Bin, generated or
+  outside the work folder, commands that delete, empty, replace, move or
+  rename files outside it (except in the temp folder), emptying the whole
+  work folder, throwing away changes git hasn't saved, links or junctions
+  to other folders, robocopy /MIR, emptying the Recycle Bin, generated or
   encoded code, and anything that touches MinGent's own settings, chats or
-  browser data. Switching a row off stops those questions too.
+  browser data. Uploading covers curl and PowerShell uploads, scp and rsync
+  to another computer, the upload commands of aws, az, gsutil and rclone,
+  and putting a site online with vercel, netlify, firebase or wrangler.
+  Switching a row off stops those questions too.
 - Sending one of your saved API keys to a website or over the internet asks
   first in Ask and Auto, and is refused in Full auto. The check looks for the
   key as written, so a command or script can get past it.
@@ -1012,7 +1017,9 @@ THE BROWSER
   or windows - so those keep going through the checks for buy, password and
   account buttons. It also refuses code that hides what it runs (eval, code
   in strings, encoded text, calls through computed names), and on websites
-  network requests, reading cookies, storage, saved sign-ins or form fields,
+  network requests, reading cookies, storage, saved sign-ins or form fields
+  (also when the name is held in a variable, or picked from document, window
+  or navigator by a computed name),
   code that reaches into a CAPTCHA, and any code while a CAPTCHA is showing:
   CAPTCHAs are only ever solved by looking at them and clicking or typing.
   Like the command checks, this reads the code: it catches the common

@@ -1,6 +1,49 @@
 MinGent - what changed
 ======================
 
+Version 1.7.0
+- MinGent now behaves the same whatever the Windows display language and
+  regional format are. On a Turkish or Azeri Windows, checks that ignore
+  upper and lower case could miss a command with a capital I in it, such
+  as Invoke-WebRequest or Remove-Item, so Auto did not ask where it
+  should have. And in languages where two letters can count as one (cs
+  in Hungarian, ch in Czech, aa in Danish), Windows answers that a word
+  like csv does not start with c. Inside MinGent, numbers, dates and
+  comparisons of text now use one fixed format on every PC. What you
+  read still follows your Windows settings: the grouping of large
+  counts, search in your chats, the numbers of a copied chart and the
+  paper size of new documents.
+- Settings > Safety: the switches under "What Auto asks about" can be
+  changed with "Your own choice" only. With Risky steps or Most steps
+  picked they are dimmed and show what that level asks about. Your own
+  switches are kept apart, so trying another level no longer overwrites
+  them, and Your own choice stays picked even when your switches match
+  one of the levels. Before, picking a level set the switches, and
+  picking Your own choice afterwards brought nothing back.
+- Auto: renaming a file outside the work folder asks first, as deleting,
+  replacing and moving do. This covers Rename-Item and ren, also when
+  the files come from an earlier command through a pipe.
+- Auto: copying files to another computer with scp, pscp or rsync,
+  uploading with aws, az, gsutil, gcloud storage or rclone, and putting
+  a site online with vercel, netlify, firebase, wrangler or gh-pages
+  count as uploading and ask first. Downloads with the same tools run as
+  before.
+- Browser console: on a website, code that takes a property of document,
+  window, navigator, location or history through a computed name is
+  refused, like other code that hides what it runs. So is code that
+  keeps the name of a cookie, of saved data or of a form field's value
+  in a variable, or lists it for JSON.stringify. Before, const k =
+  'cookie'; document[k] ran without a question in Auto.
+- Browser console: filling a map with m[a.href] = ... is no longer taken
+  for changing a link, so such code reads the page without a question
+  again.
+- Checking a JSON file the agent writes no longer takes long when the
+  file has thousands of blank lines, and neither does showing a reply
+  that holds a link with thousands of spaces or tabs in its address.
+- A path with characters Windows does not allow, a time with hundreds of
+  digits and a Word heading style with an unusual digit come back to the
+  agent as plain errors it can act on.
+
 Version 1.6.0
 - Gemini web: the usage icon's weekly bar shows your weekly use. MinGent
   read the usage from the reply behind Gemini's chat badge, which holds
